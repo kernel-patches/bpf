@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 Advanced Micro Devices, Inc.
+ * Copyright 2026 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,13 +21,9 @@
  *
  */
 
-#ifndef __DCE_V10_0_H__
-#define __DCE_V10_0_H__
+#ifndef __IMU_V13_0_H__
+#define __IMU_V13_0_H__
 
-
-extern const struct amdgpu_ip_block_version dce_v10_0_ip_block;
-extern const struct amdgpu_ip_block_version dce_v10_1_ip_block;
-
-void dce_v10_0_disable_dce(struct amdgpu_device *adev);
+extern const struct amdgpu_imu_funcs gfx_v13_0_imu_funcs;
 
 #endif

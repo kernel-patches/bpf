@@ -761,14 +761,16 @@ static bool hubbub32_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower)
 {
-	struct dc *dc = hubbub->ctx->dc;
+	const uint32_t hw_internal_rev = hubbub->ctx->asic_id.hw_internal_rev;
+	const bool sdp_control_wa = policy.disable_stutter_for_program &&
+			(ASICREV_IS_GC_11_0_0(hw_internal_rev) ||
+			ASICREV_IS_GC_11_0_3(hw_internal_rev));
 	bool wm_pending = false;
 
-	if (!safe_to_lower && dc->debug.disable_stutter_for_wm_program &&
-			(ASICREV_IS_GC_11_0_0(dc->ctx->asic_id.hw_internal_rev) ||
-			ASICREV_IS_GC_11_0_3(dc->ctx->asic_id.hw_internal_rev))) {
+	if (!safe_to_lower && sdp_control_wa) {
 		/* before raising watermarks, SDP control give to DF, stutter must be disabled */
 		wm_pending = true;
 		hubbub32_set_sdp_control(hubbub, false);
@@ -807,18 +809,15 @@ static bool hubbub32_program_watermarks(
 
 	if (safe_to_lower) {
 		/* after lowering watermarks, stutter setting is restored, SDP control given to DC */
-		hubbub1_allow_self_refresh_control(hubbub, !dc->debug.disable_stutter);
+		hubbub1_allow_self_refresh_control(hubbub, !policy.disable_stutter);
 
-		if (dc->debug.disable_stutter_for_wm_program &&
-				(ASICREV_IS_GC_11_0_0(dc->ctx->asic_id.hw_internal_rev) ||
-				ASICREV_IS_GC_11_0_3(dc->ctx->asic_id.hw_internal_rev))) {
+		if (sdp_control_wa)
 			hubbub32_set_sdp_control(hubbub, true);
-		}
-	} else if (dc->debug.disable_stutter) {
-		hubbub1_allow_self_refresh_control(hubbub, !dc->debug.disable_stutter);
+	} else if (policy.disable_stutter) {
+		hubbub1_allow_self_refresh_control(hubbub, !policy.disable_stutter);
 	}
 
-	hubbub32_force_usr_retraining_allow(hubbub, dc->debug.force_usr_allow);
+	hubbub32_force_usr_retraining_allow(hubbub, policy.force_usr_allow);
 
 	return wm_pending;
 }

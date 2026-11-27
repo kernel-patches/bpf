@@ -1220,7 +1220,7 @@ struct dml2_pmo_instance {
 	 * return - stage optimizer count
 	 */
 	int (*get_ordered_mandatory_stage_optimizers)(struct dml2_pmo_instance *pmo,
-			struct dml2_pmo_stage_optimizer **optimers);
+			struct dml2_pmo_stage_optimizer **stages);
 	/*
 	 * obtain a list of option stage optimizers ordered by priority, Caller must perform stage optimization in the
 	 * same order. Caller must complete stage optimization for all mandatory stage optimizers before performing
@@ -1228,7 +1228,7 @@ struct dml2_pmo_instance {
 	 * return - stage optimizer count
 	 */
 	int (*get_ordered_optional_stage_optimizers)(struct dml2_pmo_instance *pmo,
-			struct dml2_pmo_stage_optimizer **optimers);
+			struct dml2_pmo_stage_optimizer **stages);
 	/*
 	 * initialize an optimization worksheet based on the display config passed in.
 	 */

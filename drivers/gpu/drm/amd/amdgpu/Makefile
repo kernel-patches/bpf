@@ -52,15 +52,15 @@ amdgpu-y := amdgpu_drv.o
 
 # add KMS driver
 amdgpu-y += amdgpu_device.o amdgpu_reg_access.o amdgpu_doorbell_mgr.o amdgpu_kms.o \
-	amdgpu_atombios.o atombios_crtc.o amdgpu_connectors.o \
+	amdgpu_atombios.o \
 	atom.o amdgpu_fence.o amdgpu_ttm.o amdgpu_object.o amdgpu_gart.o \
-	amdgpu_encoders.o amdgpu_display.o amdgpu_i2c.o \
+	amdgpu_display.o amdgpu_i2c.o \
 	amdgpu_gem.o amdgpu_ring.o \
 	amdgpu_cs.o amdgpu_bios.o amdgpu_benchmark.o \
-	atombios_dp.o amdgpu_afmt.o amdgpu_trace_points.o \
-	atombios_encoders.o amdgpu_sa.o atombios_i2c.o \
+	amdgpu_trace_points.o \
+	amdgpu_sa.o \
 	amdgpu_dma_buf.o amdgpu_vm.o amdgpu_vm_pt.o amdgpu_vm_tlb_fence.o \
-	amdgpu_ib.o amdgpu_pll.o \
+	amdgpu_ib.o \
 	amdgpu_ucode.o amdgpu_bo_list.o amdgpu_ctx.o amdgpu_sync.o \
 	amdgpu_gtt_mgr.o amdgpu_preempt_mgr.o amdgpu_vram_mgr.o amdgpu_virt.o \
 	amdgpu_atomfirmware.o amdgpu_vf_error.o amdgpu_sched.o \
@@ -80,9 +80,9 @@ amdgpu-$(CONFIG_PERF_EVENTS) += amdgpu_pmu.o
 
 # add asic specific block
 amdgpu-$(CONFIG_DRM_AMDGPU_CIK)+= cik.o cik_ih.o \
-	dce_v8_0.o gfx_v7_0.o cik_sdma.o uvd_v4_2.o vce_v2_0.o
+	gfx_v7_0.o cik_sdma.o uvd_v4_2.o vce_v2_0.o
 
-amdgpu-$(CONFIG_DRM_AMDGPU_SI)+= si.o gmc_v6_0.o gfx_v6_0.o si_ih.o si_dma.o dce_v6_0.o \
+amdgpu-$(CONFIG_DRM_AMDGPU_SI)+= si.o gmc_v6_0.o gfx_v6_0.o si_ih.o si_dma.o \
 	uvd_v3_1.o vce_v1_0.o
 
 amdgpu-y += \
@@ -92,7 +92,7 @@ amdgpu-y += \
 	sienna_cichlid.o smu_v13_0_10.o nbio_v4_3.o hdp_v6_0.o nbio_v7_7.o hdp_v5_2.o lsdma_v6_0.o \
 	nbio_v7_9.o aqua_vanjaram.o nbio_v7_11.o lsdma_v7_0.o hdp_v7_0.o nbif_v6_3_1.o \
 	cyan_skillfish_reg_init.o soc_v1_0.o lsdma_v7_1.o nbio_v6_3_2.o nbio_v7_11_5.o \
-	nbif_v7_10.o hdp_v8_0.o lsdma_v8_0.o nbio_v7_11_4.o
+	nbif_v7_10.o hdp_v8_0.o lsdma_v8_0.o nbio_v7_11_4.o soc_v2_0.o
 
 # add DF block
 amdgpu-y += \
@@ -111,7 +111,8 @@ amdgpu-y += \
 	mmhub_v1_7.o gfxhub_v3_0.o mmhub_v3_0.o mmhub_v3_0_2.o gmc_v11_0.o \
 	mmhub_v3_0_1.o gfxhub_v3_0_3.o gfxhub_v1_2.o mmhub_v1_8.o mmhub_v3_3.o \
 	gfxhub_v11_5_0.o mmhub_v4_1_0.o gfxhub_v12_0.o gmc_v12_0.o \
-	mmhub_v4_2_0.o gfxhub_v12_1.o gmc_v12_1.o mmhub_v5_0.o
+	mmhub_v4_2_0.o gfxhub_v12_1.o gmc_v12_1.o mmhub_v5_0.o gfxhub_v13_0.o \
+	gmc_v13_0.o
 
 # add UMC block
 amdgpu-y += \
@@ -149,7 +150,6 @@ amdgpu-y += \
 
 # add DCE block
 amdgpu-y += \
-	dce_v10_0.o \
 	amdgpu_vkms.o
 
 # add GFX block
@@ -169,7 +169,9 @@ amdgpu-y += \
 	gfx_v12_0.o \
 	gfx_v12_1.o \
 	imu_v12_0.o \
-	imu_v12_1.o
+	imu_v12_1.o \
+	imu_v13_0.o \
+	gfx_v13_0.o
 
 # add async DMA block
 amdgpu-y += \
@@ -183,7 +185,8 @@ amdgpu-y += \
 	sdma_v5_2.o \
 	sdma_v6_0.o \
 	sdma_v7_0.o \
-	sdma_v7_1.o
+	sdma_v7_1.o \
+	sdma_v8_0.o
 
 # add MES block
 amdgpu-y += \

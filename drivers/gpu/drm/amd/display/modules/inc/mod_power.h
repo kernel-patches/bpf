@@ -221,6 +221,13 @@ bool mod_power_set_backlight_percent(struct mod_power *mod_power,
 		unsigned int transition_time_millisec,
 		bool is_hdr);
 
+bool mod_power_set_brightness(struct mod_power *mod_power,
+		struct dc_stream_state *stream,
+		unsigned int backlight_millipercent,
+		unsigned int transition_time_millisec,
+		unsigned int aux_brightness_mask,
+		bool is_hdr);
+
 void mod_power_update_backlight(struct mod_power *mod_power,
 		struct dc_stream_state *stream,
 		unsigned int backlight_millipercent);

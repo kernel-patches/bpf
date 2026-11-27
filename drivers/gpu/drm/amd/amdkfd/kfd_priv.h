@@ -1083,7 +1083,7 @@ struct kfd_process {
 
 #define KFD_PROCESS_TABLE_SIZE 8 /* bits: 256 entries */
 #define KFD_CONTEXT_ID_PRIMARY	0xFFFF
-#define KFD_CONTEXT_ID_MIN 0
+#define KFD_CONTEXT_ID_MIN 1
 
 extern DECLARE_HASHTABLE(kfd_processes_table, KFD_PROCESS_TABLE_SIZE);
 extern struct srcu_struct kfd_processes_srcu;
@@ -1147,10 +1147,12 @@ struct kfd_process_device *kfd_process_device_data_by_id(struct kfd_process *pro
 
 int kfd_process_get_user_gpu_id(struct kfd_process *p, uint32_t actual_gpu_id);
 
+int kfd_process_device_alloc_proc_ctx(struct kfd_process_device *pdd);
 int kfd_process_device_init_vm(struct kfd_process_device *pdd,
 			       struct file *drm_file);
 struct kfd_process_device *kfd_bind_process_to_device(struct kfd_node *dev,
 						struct kfd_process *p);
+int kfd_process_device_runtime_get(struct kfd_process_device *pdd);
 struct kfd_process_device *kfd_get_process_device_data(struct kfd_node *dev,
 							struct kfd_process *p);
 struct kfd_process_device *kfd_create_process_device_data(struct kfd_node *dev,

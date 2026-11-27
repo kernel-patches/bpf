@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 Advanced Micro Devices, Inc.
+ * Copyright 2025 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,15 +21,10 @@
  *
  */
 
-#ifndef __DCE_V8_0_H__
-#define __DCE_V8_0_H__
+#ifndef __GMC_V13_0_H__
+#define __GMC_V13_0_H__
 
-extern const struct amdgpu_ip_block_version dce_v8_0_ip_block;
-extern const struct amdgpu_ip_block_version dce_v8_1_ip_block;
-extern const struct amdgpu_ip_block_version dce_v8_2_ip_block;
-extern const struct amdgpu_ip_block_version dce_v8_3_ip_block;
-extern const struct amdgpu_ip_block_version dce_v8_5_ip_block;
-
-void dce_v8_0_disable_dce(struct amdgpu_device *adev);
+extern const struct amd_ip_funcs gmc_v13_0_ip_funcs;
+extern const struct amdgpu_ip_block_version gmc_v13_0_ip_block;
 
 #endif

@@ -36,6 +36,14 @@ MODULE_FIRMWARE("amdgpu/psp_15_0_8_toc_1.bin");
 MODULE_FIRMWARE("amdgpu/psp_15_0_8_rl.bin");
 MODULE_FIRMWARE("amdgpu/psp_15_0_8_ta.bin");
 
+static void psp_v15_0_8_init_sos_version(struct psp_context *psp)
+{
+	struct amdgpu_device *adev = psp->adev;
+	if (!amdgpu_sriov_vf(adev))
+		psp->sos.fw_version =
+			RREG32_SOC15(MP0, 0, regMPASP_SMN_C2PMSG_58);
+}
+
 static int psp_v15_0_8_init_microcode(struct psp_context *psp)
 {
 	struct amdgpu_device *adev = psp->adev;
@@ -507,4 +515,7 @@ static const struct psp_funcs psp_v15_0_8_funcs = {
 void psp_v15_0_8_set_psp_funcs(struct psp_context *psp)
 {
 	psp->funcs = &psp_v15_0_8_funcs;
+
+	/* Initialize SOS version as well */
+	psp_v15_0_8_init_sos_version(psp);
 }

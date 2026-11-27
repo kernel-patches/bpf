@@ -379,6 +379,7 @@ static void gfx_v11_0_ring_invalidate_tlbs(struct amdgpu_ring *ring,
 static void gfx_v11_0_set_safe_mode(struct amdgpu_device *adev, int xcc_id);
 static void gfx_v11_0_unset_safe_mode(struct amdgpu_device *adev, int xcc_id);
 static void gfx_v11_0_update_spm_vmid(struct amdgpu_device *adev, int xcc_id,
+				      struct amdgpu_ring *ring,
 				      unsigned int vmid);
 static void gfx_v11_0_userq_priv_fault_work(struct work_struct *work);
 static void gfx_v11_0_update_perf_clk(struct amdgpu_device *adev,
@@ -1941,8 +1942,11 @@ static int gfx_v11_0_sw_init(struct amdgpu_ip_block *ip_block)
 		    !adev->debug_disable_gpu_ring_reset) {
 			adev->gfx.compute_supported_reset |= AMDGPU_RESET_TYPE_PER_QUEUE;
 			adev->gfx.gfx_supported_reset |= AMDGPU_RESET_TYPE_PER_QUEUE;
-			/* TODO: verify CP warm-reset support before enabling PER_PIPE. */
-			/* adev->gfx.gfx_supported_reset |= AMDGPU_RESET_TYPE_PER_PIPE; */
+			/* Resetting a GFX pipe needs the CP firmware to support it */
+			if (adev->gfx.pfp_fw_version >= 2790 &&
+			    adev->gfx.me_fw_version >= 2600 &&
+			    adev->gfx.mec_fw_version >= 2850)
+				adev->gfx.gfx_supported_reset |= AMDGPU_RESET_TYPE_PER_PIPE;
 		}
 		break;
 	default:
@@ -2622,7 +2626,7 @@ static int gfx_v11_0_rlc_resume(struct amdgpu_device *adev)
 	 * The RLC comes up with RLC_SPM_MC_CNTL cleared, program the SPM VMID
 	 * once it runs, also after a GPU reset or a resume.
 	 */
-	gfx_v11_0_update_spm_vmid(adev, 0, adev->vm_manager.spm_vmid);
+	gfx_v11_0_update_spm_vmid(adev, 0, NULL, adev->vm_manager.spm_vmid);
 
 	return 0;
 }
@@ -5631,12 +5635,22 @@ static int gfx_v11_0_update_gfx_clock_gating(struct amdgpu_device *adev,
 }
 
 static void gfx_v11_0_update_spm_vmid(struct amdgpu_device *adev, int xcc_id,
-		unsigned int vmid)
+		struct amdgpu_ring *ring, unsigned vmid)
 {
 	u32 reg, pre_data, data;
 
-	amdgpu_gfx_off_ctrl(adev, false);
 	reg = SOC15_REG_OFFSET(GC, 0, regRLC_SPM_MC_CNTL);
+
+	if (ring) {
+	    if ((ring->funcs->type == AMDGPU_RING_TYPE_GFX) ||
+		(ring->funcs->type == AMDGPU_RING_TYPE_COMPUTE)) {
+		    data = (vmid & RLC_SPM_MC_CNTL__RLC_SPM_VMID_MASK) << RLC_SPM_MC_CNTL__RLC_SPM_VMID__SHIFT;
+		    amdgpu_ring_emit_wreg(ring, reg, data);
+	    }
+	    return;
+	}
+
+	amdgpu_gfx_off_ctrl(adev, false);
 	if (amdgpu_sriov_is_pp_one_vf(adev) && !amdgpu_sriov_runtime(adev))
 		pre_data = RREG32_NO_KIQ(reg);
 	else

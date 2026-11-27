@@ -63,6 +63,9 @@ void dpp60_dpp_setup(
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
 		pixel_format = 8;
 		break;
+	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+		pixel_format = 9;
+		break;
 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
 		pixel_format = 10;
@@ -321,7 +324,7 @@ void dcn6_dpp_reset(struct dpp *dpp_base)
 	struct dcn60_dpp *dpp = TO_DCN60_DPP(dpp_base);
 
 	if (dpp->scl_data.upsp) {
-		if (dpp->tf_mask->UPSP_MODE) {
+		if (REG(CNVC_UPSP_MODE)) {
 			// Reset dpp registers used for upsp, lls
 			REG_WRITE(CNVC_UPSP_MODE, 0);
 			REG_WRITE(PRE_CSC_MODE, 0);

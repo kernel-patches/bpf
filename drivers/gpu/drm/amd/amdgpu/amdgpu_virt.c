@@ -102,7 +102,7 @@ int amdgpu_virt_request_full_gpu(struct amdgpu_device *adev, bool init)
 
 	if (virt->ops && virt->ops->req_full_gpu) {
 		r = virt->ops->req_full_gpu(adev, init);
-		if (r) {
+		if (r && r != -EBUSY) {
 			adev->no_hw_access = true;
 			return r;
 		}

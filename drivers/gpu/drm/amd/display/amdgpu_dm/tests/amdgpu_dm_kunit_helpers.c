@@ -95,6 +95,8 @@ struct amdgpu_display_manager *dm_kunit_alloc_dm(struct kunit *test)
 
 	dm->dc = dc;
 	dc->current_state = state;
+	/* Guards otg_sw_counter[]; amdgpu_dm_init() is bypassed here. */
+	spin_lock_init(&dm->sw_counter_lock);
 
 	return dm;
 }

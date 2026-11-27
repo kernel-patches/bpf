@@ -1165,3 +1165,31 @@ bool dc_state_is_alt_in_use(const struct dc *dc, const struct dc_state *state)
 	}
 	return false;
 }
+
+static void pipe_flags(const struct pipe_ctx *pipe,
+		struct dc_state_pipe_flags *flags)
+{
+	flags->has_plane = pipe->plane_state != NULL;
+	flags->enabled = flags->has_plane && pipe->stream &&
+			pipe->plane_res.hubp && pipe->plane_res.dpp &&
+			pipe->stream_res.opp;
+	flags->det_size = pipe->hubp_regs.det_size;
+}
+
+enum dc_status dc_state_compute_update_flags(const struct dc_state *cur_state,
+		const struct dc_state *target_state,
+		struct dc_state_update_flags *out_flags)
+{
+	unsigned int i;
+
+	if (!cur_state || !target_state || !out_flags)
+		return DC_ERROR_UNEXPECTED;
+	memset(out_flags, 0, sizeof(*out_flags));
+	for (i = 0; i < MAX_PIPES; i++) {
+		pipe_flags(&cur_state->res_ctx.pipe_ctx[i],
+				&out_flags->cur_pipes[i]);
+		pipe_flags(&target_state->res_ctx.pipe_ctx[i],
+				&out_flags->new_pipes[i]);
+	}
+	return DC_OK;
+}

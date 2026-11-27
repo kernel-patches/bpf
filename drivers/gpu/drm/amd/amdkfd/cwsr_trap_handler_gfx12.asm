@@ -48,6 +48,7 @@
 #define WAVE32_ONLY (ASIC_FAMILY >= CHIP_GC_12_0_3_REV_0)
 #define SAVE_TTMPS_IN_SGPR_BLOCK (ASIC_FAMILY >= CHIP_GC_12_0_3_REV_0)
 #define VMEM_ON_TRAP_ENTRY_WA (ASIC_FAMILY >= CHIP_GC_12_0_3_REV_0)
+#define HAVE_LDS_STORE_ACK_WA (ASIC_FAMILY >= CHIP_GC_12_0_3_REV_0)
 
 #if HAVE_XNACK && !WAVE32_ONLY
 # error
@@ -1015,6 +1016,16 @@ L_RESTORE_LDS_LOOP_W32:
 	s_add_u32	s_restore_mem_offset, s_restore_mem_offset, 128		//mem offset increased by 128DW
 	s_cmp_lt_u32	m0, s_restore_alloc_size				//scc=(m0 < s_restore_alloc_size) ? 1 : 0
 	s_cbranch_scc1	L_RESTORE_LDS_LOOP_W32					//LDS restore is complete?
+
+#if HAVE_LDS_STORE_ACK_WA
+	v_mov_b32	v0, 0
+	v_mov_b32	v1, 0
+	s_mov_b32	exec_lo, 0x3F
+	ds_or_b32	v1, v0
+	s_mov_b32	exec_lo, -1
+	s_wait_dscnt	0x0
+#endif
+
 	s_branch	L_RESTORE_VGPR
 
 L_RESTORE_LDS_LOOP_W64:

@@ -51,7 +51,6 @@
 #include "amdgpu.h"
 #include "amdgpu_ih.h"
 #include "atom.h"
-#include "amdgpu_connectors.h"
 #include "amdgpu_trace.h"
 #include "amdgpu_amdkfd.h"
 #include "amdgpu_ras.h"

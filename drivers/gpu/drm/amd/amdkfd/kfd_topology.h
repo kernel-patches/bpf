@@ -62,6 +62,7 @@ struct kfd_node_properties {
 	uint32_t simd_arrays_per_engine;
 	uint32_t cu_per_simd_array;
 	uint32_t simd_per_cu;
+	uint32_t max_cu_per_engine;
 	uint32_t max_slots_scratch_cu;
 	uint32_t engine_id;
 	uint32_t gfx_target_version;

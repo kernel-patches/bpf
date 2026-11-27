@@ -617,8 +617,7 @@ void amdgpu_device_detect_runtime_pm_mode(struct amdgpu_device *adev)
 	int bamaco_support;
 
 	adev->pm.rpm_mode = AMDGPU_RUNPM_NONE;
-	if (pci_is_thunderbolt_attached(adev->pdev) ||
-	    dev_is_removable(&adev->pdev->dev)) {
+	if (amdgpu_device_is_removable(adev)) {
 		dev_info(adev->dev,
 			 "Runtime PM disabled for externally attached device\n");
 		return;
@@ -1286,6 +1285,16 @@ bool amdgpu_device_seamless_boot_supported(struct amdgpu_device *adev)
 	return amdgpu_ip_version(adev, DCE_HWIP, 0) >= IP_VERSION(3, 0, 0);
 }
 
+bool amdgpu_device_is_removable(struct amdgpu_device *adev)
+{
+	/* older TB systems don't set dev_is_removable so check both here */
+	if (dev_is_removable(adev->dev) ||
+	    pci_is_thunderbolt_attached(adev->pdev))
+		return true;
+
+	return false;
+}
+
 #if IS_ENABLED(CONFIG_X86)
 static const struct x86_cpu_id amdgpu_pcie_dynamic_switching_quirks[] = {
 	/*
@@ -1308,8 +1317,8 @@ static const struct x86_cpu_id amdgpu_pcie_dynamic_switching_quirks[] = {
 
 static bool amdgpu_device_pcie_dynamic_switching_supported(struct amdgpu_device *adev)
 {
-	/* eGPU change speeds based on USB4 fabric conditions */
-	if (dev_is_removable(adev->dev))
+	/* eGPU change speeds based on USB4/TB fabric conditions */
+	if (amdgpu_device_is_removable(adev))
 		return true;
 
 	/* Hosts have problems with dynamic speed switching */
@@ -2065,6 +2074,12 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 		break;
 	}
 
+	if (amdgpu_is_spm_passthrough(adev)) {
+		r = amdgpu_psp_disable_fb_carveout(adev);
+		if (r)
+			return r;
+	}
+
 	/* Check for IP version 9.4.3 with A0 hardware */
 	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 3) &&
 	    !amdgpu_device_get_rev_id(adev)) {
@@ -2077,7 +2092,7 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 	    (amdgpu_is_atpx_hybrid() ||
 	     amdgpu_has_atpx_dgpu_power_cntl()) &&
 	    ((adev->flags & AMD_IS_APU) == 0) &&
-	    !dev_is_removable(&adev->pdev->dev))
+	    !amdgpu_device_is_removable(adev))
 		adev->flags |= AMD_IS_PX;
 
 	if (!(adev->flags & AMD_IS_APU)) {
@@ -2574,6 +2589,11 @@ static int amdgpu_device_ip_init(struct amdgpu_device *adev)
 	if (amdgpu_ip_member_of_hwini(adev, AMD_IP_BLOCK_TYPE_SDMA))
 		amdgpu_ttm_enable_buffer_funcs(adev);
 
+	/* KFD init flushes the GART TLB through SDMA on Navi 1x and waits
+	 * for it, so the fence interrupts must already be enabled.
+	 */
+	amdgpu_fence_driver_hw_init(adev);
+
 	/* Don't init kfd if whole hive need to be reset during init */
 	if (adev->init_lvl->level != AMDGPU_INIT_LEVEL_MINIMAL_XGMI) {
 		amdgpu_amdkfd_device_init(adev);
@@ -2811,9 +2831,9 @@ static int amdgpu_device_ip_late_init(struct amdgpu_device *adev)
 	amdgpu_device_set_pg_state(adev, AMD_PG_STATE_GATE);
 	amdgpu_gfx_perfmon_clk_restore(adev);
 
-	r = amdgpu_dpm_reapply_umd_profile(adev);
+	r = amdgpu_dpm_reapply_performance_level(adev);
 	if (r) {
-		dev_err(adev->dev, "Failed to restore UMD profile state: %d\n", r);
+		dev_err(adev->dev, "Failed to restore performance level: %d\n", r);
 		return r;
 	}
 
@@ -3524,8 +3544,8 @@ static void amdgpu_device_detect_sriov_bios(struct amdgpu_device *adev)
  * Check if there is DC (new modesetting infrastructre) support for an asic.
  * returns true if DC has support, false if not.
  */
-bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
-				       enum amd_asic_type asic_type)
+static bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
+					      enum amd_asic_type asic_type)
 {
 	switch (asic_type) {
 #ifdef CONFIG_DRM_AMDGPU_SI
@@ -3539,15 +3559,36 @@ bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
 	case CHIP_PITCAIRN:
 	case CHIP_VERDE:
 	case CHIP_OLAND:
-		return amdgpu_dc != 0 && IS_ENABLED(CONFIG_DRM_AMD_DC_SI);
+		if (!IS_ENABLED(CONFIG_DRM_AMD_DC_SI))
+			dev_warn_once(&pdev->dev,
+				      "Driver built without SI display support!\n");
+		return IS_ENABLED(CONFIG_DRM_AMD_DC_SI);
+	case CHIP_BONAIRE:
+	case CHIP_KAVERI:
+	case CHIP_KABINI:
+	case CHIP_HAWAII:
+	case CHIP_MULLINS:
+	case CHIP_TONGA:
+	case CHIP_FIJI:
+	case CHIP_CARRIZO:
+	case CHIP_STONEY:
+	case CHIP_POLARIS10:
+	case CHIP_POLARIS11:
+	case CHIP_POLARIS12:
+	case CHIP_VEGAM:
+	case CHIP_VEGA10:
+	case CHIP_VEGA12:
+	case CHIP_VEGA20:
+		if (!IS_ENABLED(CONFIG_DRM_AMD_DC_DCE))
+			dev_warn_once(&pdev->dev,
+				      "Driver built without DCE display support!\n");
+		return IS_ENABLED(CONFIG_DRM_AMD_DC_DCE);
 	default:
-		return amdgpu_dc != 0;
+		return true;
 #else
 	default:
-		if (amdgpu_dc > 0)
-			dev_info_once(
-				&pdev->dev,
-				"Display Core has been requested via kernel parameter but isn't supported by ASIC, ignoring\n");
+		dev_info_once(&pdev->dev,
+			      "Driver built without display support\n");
 		return false;
 #endif
 	}
@@ -3794,9 +3835,8 @@ static void amdgpu_device_sys_interface_fini(struct amdgpu_device *adev)
 static bool
 amdgpu_device_should_register_switcheroo(struct amdgpu_device *adev, bool px)
 {
-	return !pci_is_thunderbolt_attached(adev->pdev) &&
-	       (px || (!dev_is_removable(&adev->pdev->dev) &&
-		       apple_gmux_detect(NULL, NULL)));
+	return !amdgpu_device_is_removable(adev) &&
+		(px || apple_gmux_detect(NULL, NULL));
 }
 
 /**
@@ -4102,6 +4142,9 @@ int amdgpu_device_init(struct amdgpu_device *adev,
 				amdgpu_reset_method = AMD_RESET_METHOD_NONE;
 				r = amdgpu_asic_reset(adev);
 				amdgpu_reset_method = tmp;
+				/* Post again so that the PSP is ready before it is used */
+				if (!r)
+					adev->has_hw_reset = true;
 		}
 
 		if (r) {
@@ -4165,8 +4208,6 @@ fence_driver_init:
 		amdgpu_vf_error_put(adev, AMDGIM_ERROR_VF_AMDGPU_INIT_FAIL, 0, 0);
 		goto release_ras_con;
 	}
-
-	amdgpu_fence_driver_hw_init(adev);
 
 	dev_info(adev->dev,
 		"SE %d, SH per SE %d, CU per SH %d, active_cu_number %d\n",

@@ -21,6 +21,7 @@
 #include "dce/dce_hwseq.h"
 #include "hwss/hw_sequencer_private.h"
 #include "dcn32/dcn32_resource.h"
+#include "bls_builder/bls_builder_internal.h"
 #include "bls_builder/dcn401_init_builder.h"
 #include "bls_builder/dcn401_init_builder_legacy.h"
 
@@ -58,6 +59,70 @@ static bool dcn401_dc1_uses_accelerated_mode(struct dc *dc)
 static bool dcn401_dc1_has_dmub(struct dc *dc)
 {
 	return dc->ctx->dmub_srv && dc->ctx->dmub_srv->dmub;
+}
+
+static enum bls_builder_result dcn401_build_clk_mgr_init(
+		struct clk_mgr *clk_mgr, struct block_sequence_state *sequence)
+{
+	union block_sequence_params bls_params = {0};
+
+	bls_params.legacy_clk_mgr_init_clocks_params.clk_mgr = clk_mgr;
+	if (!bls_append(sequence, LEGACY_CLK_MGR_INIT_CLOCKS, &bls_params))
+		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
+
+	return BLS_BUILD_SUCCESS;
+}
+
+static enum bls_builder_result dcn401_build_dc_mode_read(
+		struct clk_mgr *clk_mgr, bool *out_dcmode_power_limits_present,
+		struct block_sequence_state *sequence)
+{
+	union block_sequence_params bls_params = {0};
+
+	bls_params.legacy_clk_mgr_is_dc_mode_present_params.clk_mgr = clk_mgr;
+	bls_params.legacy_clk_mgr_is_dc_mode_present_params
+			.out_dcmode_power_limits_present =
+			out_dcmode_power_limits_present;
+	if (!bls_append(sequence, LEGACY_CLK_MGR_IS_DC_MODE_PRESENT,
+			&bls_params))
+		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
+
+	return BLS_BUILD_SUCCESS;
+}
+
+static enum bls_builder_result dcn401_build_dccg_init(
+		struct dccg *dccg, struct block_sequence_state *sequence)
+{
+	union block_sequence_params bls_params = {0};
+
+	bls_params.dccg_initialize_clocks_params.dccg = dccg;
+	if (!bls_append(sequence, DCCG_INITIALIZE_CLOCKS, &bls_params))
+		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
+
+	return BLS_BUILD_SUCCESS;
+}
+
+static bool dcn401_add_dmub_cmd(struct block_sequence_state *sequence,
+		struct dc_context *ctx, union dmub_rb_cmd *cmd,
+		enum dm_dmub_wait_type wait_type, bool continue_on_error)
+{
+	union block_sequence_params bls_params = {0};
+
+	bls_params.send_dmcub_cmd_params.ctx = ctx;
+	bls_params.send_dmcub_cmd_params.cmd = cmd;
+	bls_params.send_dmcub_cmd_params.wait_type = wait_type;
+	bls_params.send_dmcub_cmd_params.continue_on_error = continue_on_error;
+	return bls_append(sequence, DMUB_SEND_DMCUB_CMD, &bls_params);
+}
+
+static void dcn401_fill_query_feature_caps_cmd(union dmub_rb_cmd *cmd)
+{
+	memset(cmd, 0, sizeof(*cmd));
+	cmd->query_feature_caps.header.type = DMUB_CMD__QUERY_FEATURE_CAPS;
+	cmd->query_feature_caps.header.sub_type = 0;
+	cmd->query_feature_caps.header.ret_status = 1;
+	cmd->query_feature_caps.header.payload_bytes =
+			sizeof(struct dmub_cmd_query_feature_caps_data);
 }
 
 static enum bls_builder_result dcn401_validate_dc1_links(struct dc *dc)
@@ -1068,4 +1133,16 @@ bool dcn401_dc1_initialization_check_capability(
 {
 	return params && params->dc && params->dc->ctx &&
 			params->dc->res_pool;
+}
+
+const struct bls_builder *dcn401_legacy_initialization_builder(void)
+{
+	static const struct bls_builder builder = {
+		.name = DCN_DECL_INITIALIZATION_LEGACY,
+		.kind = BLS_BUILDER_DECLARATIVE,
+		.check_capability = dcn401_dc1_initialization_check_capability,
+		.build.declarative = dcn401_build_dc1_initialization,
+	};
+
+	return &builder;
 }

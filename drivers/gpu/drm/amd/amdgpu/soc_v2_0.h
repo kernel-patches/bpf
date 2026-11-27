@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Advanced Micro Devices, Inc.
+ * Copyright 2026 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -20,13 +20,11 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  *
  */
+#ifndef __SOC_V2_0_H__
+#define __SOC_V2_0_H__
 
-#ifndef __DCE_V6_0_H__
-#define __DCE_V6_0_H__
+extern const struct amdgpu_ip_block_version soc_v2_0_common_ip_block;
 
-extern const struct amdgpu_ip_block_version dce_v6_0_ip_block;
-extern const struct amdgpu_ip_block_version dce_v6_4_ip_block;
-
-void dce_v6_0_disable_dce(struct amdgpu_device *adev);
-
+void soc_v2_0_grbm_select(struct amdgpu_device *adev,
+			  u32 me, u32 pipe, u32 queue, u32 vmid);
 #endif

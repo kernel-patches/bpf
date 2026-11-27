@@ -126,8 +126,9 @@ static int xgpu_ai_poll_msg(struct amdgpu_device *adev, enum idh_event event)
 	return -ETIME;
 }
 
-static void xgpu_ai_mailbox_trans_msg (struct amdgpu_device *adev,
-	      enum idh_request req, u32 data1, u32 data2, u32 data3) {
+static int xgpu_ai_mailbox_trans_msg (struct amdgpu_device *adev,
+	      enum idh_request req, u32 data1, u32 data2, u32 data3)
+{
 	u32 reg;
 	int r;
 	uint8_t trn;
@@ -168,6 +169,8 @@ static void xgpu_ai_mailbox_trans_msg (struct amdgpu_device *adev,
 		dev_err(adev->dev, "Doesn't get ack from pf, continue\n");
 
 	xgpu_ai_mailbox_set_valid(adev, false);
+
+	return r;
 }
 
 static int xgpu_ai_send_access_requests(struct amdgpu_device *adev,

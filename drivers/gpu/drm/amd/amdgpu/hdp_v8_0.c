@@ -125,8 +125,21 @@ static void hdp_v8_0_get_clockgating_state(struct amdgpu_device *adev,
 		*flags |= AMD_CG_SUPPORT_HDP_SD;
 }
 
+static u64 hdp_v8_0_get_hdp_base(struct amdgpu_device *adev)
+{
+	u32 hdp_base_hi, hdp_base_lo;
+	u64 hdp_base;
+
+	hdp_base_hi = RREG32_SOC15(HDP, 0, regHDP_NONSURFACE_BASE_HI);
+	hdp_base_lo = RREG32_SOC15(HDP, 0, regHDP_NONSURFACE_BASE);
+	hdp_base = ((u64)hdp_base_hi << 40) | ((u64)hdp_base_lo << 8);
+
+	return hdp_base;
+}
+
 const struct amdgpu_hdp_funcs hdp_v8_0_funcs = {
 	.flush_hdp = amdgpu_hdp_generic_flush,
 	.update_clock_gating = hdp_v8_0_update_clock_gating,
 	.get_clock_gating_state = hdp_v8_0_get_clockgating_state,
+	.get_hdp_base = hdp_v8_0_get_hdp_base,
 };

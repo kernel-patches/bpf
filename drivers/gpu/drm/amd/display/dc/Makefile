@@ -85,11 +85,17 @@ FILES += core2/dc_core2.o
 FILES += core2/dc_core2_init.o
 FILES += core2/dc_core2_legacy_init.o
 FILES += bls_builder/bls_builder.o
+FILES += bls_builder/dcn401_seamless_builder.o
 FILES += bls_builder/dcn401_init_builder.o
 FILES += bls_builder/dcn401_init_builder_legacy.o
+FILES += bls_builder/dcn401_non_seamless_builder.o
+FILES += state_facts/state_facts.o
+FILES += bls_builder/dcn401_query_builder.o
 FILES += bls_executor/bls_executor.o
 FILES += workaround_manager/workaround_manager.o
 FILES += dmub_messenger/dmub_messenger.o
+FILES += pmfw_messenger/pmfw_messenger.o
+FILES += pmfw_messenger/dcn401_pmfw_messenger.o
 
 AMD_DISPLAY_FILES += $(addprefix $(AMDDALPATH)/dc/, $(FILES))
 

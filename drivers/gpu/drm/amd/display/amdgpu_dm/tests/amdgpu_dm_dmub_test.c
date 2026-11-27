@@ -70,6 +70,16 @@ static void dm_test_dmub_init_reg_offsets(struct dmub_srv *dmub,
 {
 }
 
+static void dm_test_dmub_set_inbox1_wptr(struct dmub_srv *dmub, uint32_t wptr_offset)
+{
+}
+
+/* The fake firmware consumes inbox1 commands instantly: rptr tracks wptr. */
+static uint32_t dm_test_dmub_get_inbox1_ptr(struct dmub_srv *dmub)
+{
+	return dmub->inbox1.rb.wrpt;
+}
+
 static bool dm_test_dmcu_init(struct dmcu *dmcu)
 {
 	return true;
@@ -99,6 +109,9 @@ static struct dmub_srv *dm_test_alloc_dmub_srv(struct kunit *test)
 	dmub_srv->hw_funcs.is_hw_init = dm_test_dmub_hw_initialized;
 	dmub_srv->hw_funcs.get_fw_status = dm_test_dmub_fw_ready;
 	dmub_srv->hw_funcs.init_reg_offsets = dm_test_dmub_init_reg_offsets;
+	dmub_srv->hw_funcs.set_inbox1_wptr = dm_test_dmub_set_inbox1_wptr;
+	dmub_srv->hw_funcs.get_inbox1_rptr = dm_test_dmub_get_inbox1_ptr;
+	dmub_srv->hw_funcs.get_inbox1_wptr = dm_test_dmub_get_inbox1_ptr;
 
 	return dmub_srv;
 }
@@ -648,6 +661,23 @@ static void dm_test_dmub_hw_init_success_fake_dmub(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, dm_dmub_hw_init(adev), 0);
 	KUNIT_EXPECT_TRUE(test, adev->dm.dmub_srv->hw_init);
 	KUNIT_EXPECT_NOT_NULL(test, adev->dm.dc->ctx->dmub_srv);
+}
+
+/**
+ * dm_test_dmub_hw_init_lsdma_buffer - Test hw init assigns the LSDMA ring buffer
+ * @test: The KUnit test context
+ *
+ * dm_dmub_hw_init() should point the DMUB LSDMA ring buffer at the
+ * DMUB_WINDOW_LSDMA_BUFFER framebuffer window.
+ */
+static void dm_test_dmub_hw_init_lsdma_buffer(struct kunit *test)
+{
+	struct amdgpu_device *adev = dm_test_alloc_adev_with_dmub(test);
+	struct dmub_fb *lsdma_fb = &adev->dm.dmub_fb_info->fb[DMUB_WINDOW_LSDMA_BUFFER];
+
+	KUNIT_EXPECT_EQ(test, dm_dmub_hw_init(adev), 0);
+	KUNIT_EXPECT_PTR_EQ(test, adev->dm.dmub_srv->lsdma_rb_fb.cpu_addr, lsdma_fb->cpu_addr);
+	KUNIT_EXPECT_EQ(test, adev->dm.dmub_srv->lsdma_rb_fb.size, lsdma_fb->size);
 }
 
 /**
@@ -1786,13 +1816,14 @@ static void dm_test_dmub_sw_init_asic_mapping(struct kunit *test)
 }
 
 /**
- * dm_test_dmub_sw_init_gtt_only_asic - Test the GTT-only memory domain
+ * dm_test_dmub_sw_init_framebuffer_domain - Test the framebuffer memory domain
  * @test: The KUnit test context
  *
- * DCN32 and DCN321 keep the DMUB framebuffer in GTT; every other ASIC also
- * allows VRAM.
+ * dm_dmub_sw_init() allows both VRAM and GTT for every ASIC, including
+ * DCN32. The allocation is forced to fail so the test records the domain
+ * and stops.
  */
-static void dm_test_dmub_sw_init_gtt_only_asic(struct kunit *test)
+static void dm_test_dmub_sw_init_framebuffer_domain(struct kunit *test)
 {
 	struct amdgpu_device *adev = dm_test_alloc_adev_for_sw_init(test);
 
@@ -1800,7 +1831,8 @@ static void dm_test_dmub_sw_init_gtt_only_asic(struct kunit *test)
 	dm_test_bo.create_ret = -ENOMEM;
 
 	KUNIT_EXPECT_EQ(test, dm_dmub_sw_init(adev), -ENOMEM);
-	KUNIT_EXPECT_EQ(test, dm_test_bo.create_domain, (u32)AMDGPU_GEM_DOMAIN_GTT);
+	KUNIT_EXPECT_EQ(test, dm_test_bo.create_domain,
+			(u32)(AMDGPU_GEM_DOMAIN_GTT | AMDGPU_GEM_DOMAIN_VRAM));
 
 	dm_test_free_sw_init(adev);
 
@@ -1917,6 +1949,7 @@ static struct kunit_case amdgpu_dm_dmub_tests[] = {
 	KUNIT_CASE(dm_test_dmub_hw_init_no_fb_info),
 	KUNIT_CASE(dm_test_dmub_hw_init_no_firmware),
 	KUNIT_CASE(dm_test_dmub_hw_init_success_fake_dmub),
+	KUNIT_CASE(dm_test_dmub_hw_init_lsdma_buffer),
 	KUNIT_CASE(dm_test_dmub_hw_init_no_hw_support),
 	KUNIT_CASE(dm_test_dmub_hw_init_bss_data),
 	KUNIT_CASE(dm_test_dmub_hw_init_hw_init_fails),
@@ -1969,7 +2002,7 @@ static struct kunit_case amdgpu_dm_dmub_hw_access_tests[] = {
 	KUNIT_CASE(dm_test_init_microcode_request_fails),
 	/* dm_dmub_sw_init() */
 	KUNIT_CASE(dm_test_dmub_sw_init_asic_mapping),
-	KUNIT_CASE(dm_test_dmub_sw_init_gtt_only_asic),
+	KUNIT_CASE(dm_test_dmub_sw_init_framebuffer_domain),
 	KUNIT_CASE(dm_test_dmub_sw_init_success),
 	KUNIT_CASE(dm_test_dmub_sw_init_bss_data),
 	KUNIT_CASE(dm_test_dmub_sw_init_psp_load),

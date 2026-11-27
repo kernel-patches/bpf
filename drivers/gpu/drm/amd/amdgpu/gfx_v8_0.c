@@ -35,7 +35,6 @@
 #include "vid.h"
 #include "amdgpu_ucode.h"
 #include "amdgpu_atombios.h"
-#include "atombios_i2c.h"
 #include "clearstate_vi.h"
 
 #include "gmc/gmc_8_2_d.h"
@@ -1273,10 +1272,6 @@ static int gfx_v8_0_rlc_init(struct amdgpu_device *adev)
 		if (r)
 			return r;
 	}
-
-	/* init spm vmid with 0xf */
-	if (adev->gfx.rlc.funcs->update_spm_vmid)
-		adev->gfx.rlc.funcs->update_spm_vmid(adev, 0, adev->vm_manager.spm_vmid);
 
 	return 0;
 }
@@ -4086,6 +4081,10 @@ static int gfx_v8_0_rlc_resume(struct amdgpu_device *adev)
 	gfx_v8_0_init_pg(adev);
 	adev->gfx.rlc.funcs->start(adev);
 
+	/* init spm vmid with 0xf */
+	if (adev->gfx.rlc.funcs->update_spm_vmid)
+		adev->gfx.rlc.funcs->update_spm_vmid(adev, 0, NULL, adev->vm_manager.spm_vmid);
+
 	return 0;
 }
 
@@ -5484,9 +5483,12 @@ static void gfx_v8_0_unset_safe_mode(struct amdgpu_device *adev, int xcc_id)
 }
 
 static void gfx_v8_0_update_spm_vmid(struct amdgpu_device *adev, int xcc_id,
-		unsigned int vmid)
+		struct amdgpu_ring *ring, unsigned vmid)
 {
 	u32 data;
+
+	if (ring)
+		return;
 
 	amdgpu_gfx_off_ctrl(adev, false);
 

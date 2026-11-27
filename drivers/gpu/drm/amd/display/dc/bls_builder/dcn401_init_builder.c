@@ -9,405 +9,521 @@
 #include "dccg.h"
 #include "resource.h"
 #include "dc_dmub_srv.h"
+#include "dc_bios_types.h"
 #include "dmub_cmd.h"
 #include "bls_builder/bls_builder_internal.h"
 #include "bls_builder/dcn401_init_builder.h"
 #include "bls_builder/dcn401_init_builder_legacy.h"
 
-static const enum block_sequence_func dcn401_dc2_init_sequence[] = {
-	LEGACY_CLK_MGR_INIT_CLOCKS,
-	LEGACY_CLK_MGR_IS_DC_MODE_PRESENT,
-	DCCG_INITIALIZE_CLOCKS,
-	DMUB_HALT_FW,
-	PSP_RELOAD_DMUB_FW,
-	DMUB_GPINT_SEND_AND_WAIT,
-	DMUB_SEND_DMCUB_CMD,
-	DMUB_INITIALIZE_DCN,
+enum dcn401_init_builder_stages {
+	DCN401_INIT_BUILDER_STAGE1,
+	DCN401_INIT_BUILDER_STAGE2,
+	DCN401_INIT_BUILDER_DONE,
+	DCN401_INIT_BUILDER_STAGE_COUNT,
 };
 
-static enum bls_builder_result dcn401_check_initialization_support(
-		const struct bls_builder_check_capability_params *params)
-{
-	struct dc *dc;
+static_assert(DCN401_INIT_BUILDER_DONE <= BLS_BUILDER_INIT_MAX_STAGE_COUNT,
+		"Core runs at most BLS_BUILDER_INIT_MAX_STAGE_COUNT stages");
 
-	if (!params || !params->dc)
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
+enum dcn401_pmfw_clk {
+	DCN401_PMFW_CLK_SOCCLK  = 1,
+	DCN401_PMFW_CLK_UCLK    = 2,
+	DCN401_PMFW_CLK_FCLK    = 3,
+	DCN401_PMFW_CLK_DISPCLK = 6,
+	DCN401_PMFW_CLK_DPPCLK  = 7,
+	DCN401_PMFW_CLK_DCFCLK  = 9,
+	DCN401_PMFW_CLK_DTBCLK  = 10,
+};
 
-	dc = params->dc;
-	if (!dc->ctx || !dc->res_pool || !dc->res_pool->dccg)
-		return BLS_BUILD_ERROR_RESOURCE_MAPPING;
-	if (dc->config.seamless_boot_edp_requested)
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
+#define DCN401_PMFW_CLK_PARAM(clk) ((uint32_t)(clk) << 16)
+#define DCN401_PMFW_DPM_FREQ_PARAM(clk, level) (DCN401_PMFW_CLK_PARAM(clk) | ((uint32_t)(level) & 0xFF))
 
-	return BLS_BUILD_SUCCESS;
-}
+#define DCN401_PMFW_LEVEL_COUNT_INDEX 0xFF
+#define DCN401_PMFW_LEVEL_COUNT(clk) DCN401_PMFW_DPM_FREQ_PARAM(clk, DCN401_PMFW_LEVEL_COUNT_INDEX)
+
+#define DCN401_PMFW_SOCCLK_LEVEL_COUNT DCN401_PMFW_LEVEL_COUNT(DCN401_PMFW_CLK_SOCCLK)
+#define DCN401_PMFW_UCLK_LEVEL_COUNT DCN401_PMFW_LEVEL_COUNT(DCN401_PMFW_CLK_UCLK)
+#define DCN401_PMFW_FCLK_LEVEL_COUNT DCN401_PMFW_LEVEL_COUNT(DCN401_PMFW_CLK_FCLK)
+#define DCN401_PMFW_DISPCLK_LEVEL_COUNT DCN401_PMFW_LEVEL_COUNT(DCN401_PMFW_CLK_DISPCLK)
+#define DCN401_PMFW_DPPCLK_LEVEL_COUNT DCN401_PMFW_LEVEL_COUNT(DCN401_PMFW_CLK_DPPCLK)
+#define DCN401_PMFW_DCFCLK_LEVEL_COUNT DCN401_PMFW_LEVEL_COUNT(DCN401_PMFW_CLK_DCFCLK)
+#define DCN401_PMFW_DTBCLK_LEVEL_COUNT DCN401_PMFW_LEVEL_COUNT(DCN401_PMFW_CLK_DTBCLK)
+
+static const enum dcn401_pmfw_clk dcn401_pmfw_clocks[PMFW_CLOCK_COUNT] = {
+	[PMFW_CLOCK_DCFCLK] = DCN401_PMFW_CLK_DCFCLK,
+	[PMFW_CLOCK_SOCCLK] = DCN401_PMFW_CLK_SOCCLK,
+	[PMFW_CLOCK_DTBCLK] = DCN401_PMFW_CLK_DTBCLK,
+	[PMFW_CLOCK_DISPCLK] = DCN401_PMFW_CLK_DISPCLK,
+	[PMFW_CLOCK_DPPCLK] = DCN401_PMFW_CLK_DPPCLK,
+	[PMFW_CLOCK_UCLK] = DCN401_PMFW_CLK_UCLK,
+	[PMFW_CLOCK_FCLK] = DCN401_PMFW_CLK_FCLK,
+};
+
+static const struct block_sequence dcn401_init_stage1_sequence[] = {
+	{
+		.func = DMUB_SEND_DMCUB_CMD2,
+		.params.send_dmcub_cmd2_params.cmd.cmd_common.header =  {
+			.type = DMUB_CMD__DC_BLS,
+			.sub_type = DMUB_CMD__DC_BLS_DCN_INIT,
+			.payload_bytes = 0,
+		},
+		.params.send_dmcub_cmd2_params.wait_type = DM_DMUB_WAIT_TYPE_WAIT,
+	},
+	{
+		.func = DMUB_SEND_DMCUB_CMD2,
+		.params.send_dmcub_cmd2_params.cmd.query_feature_caps.header =  {
+			.type = DMUB_CMD__QUERY_FEATURE_CAPS,
+			.ret_status = 1,
+			.payload_bytes = sizeof(struct dmub_cmd_query_feature_caps_data),
+		},
+		.params.send_dmcub_cmd2_params.wait_type = DM_DMUB_WAIT_TYPE_WAIT_WITH_REPLY,
+	},
+	{
+		.func = DMUB_SEND_DMCUB_CMD2,
+		.params.send_dmcub_cmd2_params.cmd.idle_opt_set_dc_power_state = {
+			.header = {
+				.type = DMUB_CMD__IDLE_OPT,
+				.sub_type = DMUB_CMD__IDLE_OPT_SET_DC_POWER_STATE,
+				.payload_bytes = sizeof(struct dmub_idle_opt_set_dc_power_state_data),
+			},
+			.data.power_state = DMUB_IDLE_OPT_DC_POWER_STATE_D0,
+		},
+		.params.send_dmcub_cmd2_params.wait_type = DM_DMUB_WAIT_TYPE_WAIT,
+	},
+	{
+		.func = DCCG_GET_REF_FREQ,
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.message = {
+				.msg_id = PMFW_MSG_GET_SMU_VERSION,
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.message = {
+				.msg_id = PMFW_MSG_GET_DRIVER_IF_VERSION,
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.message = {
+				.msg_id = PMFW_MSG_GET_MSG_HEADER_VERSION,
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_NUM_UMC_CHANNELS,
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DPM_FREQ_BY_INDEX,
+				.param_count = 1,
+				.params = { DCN401_PMFW_SOCCLK_LEVEL_COUNT },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DPM_FREQ_BY_INDEX,
+				.param_count = 1,
+				.params = { DCN401_PMFW_UCLK_LEVEL_COUNT },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DPM_FREQ_BY_INDEX,
+				.param_count = 1,
+				.params = { DCN401_PMFW_FCLK_LEVEL_COUNT },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DPM_FREQ_BY_INDEX,
+				.param_count = 1,
+				.params = { DCN401_PMFW_DISPCLK_LEVEL_COUNT },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DPM_FREQ_BY_INDEX,
+				.param_count = 1,
+				.params = { DCN401_PMFW_DPPCLK_LEVEL_COUNT },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DPM_FREQ_BY_INDEX,
+				.param_count = 1,
+				.params = { DCN401_PMFW_DCFCLK_LEVEL_COUNT },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DPM_FREQ_BY_INDEX,
+				.param_count = 1,
+				.params = { DCN401_PMFW_DTBCLK_LEVEL_COUNT },
+			}
+		}
+	},
+
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DC_MODE_MAX_DPM_FREQ,
+				.param_count = 1,
+				.params = { DCN401_PMFW_CLK_PARAM(DCN401_PMFW_CLK_SOCCLK) },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DC_MODE_MAX_DPM_FREQ,
+				.param_count = 1,
+				.params = { DCN401_PMFW_CLK_PARAM(DCN401_PMFW_CLK_UCLK) },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DC_MODE_MAX_DPM_FREQ,
+				.param_count = 1,
+				.params = { DCN401_PMFW_CLK_PARAM(DCN401_PMFW_CLK_FCLK) },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DC_MODE_MAX_DPM_FREQ,
+				.param_count = 1,
+				.params = { DCN401_PMFW_CLK_PARAM(DCN401_PMFW_CLK_DISPCLK) },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DC_MODE_MAX_DPM_FREQ,
+				.param_count = 1,
+				.params = { DCN401_PMFW_CLK_PARAM(DCN401_PMFW_CLK_DCFCLK) },
+			}
+		}
+	},
+	{
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DC_MODE_MAX_DPM_FREQ,
+				.param_count = 1,
+				.params = { DCN401_PMFW_CLK_PARAM(DCN401_PMFW_CLK_DTBCLK) },
+			}
+		}
+	},
+	{
+		.func = HWSS_ENABLE_ACCELERATED_MODE,
+	},
+};
 
 static bool dcn401_initialization_check_capability(
 		const struct bls_builder_check_capability_params *params)
 {
-	return dcn401_check_initialization_support(params) ==
-			BLS_BUILD_SUCCESS;
-}
-
-static enum bls_builder_result dcn401_validate_initialization_step(
-		const struct bls_builder_declarative_params *params,
-		enum block_sequence_func func)
-{
-	struct bls_builder_output_init *out_init = NULL;
-	struct clk_mgr *clk_mgr = params->dc->clk_mgr;
-	struct dccg *dccg = params->dc->res_pool->dccg;
-
-	if (params->out_targets)
-		out_init = params->out_targets->DCN_DECL_INITIALIZATION;
-
-	switch (func) {
-	case LEGACY_CLK_MGR_INIT_CLOCKS:
-		if (!clk_mgr || !clk_mgr->funcs ||
-				!clk_mgr->funcs->init_clocks)
-			return BLS_BUILD_ERROR_RESOURCE_MAPPING;
-		return BLS_BUILD_SUCCESS;
-	case LEGACY_CLK_MGR_IS_DC_MODE_PRESENT:
-		if (!clk_mgr || !clk_mgr->funcs ||
-				!clk_mgr->funcs->is_dc_mode_present ||
-				!out_init)
-			return BLS_BUILD_ERROR_RESOURCE_MAPPING;
-		return BLS_BUILD_SUCCESS;
-	case DCCG_INITIALIZE_CLOCKS:
-		if (!dccg->funcs || !dccg->funcs->dccg_init)
-			return BLS_BUILD_ERROR_RESOURCE_MAPPING;
-		return BLS_BUILD_SUCCESS;
-	case DMUB_GPINT_SEND_AND_WAIT:
-	case DMUB_HALT_FW: {
-		struct dc_context *ctx = params->dc->ctx;
-		struct dmub_srv *dmub;
-
-		if (!ctx || !ctx->dmub_srv || !ctx->dmub_srv->dmub || !out_init)
-			return BLS_BUILD_ERROR_RESOURCE_MAPPING;
-		dmub = ctx->dmub_srv->dmub;
-		if (!dmub->sw_init || !dmub->hw_funcs.set_gpint ||
-				!dmub->hw_funcs.is_gpint_acked ||
-				!dmub->hw_funcs.get_gpint_response)
-			return BLS_BUILD_ERROR_RESOURCE_MAPPING;
-		return BLS_BUILD_SUCCESS;
-	}
-	case PSP_RELOAD_DMUB_FW: {
-		struct dmub_srv *dmub;
-
-		if (!params->dc->ctx || !params->dc->ctx->dmub_srv ||
-				!params->dc->ctx->dmub_srv->dmub)
-			return BLS_BUILD_ERROR_RESOURCE_MAPPING;
-		/*
-		 * An explicit caller pointer wins, including a test double
-		 * whose fb_info is still empty. Otherwise use the windows
-		 * dmub_srv retained from the DM's earlier hw init.
-		 */
-		if (params->dmub_hw_params)
-			return BLS_BUILD_SUCCESS;
-		dmub = params->dc->ctx->dmub_srv->dmub;
-		if (!dmub->fb_info ||
-				dmub->fb_info->num_fb < DMUB_WINDOW_TOTAL)
-			return BLS_BUILD_ERROR_RESOURCE_MAPPING;
-		return BLS_BUILD_SUCCESS;
-	}
-	case DMUB_SEND_DMCUB_CMD:
-	case DMUB_INITIALIZE_DCN:
-		if (!params->dc->ctx || !params->dc->ctx->dmub_srv ||
-				!params->dc->ctx->dmub_srv->dmub || !out_init)
-			return BLS_BUILD_ERROR_RESOURCE_MAPPING;
-		return BLS_BUILD_SUCCESS;
-	default:
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
-	}
-}
-
-enum bls_builder_result dcn401_build_clk_mgr_init(
-		struct clk_mgr *clk_mgr, struct block_sequence_state *sequence)
-{
-	union block_sequence_params bls_params = {0};
-
-	bls_params.legacy_clk_mgr_init_clocks_params.clk_mgr = clk_mgr;
-	if (!bls_append(sequence, LEGACY_CLK_MGR_INIT_CLOCKS, &bls_params))
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
-
-	return BLS_BUILD_SUCCESS;
-}
-
-enum bls_builder_result dcn401_build_dc_mode_read(
-		struct clk_mgr *clk_mgr, bool *out_dcmode_power_limits_present,
-		struct block_sequence_state *sequence)
-{
-	union block_sequence_params bls_params = {0};
-
-	bls_params.legacy_clk_mgr_is_dc_mode_present_params.clk_mgr = clk_mgr;
-	bls_params.legacy_clk_mgr_is_dc_mode_present_params
-			.out_dcmode_power_limits_present =
-			out_dcmode_power_limits_present;
-	if (!bls_append(sequence, LEGACY_CLK_MGR_IS_DC_MODE_PRESENT,
-			&bls_params))
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
-
-	return BLS_BUILD_SUCCESS;
-}
-
-enum bls_builder_result dcn401_build_dccg_init(
-		struct dccg *dccg, struct block_sequence_state *sequence)
-{
-	union block_sequence_params bls_params = {0};
-
-	bls_params.dccg_initialize_clocks_params.dccg = dccg;
-	if (!bls_append(sequence, DCCG_INITIALIZE_CLOCKS, &bls_params))
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
-
-	return BLS_BUILD_SUCCESS;
-}
-
-static inline enum bls_builder_result dcn401_build_dmub_halt_fw(
-		struct bls_builder_declarative_params *params,
-		struct block_sequence_state *sequence)
-{
-	union block_sequence_params bls_params = {0};
-	struct bls_builder_output_init *out_init =
-			params->out_targets->DCN_DECL_INITIALIZATION;
-
-	bls_params.dmub_gpint_params.command_code = DMUB_GPINT__STOP_FW;
-	bls_params.dmub_gpint_params.param = 0;
-	bls_params.dmub_gpint_params.response =
-			&out_init->dmub_stop_fw_response;
-	if (!bls_append(sequence, DMUB_HALT_FW, &bls_params))
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
-
-	return BLS_BUILD_SUCCESS;
-}
-
-static const struct dmub_srv_hw_params *dcn401_psp_hw_params(
-		struct bls_builder_declarative_params *params)
-{
-	struct dmub_srv *dmub;
-
-	if (params->dmub_hw_params)
-		return params->dmub_hw_params;
-
-	dmub = params->dc->ctx->dmub_srv->dmub;
-	params->owned_dmub_fb_info = *dmub->fb_info;
-	memset(&params->owned_dmub_hw_params, 0,
-			sizeof(params->owned_dmub_hw_params));
-	params->owned_dmub_hw_params.fb_info = &params->owned_dmub_fb_info;
-	params->owned_dmub_hw_params.soc_fb_info = dmub->soc_fb_info;
-	params->owned_dmub_hw_params.psp_version = dmub->psp_version;
-	return &params->owned_dmub_hw_params;
-}
-
-static inline enum bls_builder_result dcn401_build_psp_reload(
-		struct bls_builder_declarative_params *params,
-		struct block_sequence_state *sequence)
-{
-	union block_sequence_params bls_params = {0};
-
-	bls_params.psp_reload_dmub_fw_params.dmub =
-			params->dc->ctx->dmub_srv->dmub;
-	bls_params.psp_reload_dmub_fw_params.hw_params =
-			dcn401_psp_hw_params(params);
-	if (!bls_append(sequence, PSP_RELOAD_DMUB_FW, &bls_params))
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
-
-	return BLS_BUILD_SUCCESS;
-}
-
-static inline enum bls_builder_result dcn401_build_dmub_fw_version(
-		struct bls_builder_declarative_params *params,
-		struct block_sequence_state *sequence)
-{
-	union block_sequence_params bls_params = {0};
-	struct bls_builder_output_init *out_init =
-			params->out_targets->DCN_DECL_INITIALIZATION;
-
-	bls_params.dmub_gpint_params.command_code =
-			DMUB_GPINT__GET_FW_VERSION;
-	bls_params.dmub_gpint_params.param = 0;
-	bls_params.dmub_gpint_params.response =
-			&out_init->dmub_abi.fw_version;
-	if (!bls_append(sequence, DMUB_GPINT_SEND_AND_WAIT, &bls_params))
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
-
-	return BLS_BUILD_SUCCESS;
-}
-
-bool dcn401_add_dmub_cmd(struct block_sequence_state *sequence,
-		struct dc_context *ctx, union dmub_rb_cmd *cmd,
-		enum dm_dmub_wait_type wait_type, bool continue_on_error)
-{
-	union block_sequence_params bls_params = {0};
-
-	bls_params.send_dmcub_cmd_params.ctx = ctx;
-	bls_params.send_dmcub_cmd_params.cmd = cmd;
-	bls_params.send_dmcub_cmd_params.wait_type = wait_type;
-	bls_params.send_dmcub_cmd_params.continue_on_error = continue_on_error;
-	return bls_append(sequence, DMUB_SEND_DMCUB_CMD, &bls_params);
-}
-
-void dcn401_fill_query_feature_caps_cmd(union dmub_rb_cmd *cmd)
-{
-	memset(cmd, 0, sizeof(*cmd));
-	cmd->query_feature_caps.header.type = DMUB_CMD__QUERY_FEATURE_CAPS;
-	cmd->query_feature_caps.header.sub_type = 0;
-	cmd->query_feature_caps.header.ret_status = 1;
-	cmd->query_feature_caps.header.payload_bytes =
-			sizeof(struct dmub_cmd_query_feature_caps_data);
-}
-
-static inline enum bls_builder_result dcn401_build_dmub_feature_caps(
-		struct bls_builder_declarative_params *params,
-		struct block_sequence_state *sequence)
-{
-	struct bls_builder_output_init *out_init =
-			params->out_targets->DCN_DECL_INITIALIZATION;
-	union dmub_rb_cmd *cmd = &out_init->dmub_query_feature_caps_cmd;
-
-	dcn401_fill_query_feature_caps_cmd(cmd);
-	if (!dcn401_add_dmub_cmd(sequence, params->dc->ctx, cmd,
-			DM_DMUB_WAIT_TYPE_WAIT_WITH_REPLY, false))
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
-
-	return BLS_BUILD_SUCCESS;
-}
-
-static inline enum bls_builder_result dcn401_build_dmub_initialize_dcn(
-		struct bls_builder_declarative_params *params,
-		struct block_sequence_state *sequence)
-{
-	union block_sequence_params bls_params = {0};
-	struct bls_builder_output_init *out_init =
-			params->out_targets->DCN_DECL_INITIALIZATION;
-	union dmub_rb_cmd *cmd = &out_init->dmub_initialize_dcn_cmd;
-
-	/*
-	 * No Initialize DCN opcode exists in dmub_cmd.h. A caller-supplied
-	 * non-zero type is preserved for tests; zero stays an undefined
-	 * command and cannot complete a successful build.
-	 */
-	if (!cmd->cmd_common.header.type)
-		memset(cmd, 0, sizeof(*cmd));
-	bls_params.send_dmcub_cmd_params.ctx = params->dc->ctx;
-	bls_params.send_dmcub_cmd_params.cmd = cmd;
-	bls_params.send_dmcub_cmd_params.wait_type =
-			DM_DMUB_WAIT_TYPE_WAIT_WITH_REPLY;
-	if (!bls_append(sequence, DMUB_INITIALIZE_DCN, &bls_params))
-		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
-
-	return BLS_BUILD_SUCCESS;
+	return params && params->dc &&
+			!params->dc->config.seamless_boot_edp_requested;
 }
 
 static enum bls_builder_result dcn401_build_initialization_step(
 		struct bls_builder_declarative_params *params,
-		struct block_sequence_state *sequence,
-		enum block_sequence_func func)
+		struct block_sequence *step)
 {
-	switch (func) {
-	case LEGACY_CLK_MGR_INIT_CLOCKS:
-		return dcn401_build_clk_mgr_init(params->dc->clk_mgr, sequence);
-	case LEGACY_CLK_MGR_IS_DC_MODE_PRESENT:
-		return dcn401_build_dc_mode_read(params->dc->clk_mgr,
-				&params->out_targets->DCN_DECL_INITIALIZATION
-				->dcmode_power_limits_present, sequence);
-	case DCCG_INITIALIZE_CLOCKS:
-		return dcn401_build_dccg_init(params->dc->res_pool->dccg,
-				sequence);
-	case DMUB_HALT_FW:
-		return dcn401_build_dmub_halt_fw(params, sequence);
-	case PSP_RELOAD_DMUB_FW:
-		return dcn401_build_psp_reload(params, sequence);
-	case DMUB_GPINT_SEND_AND_WAIT:
-		return dcn401_build_dmub_fw_version(params, sequence);
-	case DMUB_SEND_DMCUB_CMD:
-		return dcn401_build_dmub_feature_caps(params, sequence);
-	case DMUB_INITIALIZE_DCN:
-		return dcn401_build_dmub_initialize_dcn(params, sequence);
+	struct dc *dc = params->dc;
+	struct dcn401_bls_builder_initialization_stages *stages =
+			&params->out_targets->DCN_DECL_INITIALIZATION->dcn401_stages;
+	struct block_sequence_state sequence = {
+		.steps = params->head_sequence,
+		.num_steps = &params->head_num_steps,
+	};
+
+	switch (step->func) {
+	case DMUB_SEND_DMCUB_CMD2:
+		step->params.send_dmcub_cmd2_params.ctx = dc->ctx;
+		break;
+	case DCCG_GET_REF_FREQ:
+		step->params.dccg_get_ref_freq_params.dccg = dc->res_pool->dccg;
+		step->params.dccg_get_ref_freq_params.xtalin_khz =
+				dc->ctx->dc_bios->fw_info.pll_info.crystal_frequency;
+		step->params.dccg_get_ref_freq_params.out_xtalin_khz =
+				&stages->stage_1.xtalin_clock_inKhz;
+		step->params.dccg_get_ref_freq_params.out_dccg_ref_khz =
+				&stages->stage_1.dccg_ref_clock_inKhz;
+		break;
+	case HUBBUB_GET_DCHUB_REF_FREQ:
+		step->params.hubbub_get_dchub_ref_freq_params.hubbub = dc->res_pool->hubbub;
+		step->params.hubbub_get_dchub_ref_freq_params.dccg_ref_khz =
+				stages->stage_1.dccg_ref_clock_inKhz;
+		step->params.hubbub_get_dchub_ref_freq_params.out_dchub_ref_khz =
+				&stages->stage_2.dchub_ref_clock_inKhz;
+		break;
+	case HWSS_ENABLE_ACCELERATED_MODE:
+		step->params.dc_init_call_params.dc = dc;
+		break;
+	case PMFW_SEND_MESSAGE_AND_WAIT:
+		break;
 	default:
 		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
 	}
+
+	if (!bls_append(&sequence, step->func, &step->params))
+		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
+
+	return BLS_BUILD_SUCCESS;
 }
 
-static enum bls_builder_result dcn401_build_initialization(
-		struct bls_builder_declarative_params *params)
+static enum bls_builder_result dcn401_build_stage1(struct bls_builder_declarative_params *params)
 {
-	struct bls_builder_check_capability_params check_params = {0};
+	struct dcn401_bls_builder_initialization_stage_1 *stage_1 =
+			&params->out_targets->DCN_DECL_INITIALIZATION->dcn401_stages.stage_1;
 	enum bls_builder_result result;
-	struct block_sequence_state sequence;
-	struct bls_builder_output_init *out_init = NULL;
-	unsigned int i;
+	uint32_t step;
 
-	if (!params)
-		return dcn401_check_initialization_support(NULL);
+	stage_1->xtalin_clock_inKhz = params->dc->res_pool->ref_clocks.xtalin_clock_inKhz;
+	stage_1->dccg_ref_clock_inKhz = params->dc->res_pool->ref_clocks.dccg_ref_clock_inKhz;
 
-	check_params.dc = params->dc;
-	check_params.current_state = params->current_state;
-	check_params.new_state = params->new_state;
-	result =
-			dcn401_check_initialization_support(&check_params);
+	for (step = 0; step < ARRAY_SIZE(dcn401_init_stage1_sequence); step++) {
+		struct block_sequence block = dcn401_init_stage1_sequence[step];
+
+		result = dcn401_build_initialization_step(params, &block);
+		if (result != BLS_BUILD_SUCCESS)
+			return result;
+	}
+
+	return BLS_BUILD_SUCCESS;
+}
+
+static enum bls_builder_result dcn401_build_pmfw_get_dpm_freq(
+		struct bls_builder_declarative_params *params, enum pmfw_clocks clock, uint32_t level)
+{
+	struct block_sequence block = {
+		.func = PMFW_SEND_MESSAGE_AND_WAIT,
+		.params.pmfw_send_and_wait_params = {
+			.continue_on_error = true,
+			.message = {
+				.msg_id = PMFW_MSG_GET_DPM_FREQ_BY_INDEX,
+				.param_count = 1,
+				.params = {
+					DCN401_PMFW_DPM_FREQ_PARAM(dcn401_pmfw_clocks[clock], level),
+				}
+			}
+		}
+	};
+
+	return dcn401_build_initialization_step(params, &block);
+}
+
+static enum bls_builder_result dcn401_build_stage2(struct bls_builder_declarative_params *params)
+{
+	struct dcn401_bls_builder_initialization_stages *stages =
+			&params->out_targets->DCN_DECL_INITIALIZATION->dcn401_stages;
+	struct block_sequence block = { .func = HUBBUB_GET_DCHUB_REF_FREQ };
+	enum bls_builder_result result;
+	uint32_t clock, level;
+
+	stages->stage_2.dchub_ref_clock_inKhz =
+			params->dc->res_pool->ref_clocks.dchub_ref_clock_inKhz;
+	result = dcn401_build_initialization_step(params, &block);
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
 
-	params->head_num_steps = 0;
-	params->tail_num_steps = 0;
-	for (i = 0; i < ARRAY_SIZE(dcn401_dc2_init_sequence); i++) {
-		result = dcn401_validate_initialization_step(params,
-				dcn401_dc2_init_sequence[i]);
-		if (result != BLS_BUILD_SUCCESS)
-			return result;
+	if (stages->stage_1.smu_version != 0) {
+		for (clock = 0; clock < PMFW_CLOCK_COUNT; clock++) {
+			for (level = 0; level < stages->stage_1.dpm_level_count[clock]; level++) {
+				result = dcn401_build_pmfw_get_dpm_freq(params, clock, level);
+				if (result != BLS_BUILD_SUCCESS)
+					return result;
+			}
+		}
 	}
 
-	sequence.steps = params->head_sequence;
-	sequence.num_steps = &params->head_num_steps;
-	if (params->out_targets)
-		out_init = params->out_targets->DCN_DECL_INITIALIZATION;
-	if (out_init) {
-		out_init->dcmode_power_limits_present = false;
-		out_init->dmub_stop_fw_response = 0;
-		out_init->dmub_abi.fw_version = 0;
-		memset(&out_init->dmub_abi.feature_caps, 0,
-				sizeof(out_init->dmub_abi.feature_caps));
-	}
-
-	/*
-	 * LEGACY/pmfw-msg: preserve the clock-manager entry points until
-	 * PMFW Messenger can express the same calls, order, and output.
-	 */
-	for (i = 0; i < ARRAY_SIZE(dcn401_dc2_init_sequence); i++) {
-		result = dcn401_build_initialization_step(params, &sequence,
-				dcn401_dc2_init_sequence[i]);
-		if (result != BLS_BUILD_SUCCESS)
-			return result;
-	}
-
-	if (out_init &&
-			out_init->dmub_initialize_dcn_cmd.cmd_common.header.type)
-		return BLS_BUILD_SUCCESS;
-
-	return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
+	return BLS_BUILD_SUCCESS;
 }
 
-const struct bls_builder *dcn401_bls_builder_create(
-		enum bls_builder_name name)
+static void dcn401_process_pmfw_response(
+		struct dcn401_bls_builder_initialization_stages *stages,
+		const struct pmfw_send_and_wait_params *pmfw, uint32_t response)
 {
-	static const struct bls_builder initialization_builder = {
+	uint32_t level = pmfw->message.params[0] & 0xFF;
+	uint32_t clock;
+
+	switch (pmfw->message.msg_id) {
+	case PMFW_MSG_GET_SMU_VERSION:
+		stages->stage_1.smu_version = response;
+		break;
+	case PMFW_MSG_GET_NUM_UMC_CHANNELS:
+		stages->stage_1.num_umc_channels = response;
+		break;
+	case PMFW_MSG_GET_DPM_FREQ_BY_INDEX:
+	case PMFW_MSG_GET_DC_MODE_MAX_DPM_FREQ:
+		for (clock = 0; clock < PMFW_CLOCK_COUNT; clock++) {
+			if ((pmfw->message.params[0] >> 16) != (uint32_t)dcn401_pmfw_clocks[clock])
+				continue;
+			if (pmfw->message.msg_id == PMFW_MSG_GET_DC_MODE_MAX_DPM_FREQ)
+				stages->stage_1.dc_mode_max[clock] = (int32_t)response;
+			else if (level == DCN401_PMFW_LEVEL_COUNT_INDEX)
+				stages->stage_1.dpm_level_count[clock] = min(
+						(response & (1U << 31)) ? 2U : response & 0xFF,
+						(uint32_t)PMFW_MAX_NUM_DPM_LVL);
+			else if (level < stages->stage_1.dpm_level_count[clock])
+				stages->stage_2.dpm_levels[clock].levels[level] = response & 0xFFFF;
+			break;
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+static void dcn401_fill_initialization_output(struct bls_builder_declarative_params *params)
+{
+	struct bls_builder_initialization *initialization =
+			params->out_targets->DCN_DECL_INITIALIZATION;
+	const struct dcn401_bls_builder_initialization_stages *stages =
+			&initialization->dcn401_stages;
+	struct bls_builder_initialization_output *output = &initialization->output;
+	uint32_t clock;
+
+	output->dmub_abi.fw_version = params->dc->ctx->dmub_srv->dmub->fw_version;
+	output->dmub_abi.feature_caps = stages->stage_1.feature_caps;
+	output->smu_version = stages->stage_1.smu_version;
+	output->num_umc_channels = stages->stage_1.num_umc_channels;
+	output->xtalin_clock_inKhz = stages->stage_1.xtalin_clock_inKhz;
+	output->dccg_ref_clock_inKhz = stages->stage_1.dccg_ref_clock_inKhz;
+	output->dchub_ref_clock_inKhz = stages->stage_2.dchub_ref_clock_inKhz;
+	for (clock = 0; clock < PMFW_CLOCK_COUNT; clock++) {
+		struct bls_builder_dpm *dpm = &output->dpm_clocks[clock];
+
+		dpm->num_levels = stages->stage_1.dpm_level_count[clock];
+		dpm->dc_mode_max = (uint32_t)stages->stage_1.dc_mode_max[clock];
+		memcpy(dpm->dpm_level, stages->stage_2.dpm_levels[clock].levels,
+				sizeof(dpm->dpm_level));
+	}
+}
+
+static void dcn401_postprocess_initialization(struct bls_builder_declarative_params *params)
+{
+	struct bls_builder_initialization *initialization =
+			params->out_targets->DCN_DECL_INITIALIZATION;
+	struct dcn401_bls_builder_initialization_stages *stages = &initialization->dcn401_stages;
+	uint32_t step;
+
+	if (initialization->stage >= DCN401_INIT_BUILDER_DONE)
+		return;
+
+	for (step = 0; step < params->head_num_steps; step++) {
+		const struct block_sequence *block = &params->head_sequence[step];
+		const struct pmfw_send_and_wait_params *pmfw;
+
+		switch (block->func) {
+		case DMUB_SEND_DMCUB_CMD2: {
+			const union dmub_rb_cmd *cmd = &block->params.send_dmcub_cmd2_params.cmd;
+
+			if (cmd->cmd_common.header.type == DMUB_CMD__QUERY_FEATURE_CAPS &&
+					cmd->cmd_common.header.ret_status == 0)
+				memcpy(&stages->stage_1.feature_caps,
+						&cmd->query_feature_caps.query_feature_caps_data,
+						sizeof(stages->stage_1.feature_caps));
+			break;
+		}
+		case PMFW_SEND_MESSAGE_AND_WAIT:
+			pmfw = &block->params.pmfw_send_and_wait_params;
+			if (!pmfw->response.response_count)
+				break;
+			dcn401_process_pmfw_response(stages, pmfw, pmfw->response.response[0]);
+			break;
+		default:
+			break;
+		}
+	}
+
+	initialization->stage++;
+	if (initialization->stage == DCN401_INIT_BUILDER_DONE)
+		dcn401_fill_initialization_output(params);
+}
+
+static enum bls_builder_result dcn401_build_initialization(struct bls_builder_declarative_params *params)
+{
+	struct bls_builder_initialization *initialization =
+			params->out_targets->DCN_DECL_INITIALIZATION;
+
+	params->head_num_steps = 0;
+	params->tail_num_steps = 0;
+
+	if (initialization->stage >= DCN401_INIT_BUILDER_DONE)
+		return BLS_BUILD_SUCCESS;
+	if (initialization->stage == DCN401_INIT_BUILDER_STAGE1)
+		return dcn401_build_stage1(params);
+	return dcn401_build_stage2(params);
+}
+
+const struct bls_builder *dcn401_initialization_builder(void)
+{
+	static const struct bls_builder builder = {
 		.name = DCN_DECL_INITIALIZATION,
 		.kind = BLS_BUILDER_DECLARATIVE,
 		.check_capability = dcn401_initialization_check_capability,
 		.build.declarative = dcn401_build_initialization,
-	};
-	static const struct bls_builder legacy_initialization_builder = {
-		.name = DCN_DECL_INITIALIZATION_LEGACY,
-		.kind = BLS_BUILDER_DECLARATIVE,
-		.check_capability = dcn401_dc1_initialization_check_capability,
-		.build.declarative = dcn401_build_dc1_initialization,
+		.postprocess = dcn401_postprocess_initialization,
 	};
 
-	switch (name) {
-	case DCN_DECL_INITIALIZATION:
-		return &initialization_builder;
-	case DCN_DECL_INITIALIZATION_LEGACY:
-		return &legacy_initialization_builder;
-	default:
-		return NULL;
-	}
+	return &builder;
 }
+

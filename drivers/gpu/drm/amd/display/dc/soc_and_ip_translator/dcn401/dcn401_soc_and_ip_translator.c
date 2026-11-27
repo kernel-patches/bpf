@@ -307,8 +307,10 @@ void dcn401_get_soc_bb(struct dml2_soc_bb *soc_bb, const struct dc *dc, const st
 	apply_soc_bb_updates(soc_bb, dc, config);
 }
 
-static void dcn401_get_ip_caps(struct dml2_ip_capabilities *ip_caps)
+static void dcn401_get_ip_caps(struct dml2_ip_capabilities *ip_caps,
+		const struct dml2_configuration_options *config)
 {
+	(void)config;
 	*ip_caps = dml2_dcn401_max_ip_caps;
 }
 

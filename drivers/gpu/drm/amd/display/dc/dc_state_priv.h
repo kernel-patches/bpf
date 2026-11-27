@@ -26,6 +26,7 @@
 #ifndef _DC_STATE_PRIV_H_
 #define _DC_STATE_PRIV_H_
 
+#include "dc.h"
 #include "dc_state.h"
 #include "dc_stream.h"
 
@@ -126,4 +127,26 @@ bool dc_state_can_clear_stream_cursor_subvp_limit(const struct dc_stream_state *
 bool dc_state_is_subvp_in_use(struct dc_state *state);
 
 bool dc_state_is_alt_in_use(const struct dc *dc, const struct dc_state *state);
+
+/* Facts about one pipe of one state. */
+struct dc_state_pipe_flags {
+	/* The pipe drives a stream through a HUBP, a DPP and an OPP. */
+	bool enabled;
+	/* The pipe shows a plane. */
+	bool has_plane;
+	/* The DET size from hubp_regs. */
+	uint32_t det_size;
+};
+
+/* The facts of pipe i in the current and in the target state. */
+struct dc_state_update_flags {
+	struct dc_state_pipe_flags cur_pipes[MAX_PIPES];
+	struct dc_state_pipe_flags new_pipes[MAX_PIPES];
+};
+
+/* Pure: reads both states and writes only out_flags. */
+enum dc_status dc_state_compute_update_flags(const struct dc_state *cur_state,
+		const struct dc_state *target_state,
+		struct dc_state_update_flags *out_flags);
+
 #endif /* _DC_STATE_PRIV_H_ */

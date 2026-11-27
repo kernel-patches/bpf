@@ -41,6 +41,9 @@
 
 #define MP1_RESP_OK  1
 
+#define MAX_UE_BANKS_PER_QUERY  12
+#define MAX_CE_BANKS_PER_QUERY  12
+
 static u32 ras_mp1_msg_codes[RAS_MP1_MSG_MAX] = {
 	[RAS_MP1_MSG_GetRasTableVersion] = 0x1F,
 	[RAS_MP1_MSG_GetRmaStatus] =    0x20,
@@ -239,6 +242,68 @@ static int ras_mp1_v15_get_record(struct ras_core_context *ras_core,
 	return ret;
 }
 
+static int ras_mp1_v15_get_bank_count(struct ras_core_context *ras_core,
+				      enum ras_err_type type, u32 *count)
+{
+	uint32_t bank_count = 0;
+	u32 msg;
+	int ret;
+
+	if (!count)
+		return -EINVAL;
+
+	switch (type) {
+	case RAS_ERR_TYPE__UE:
+		msg = RAS_MP1_MSG_QueryValidMcaCount;
+		break;
+	case RAS_ERR_TYPE__CE:
+	case RAS_ERR_TYPE__DE:
+		msg = RAS_MP1_MSG_QueryValidMcaCeCount;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	ret = __send_mp1_msg32(ras_core, msg, 0, &bank_count);
+	if (!ret) {
+		if (((type == RAS_ERR_TYPE__UE) && (bank_count >= MAX_UE_BANKS_PER_QUERY)) ||
+		    ((type == RAS_ERR_TYPE__CE) && (bank_count >= MAX_CE_BANKS_PER_QUERY)))
+			return -EINVAL;
+
+		*count = bank_count;
+	}
+
+	return ret;
+}
+
+static int ras_mp1_v15_dump_bank(struct ras_core_context *ras_core,
+				 enum ras_err_type type, u32 idx, u64 *regs, u32 regs_sz)
+{
+	int i, ret, reg_cnt;
+	u32 msg;
+
+	switch (type) {
+	case RAS_ERR_TYPE__UE:
+		msg = RAS_MP1_MSG_McaBankDumpDW;
+		break;
+	case RAS_ERR_TYPE__CE:
+	case RAS_ERR_TYPE__DE:
+		msg = RAS_MP1_MSG_McaBankCeDumpDW;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	reg_cnt = min_t(int, 16, regs_sz);
+	for (i = 0; i < reg_cnt; i++) {
+		ret = __send_mp1_msg64(ras_core, msg, idx, &regs[i]);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 const struct ras_mp1_ip_func mp1_ras_func_v15_0 = {
 	.get_table_version = ras_mp1_v15_get_table_version,
 	.rma_detected = ras_mp1_v15_rma_detected,
@@ -246,4 +311,6 @@ const struct ras_mp1_ip_func mp1_ras_func_v15_0 = {
 	.reset_ras_table = ras_mp1_v15_reset_ras_table,
 	.get_record_count = ras_mp1_v15_get_record_count,
 	.get_record = ras_mp1_v15_get_record,
+	.get_valid_bank_count = ras_mp1_v15_get_bank_count,
+	.dump_valid_bank = ras_mp1_v15_dump_bank,
 };

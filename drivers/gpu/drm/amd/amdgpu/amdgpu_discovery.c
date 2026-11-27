@@ -61,6 +61,7 @@
 #include "gmc_v10_0.h"
 #include "gmc_v11_0.h"
 #include "gmc_v12_0.h"
+#include "gmc_v13_0.h"
 #include "gfxhub_v2_0.h"
 #include "mmhub_v2_0.h"
 #include "nbio_v2_3.h"
@@ -79,6 +80,7 @@
 #include "soc21.h"
 #include "soc24.h"
 #include "soc_v1_0.h"
+#include "soc_v2_0.h"
 #include "navi10_ih.h"
 #include "ih_v6_0.h"
 #include "ih_v6_1.h"
@@ -88,11 +90,13 @@
 #include "gfx_v11_0.h"
 #include "gfx_v12_0.h"
 #include "gfx_v12_1.h"
+#include "gfx_v13_0.h"
 #include "sdma_v5_0.h"
 #include "sdma_v5_2.h"
 #include "sdma_v6_0.h"
 #include "sdma_v7_0.h"
 #include "sdma_v7_1.h"
+#include "sdma_v8_0.h"
 #include "lsdma_v6_0.h"
 #include "lsdma_v7_0.h"
 #include "lsdma_v7_1.h"
@@ -769,6 +773,12 @@ static int amdgpu_discovery_init(struct amdgpu_device *adev)
 		drm_dbg(&adev->ddev, "use ip discovery information from file\n");
 		r = amdgpu_discovery_read_binary_from_file(adev, discovery_bin,
 							   fw_name);
+		if (r)
+			goto out;
+	} else if (amdgpu_is_spm_passthrough(adev)) {
+		drm_dbg(&adev->ddev, "use ip discovery information from psp mailbox\n");
+		r = amdgpu_psp_read_discovery(adev, discovery_bin,
+					      GFX_CTRL_ADDR_TYPE_GUEST_PHY_ADDR);
 		if (r)
 			goto out;
 	} else {
@@ -2146,6 +2156,8 @@ static int amdgpu_discovery_get_gfx_info(struct amdgpu_device *adev)
 		adev->gfx.config.max_cu_per_sh = 2 * (le32_to_cpu(gc_info->v1.gc_num_wgp0_per_sa) +
 					      le32_to_cpu(gc_info->v1.gc_num_wgp1_per_sa));
 		adev->gfx.config.max_sh_per_se = le32_to_cpu(gc_info->v1.gc_num_sa_per_se);
+		adev->gfx.config.max_cu_per_se =
+			adev->gfx.config.max_sh_per_se * adev->gfx.config.max_cu_per_sh;
 		adev->gfx.config.max_backends_per_se = le32_to_cpu(gc_info->v1.gc_num_rb_per_se);
 		adev->gfx.config.max_texture_channel_caches = le32_to_cpu(gc_info->v1.gc_num_gl2c);
 		adev->gfx.config.max_gprs = le32_to_cpu(gc_info->v1.gc_num_gprs);
@@ -2186,6 +2198,7 @@ static int amdgpu_discovery_get_gfx_info(struct amdgpu_device *adev)
 					   le32_to_cpu(gc_info->v1_4.gc_num_twgp1_per_sa1);
 			adev->gfx.config.max_cu_per_sh = 2 * (num_wgps_per_sa >= num_wgps_per_sa1 ?
 							      num_wgps_per_sa : num_wgps_per_sa1);
+			adev->gfx.config.max_cu_per_se = 2 * (num_wgps_per_sa + num_wgps_per_sa1);
 		} else if (le16_to_cpu(gc_info->v1.header.version_minor) >= 3) {
 			adev->gfx.config.gc_tcp_size_per_cu = le32_to_cpu(gc_info->v1_3.gc_tcp_size_per_cu);
 			adev->gfx.config.gc_tcp_cache_line_size = le32_to_cpu(gc_info->v1_3.gc_tcp_cache_line_size);
@@ -2207,12 +2220,15 @@ static int amdgpu_discovery_get_gfx_info(struct amdgpu_device *adev)
 					   le32_to_cpu(gc_info->v1_5.gc_num_wgp1_per_sa1);
 			adev->gfx.config.max_cu_per_sh = num_wgps_per_sa >= num_wgps_per_sa1 ?
 							 num_wgps_per_sa : num_wgps_per_sa1;
+			adev->gfx.config.max_cu_per_se = 2 * (num_wgps_per_sa + num_wgps_per_sa1);
 		}
 		break;
 	case 2:
 		adev->gfx.config.max_shader_engines = le32_to_cpu(gc_info->v2.gc_num_se);
 		adev->gfx.config.max_cu_per_sh = le32_to_cpu(gc_info->v2.gc_num_cu_per_sh);
 		adev->gfx.config.max_sh_per_se = le32_to_cpu(gc_info->v2.gc_num_sh_per_se);
+		adev->gfx.config.max_cu_per_se =
+			adev->gfx.config.max_sh_per_se * adev->gfx.config.max_cu_per_sh;
 		adev->gfx.config.max_backends_per_se = le32_to_cpu(gc_info->v2.gc_num_rb_per_se);
 		adev->gfx.config.max_texture_channel_caches = le32_to_cpu(gc_info->v2.gc_num_tccs);
 		adev->gfx.config.max_gprs = le32_to_cpu(gc_info->v2.gc_num_gprs);
@@ -2720,6 +2736,9 @@ static int amdgpu_discovery_set_common_ip_blocks(struct amdgpu_device *adev)
 	case IP_VERSION(12, 1, 0):
 		amdgpu_device_ip_block_add(adev, &soc_v1_0_common_ip_block);
 		break;
+	case IP_VERSION(13, 0, 1):
+		amdgpu_device_ip_block_add(adev, &soc_v2_0_common_ip_block);
+		break;
 	default:
 		dev_err(adev->dev,
 			"Failed to add common ip block(GC_HWIP:0x%x)\n",
@@ -2780,6 +2799,9 @@ static int amdgpu_discovery_set_gmc_ip_blocks(struct amdgpu_device *adev)
 	case IP_VERSION(12, 0, 1):
 	case IP_VERSION(12, 1, 0):
 		amdgpu_device_ip_block_add(adev, &gmc_v12_0_ip_block);
+		break;
+	case IP_VERSION(13, 0, 1):
+		amdgpu_device_ip_block_add(adev, &gmc_v13_0_ip_block);
 		break;
 	default:
 		dev_err(adev->dev, "Failed to add gmc ip block(GC_HWIP:0x%x)\n",
@@ -3121,6 +3143,9 @@ static int amdgpu_discovery_set_gc_ip_blocks(struct amdgpu_device *adev)
 	case IP_VERSION(12, 1, 0):
 		amdgpu_device_ip_block_add(adev, &gfx_v12_1_ip_block);
 		break;
+	case IP_VERSION(13, 0, 1):
+		amdgpu_device_ip_block_add(adev, &gfx_v13_0_ip_block);
+		break;
 	default:
 		dev_err(adev->dev, "Failed to add gfx ip block(GC_HWIP:0x%x)\n",
 			amdgpu_ip_version(adev, GC_HWIP, 0));
@@ -3181,6 +3206,9 @@ static int amdgpu_discovery_set_sdma_ip_blocks(struct amdgpu_device *adev)
 		break;
 	case IP_VERSION(7, 1, 0):
 		amdgpu_device_ip_block_add(adev, &sdma_v7_1_ip_block);
+		break;
+	case IP_VERSION(8, 0, 1):
+		amdgpu_device_ip_block_add(adev, &sdma_v8_0_ip_block);
 		break;
 	default:
 		dev_err(adev->dev,
@@ -3772,6 +3800,9 @@ int amdgpu_discovery_set_ip_blocks(struct amdgpu_device *adev)
 	case IP_VERSION(12, 0, 1):
 	case IP_VERSION(12, 1, 0):
 		adev->family = AMDGPU_FAMILY_GC_12_0_0;
+		break;
+	case IP_VERSION(13, 0, 1):
+		adev->family = AMDGPU_FAMILY_GC_13_0_0;
 		break;
 	default:
 		return -EINVAL;

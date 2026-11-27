@@ -602,8 +602,10 @@
  * 7. WPTR_ADDR_HI [31:0]
  */
 /* CONTROL */
+#              define PACKET3_MAP_QUEUES_EXT_ENG_SEL(x)     ((x) << 2)
 #              define PACKET3_MAP_QUEUES_QUEUE_SEL(x)       ((x) << 4)
 #              define PACKET3_MAP_QUEUES_VMID(x)            ((x) << 8)
+#              define PACKET3_MAP_QUEUES_GWS_ENABLE(x)      ((x) << 12)
 #              define PACKET3_MAP_QUEUES_QUEUE(x)           ((x) << 13)
 #              define PACKET3_MAP_QUEUES_PIPE(x)            ((x) << 16)
 #              define PACKET3_MAP_QUEUES_ME(x)              ((x) << 18)

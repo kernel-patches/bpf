@@ -32,8 +32,6 @@
 #include "amdgpu_i2c.h"
 #include "amdgpu_atombios.h"
 #include "atom.h"
-#include "atombios_dp.h"
-#include "atombios_i2c.h"
 
 /* bit banging i2c */
 static int amdgpu_i2c_pre_xfer(struct i2c_adapter *i2c_adap)
@@ -152,11 +150,6 @@ static void amdgpu_i2c_set_data(void *i2c_priv, int data)
 	WREG32(rec->en_data_reg, val);
 }
 
-static const struct i2c_algorithm amdgpu_atombios_i2c_algo = {
-	.master_xfer = amdgpu_atombios_i2c_xfer,
-	.functionality = amdgpu_atombios_i2c_func,
-};
-
 struct amdgpu_i2c_chan *amdgpu_i2c_create(struct drm_device *dev,
 					  const struct amdgpu_i2c_bus_rec *rec,
 					  const char *name)
@@ -165,7 +158,7 @@ struct amdgpu_i2c_chan *amdgpu_i2c_create(struct drm_device *dev,
 	int ret;
 
 	/* don't add the mm_i2c bus unless hw_i2c is enabled */
-	if (rec->mm_i2c && (amdgpu_hw_i2c == 0))
+	if (rec->mm_i2c)
 		return NULL;
 
 	i2c = kzalloc_obj(struct amdgpu_i2c_chan);
@@ -178,34 +171,23 @@ struct amdgpu_i2c_chan *amdgpu_i2c_create(struct drm_device *dev,
 	i2c->dev = dev;
 	i2c_set_adapdata(&i2c->adapter, i2c);
 	mutex_init(&i2c->mutex);
-	if (rec->hw_capable &&
-	    amdgpu_hw_i2c) {
-		/* hw i2c using atom */
-		snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
-			 "AMDGPU i2c hw bus %s", name);
-		i2c->adapter.algo = &amdgpu_atombios_i2c_algo;
-		ret = devm_i2c_add_adapter(dev->dev, &i2c->adapter);
-		if (ret)
-			goto out_free;
-	} else {
-		/* set the amdgpu bit adapter */
-		snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
-			 "AMDGPU i2c bit bus %s", name);
-		i2c->adapter.algo_data = &i2c->bit;
-		i2c->bit.pre_xfer = amdgpu_i2c_pre_xfer;
-		i2c->bit.post_xfer = amdgpu_i2c_post_xfer;
-		i2c->bit.setsda = amdgpu_i2c_set_data;
-		i2c->bit.setscl = amdgpu_i2c_set_clock;
-		i2c->bit.getsda = amdgpu_i2c_get_data;
-		i2c->bit.getscl = amdgpu_i2c_get_clock;
-		i2c->bit.udelay = 10;
-		i2c->bit.timeout = usecs_to_jiffies(2200);	/* from VESA */
-		i2c->bit.data = i2c;
-		ret = i2c_bit_add_bus(&i2c->adapter);
-		if (ret) {
-			DRM_ERROR("Failed to register bit i2c %s\n", name);
-			goto out_free;
-		}
+	/* set the amdgpu bit adapter */
+	snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
+		 "AMDGPU i2c bit bus %s", name);
+	i2c->adapter.algo_data = &i2c->bit;
+	i2c->bit.pre_xfer = amdgpu_i2c_pre_xfer;
+	i2c->bit.post_xfer = amdgpu_i2c_post_xfer;
+	i2c->bit.setsda = amdgpu_i2c_set_data;
+	i2c->bit.setscl = amdgpu_i2c_set_clock;
+	i2c->bit.getsda = amdgpu_i2c_get_data;
+	i2c->bit.getscl = amdgpu_i2c_get_clock;
+	i2c->bit.udelay = 10;
+	i2c->bit.timeout = usecs_to_jiffies(2200);	/* from VESA */
+	i2c->bit.data = i2c;
+	ret = i2c_bit_add_bus(&i2c->adapter);
+	if (ret) {
+		DRM_ERROR("Failed to register bit i2c %s\n", name);
+		goto out_free;
 	}
 
 	return i2c;
@@ -258,126 +240,4 @@ amdgpu_i2c_lookup(struct amdgpu_device *adev,
 		}
 	}
 	return NULL;
-}
-
-static int amdgpu_i2c_get_byte(struct amdgpu_i2c_chan *i2c_bus,
-				 u8 slave_addr,
-				 u8 addr,
-				 u8 *val)
-{
-	u8 out_buf[2];
-	u8 in_buf[2];
-	struct i2c_msg msgs[] = {
-		{
-			.addr = slave_addr,
-			.flags = 0,
-			.len = 1,
-			.buf = out_buf,
-		},
-		{
-			.addr = slave_addr,
-			.flags = I2C_M_RD,
-			.len = 1,
-			.buf = in_buf,
-		}
-	};
-
-	out_buf[0] = addr;
-	out_buf[1] = 0;
-
-	if (i2c_transfer(&i2c_bus->adapter, msgs, 2) != 2) {
-		DRM_DEBUG("i2c 0x%02x read failed\n", addr);
-		return -EIO;
-	}
-
-	*val = in_buf[0];
-	DRM_DEBUG("val = 0x%02x\n", *val);
-
-	return 0;
-}
-
-static int amdgpu_i2c_put_byte(struct amdgpu_i2c_chan *i2c_bus,
-				 u8 slave_addr,
-				 u8 addr,
-				 u8 val)
-{
-	uint8_t out_buf[2];
-	struct i2c_msg msg = {
-		.addr = slave_addr,
-		.flags = 0,
-		.len = 2,
-		.buf = out_buf,
-	};
-
-	out_buf[0] = addr;
-	out_buf[1] = val;
-
-	if (i2c_transfer(&i2c_bus->adapter, &msg, 1) != 1) {
-		DRM_DEBUG("i2c 0x%02x 0x%02x write failed\n", addr, val);
-		return -EIO;
-	}
-
-	return 0;
-}
-
-/* ddc router switching */
-void
-amdgpu_i2c_router_select_ddc_port(const struct amdgpu_connector *amdgpu_connector)
-{
-	u8 val = 0;
-
-	if (!amdgpu_connector->router.ddc_valid)
-		return;
-
-	if (!amdgpu_connector->router_bus)
-		return;
-
-	if (amdgpu_i2c_get_byte(amdgpu_connector->router_bus,
-			    amdgpu_connector->router.i2c_addr,
-			    0x3, &val))
-		return;
-	val &= ~amdgpu_connector->router.ddc_mux_control_pin;
-	amdgpu_i2c_put_byte(amdgpu_connector->router_bus,
-			    amdgpu_connector->router.i2c_addr,
-			    0x3, val);
-	if (amdgpu_i2c_get_byte(amdgpu_connector->router_bus,
-			    amdgpu_connector->router.i2c_addr,
-			    0x1, &val))
-		return;
-	val &= ~amdgpu_connector->router.ddc_mux_control_pin;
-	val |= amdgpu_connector->router.ddc_mux_state;
-	amdgpu_i2c_put_byte(amdgpu_connector->router_bus,
-			    amdgpu_connector->router.i2c_addr,
-			    0x1, val);
-}
-
-/* clock/data router switching */
-void
-amdgpu_i2c_router_select_cd_port(const struct amdgpu_connector *amdgpu_connector)
-{
-	u8 val;
-
-	if (!amdgpu_connector->router.cd_valid)
-		return;
-
-	if (!amdgpu_connector->router_bus)
-		return;
-
-	if (amdgpu_i2c_get_byte(amdgpu_connector->router_bus,
-			    amdgpu_connector->router.i2c_addr,
-			    0x3, &val))
-		return;
-	val &= ~amdgpu_connector->router.cd_mux_control_pin;
-	amdgpu_i2c_put_byte(amdgpu_connector->router_bus,
-			    amdgpu_connector->router.i2c_addr,
-			    0x3, val);
-	if (amdgpu_i2c_get_byte(amdgpu_connector->router_bus,
-			    amdgpu_connector->router.i2c_addr,
-			    0x1, &val))
-		return;
-	val &= ~amdgpu_connector->router.cd_mux_control_pin;
-	val |= amdgpu_connector->router.cd_mux_state;
-	amdgpu_i2c_put_byte(amdgpu_connector->router_bus,
-			    amdgpu_connector->router.i2c_addr,
-			    0x1, val);
 }

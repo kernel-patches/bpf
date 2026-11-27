@@ -35,6 +35,7 @@ struct amdgpu_hdp_funcs {
 	void (*update_clock_gating)(struct amdgpu_device *adev, bool enable);
 	void (*get_clock_gating_state)(struct amdgpu_device *adev, u64 *flags);
 	void (*init_registers)(struct amdgpu_device *adev);
+	u64 (*get_hdp_base)(struct amdgpu_device *adev);
 };
 
 struct amdgpu_hdp {

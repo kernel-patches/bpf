@@ -602,11 +602,6 @@ static uint32_t dce_aux_configure_timeout(struct ddc_service *ddc,
 	return prev_timeout_val;
 }
 
-static struct dce_aux_funcs aux_functions = {
-	.configure_timeout = NULL,
-	.destroy = NULL,
-};
-
 struct dce_aux *dce110_aux_engine_construct(struct aux_engine_dce110 *aux_engine110,
 		struct dc_context *ctx,
 		uint32_t inst,
@@ -626,9 +621,11 @@ struct dce_aux *dce110_aux_engine_construct(struct aux_engine_dce110 *aux_engine
 
 	aux_engine110->mask = mask;
 	aux_engine110->shift = shift;
-	aux_engine110->base.funcs = &aux_functions;
+	aux_engine110->base.funcs.configure_timeout = NULL;
+	aux_engine110->base.funcs.destroy = NULL;
+
 	if (is_ext_aux_timeout_configurable)
-		aux_engine110->base.funcs->configure_timeout = &dce_aux_configure_timeout;
+		aux_engine110->base.funcs.configure_timeout = &dce_aux_configure_timeout;
 
 	return &aux_engine110->base;
 }

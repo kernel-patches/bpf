@@ -29,6 +29,7 @@ void dcn60_update_cursor_offload_pipe(struct dmub_srv *dmub, uint32_t stream_idx
 
 void dcn60_program_perfmon(struct dc *dc, struct dc_state *context);
 bool dcn60_apply_idle_power_optimizations(struct dc *dc, bool enable);
+bool dcn60_dsc_pg_status(struct dce_hwseq *hws, unsigned int dsc_inst);
 
 bool dcn60_set_rmcm_luts(struct set_input_transfer_func_params *params);
 

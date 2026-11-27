@@ -111,7 +111,8 @@ bool amdgpu_dm_set_psr_caps(struct dc_link *link, struct amdgpu_dm_connector *ac
 	/* Reset psr version first */
 	link->psr_settings.psr_version = DC_PSR_VERSION_UNSUPPORTED;
 
-	if (!dc->caps.dmub_caps.psr)
+	/* DCN IPs that never query DMUB feature caps rely on DC_PSR_MASK to opt in */
+	if (!dc->caps.dmub_caps.psr && !(amdgpu_dc_feature_mask & DC_PSR_MASK))
 		return false;
 
 	if (!(link->connector_signal & SIGNAL_TYPE_EDP))

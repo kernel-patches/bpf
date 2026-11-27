@@ -69,7 +69,7 @@ struct dcn_dsc_reg_state;
 struct dcn_optc_reg_state;
 struct dcn_dccg_reg_state;
 
-#define DC_VER "3.2.405"
+#define DC_VER "3.2.408"
 
 /**
  * MAX_SURFACES - representative of the upper bound of surfaces that can be piped to a single CRTC
@@ -556,6 +556,7 @@ struct dc_update_descriptor {
 struct dc;
 struct dc_plane_state;
 struct dc_state;
+struct link_dpms_ctx;
 
 struct dc_cap_funcs {
 	bool (*get_dcc_compression_cap)(const struct dc *dc,
@@ -645,6 +646,7 @@ struct dc_config {
 	// Set by the DM around a commit that runs where allocation is not
 	// permitted; requires preallocate_scratch_state.
 	bool use_preallocated_state;
+	bool enable_dpms_v2;
 };
 
 enum visual_confirm {
@@ -1412,6 +1414,7 @@ struct dc_init_data {
 	uint32_t *clk_reg_offsets;
 	void *bb_from_dmub;
 	enum dc2_selection dc2_selection;
+	enum dc2_init_method dc2_init_method;
 };
 
 struct dc_callback_init {
@@ -1930,6 +1933,7 @@ struct dc_scratch_space {
 	void *priv;
 
 	struct ddc_service *ddc;
+	struct link_dpms_ctx *dpms_ctx;
 
 	enum dp_panel_mode panel_mode;
 	bool panel_mode_initialized;
@@ -2226,6 +2230,44 @@ struct dc_probe_latencies {
 };
 
 /**
+ * union dc_probe_outstanding_req - HUBP requests outstanding after an OTG window.
+ *
+ * @bits.any:              a request is outstanding in HUBP.
+ * @bits.data:             a data request is outstanding.
+ * @bits.chunk_meta_trans: a chunk, meta or translation request is outstanding.
+ * @bits.not_in_blank:     HUBP has not finished requesting for the frame.
+ * @raw:                   DC internal, holds the HW status while the probe sequence
+ *                         executes and is decoded into @bits afterwards.
+ */
+union dc_probe_outstanding_req {
+	struct {
+		uint32_t any              : 1;
+		uint32_t data             : 1;
+		uint32_t chunk_meta_trans : 1;
+		uint32_t not_in_blank     : 1;
+		uint32_t reserved         : 28;
+	} bits;
+	uint32_t raw;
+};
+
+/**
+ * struct dc_probe_urgent_assertion - result of an urgent assertion count probe.
+ *
+ * The fields after @count are only filled for a window of a stream scope, and
+ * are zero otherwise.
+ *
+ * @count:             number of urgent assertion events.
+ * @deassertion_count: number of falling edges of the urgent signal.
+ * @outstanding:       HUBP requests outstanding, sampled once after the
+ *                     window counter was read.
+ */
+struct dc_probe_urgent_assertion {
+	uint32_t count;
+	uint32_t deassertion_count;
+	union dc_probe_outstanding_req outstanding;
+};
+
+/**
  * struct dc_probe_status - results for a probe.
  * @valid: true if a measurement was latched.
  * @measuring: true if the hardware counter is currently running.
@@ -2233,7 +2275,10 @@ struct dc_probe_latencies {
  * @u.bandwidth_mbps:         peak BW in Mbps (DC_PROBE_PEAK_MEM_BW).
  * @u.latency:                min/max/avg memory latency in ns (DC_PROBE_MEM_LATENCY),
  *                            stored as struct dc_probe_latencies.
- * @u.urgent_assertion_count: number of urgent assertion events (DC_PROBE_URGENT_ASSERTION_COUNT).
+ * @u.urgent_assertion:       urgent assertion events and outstanding requests
+ *                            (DC_PROBE_URGENT_ASSERTION_COUNT).
+ * @u.urgent_request_count:   number of urgent requests in the window
+ *                            (DC_PROBE_URGENT_REQUEST_COUNT).
  * @u.prefetch_data_size:     total prefetch data in bytes (DC_PROBE_PREFETCH_DATA_SIZE).
  */
 struct dc_probe_status {
@@ -2243,7 +2288,8 @@ struct dc_probe_status {
 	union {
 		uint32_t bandwidth_mbps;
 		struct dc_probe_latencies latency;
-		uint32_t urgent_assertion_count;
+		struct dc_probe_urgent_assertion urgent_assertion;
+		uint32_t urgent_request_count;
 		uint32_t prefetch_data_size;
 	} u;
 };
@@ -2443,14 +2489,6 @@ struct dc_plane_state *dc_get_surface_for_mpcc(struct dc *dc,
 
 
 uint32_t dc_get_opp_for_plane(struct dc *dc, struct dc_plane_state *plane);
-bool dc_set_fva_vrr_adjust(struct dc *dc,
-	struct dc_stream_state *stream,
-	struct fva_adj *fva_adj,
-	struct dc_crtc_timing_adjust *vrr_adj);
-
-int dc_get_hw_max_fva_factor(struct dc *dc,
-		struct dc_stream_state *stream,
-		unsigned int max_pixel_clock);
 
 void dc_set_vstartup_start(struct dc *dc,
 		struct dc_stream_state *stream);
@@ -3905,7 +3943,7 @@ unsigned int dc_override_memory_bandwidth_request(
 		struct dc *dc,
 		unsigned int bw_mbps);
 
-/**
+/*
  * Panel Polarity Control
  */
 void dc_link_set_panel_polarity_enable(struct dc_link *link, bool enable);

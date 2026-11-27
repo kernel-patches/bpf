@@ -187,6 +187,9 @@ void amdgpu_dm_get_freesync_config_for_crtc(
 		config.vsif_supported = true;
 		config.btr = true;
 
+		new_crtc_state->stream->timing.min_refresh_in_uhz = config.min_refresh_in_uhz;
+		new_crtc_state->stream->timing.max_refresh_in_uhz = config.max_refresh_in_uhz;
+
 		if (fs_vid_mode) {
 			config.state = VRR_STATE_ACTIVE_FIXED;
 			config.fixed_refresh_in_uhz = new_crtc_state->freesync_config.fixed_refresh_in_uhz;

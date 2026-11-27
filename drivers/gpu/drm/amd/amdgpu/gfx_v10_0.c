@@ -8187,8 +8187,18 @@ static void gfx_v10_0_update_spm_vmid_internal(struct amdgpu_device *adev,
 }
 
 static void gfx_v10_0_update_spm_vmid(struct amdgpu_device *adev, int xcc_id,
-		unsigned int vmid)
+		struct amdgpu_ring *ring, unsigned int vmid)
 {
+	if (ring) {
+		if ((ring->funcs->type == AMDGPU_RING_TYPE_GFX) ||
+		    (ring->funcs->type == AMDGPU_RING_TYPE_COMPUTE)) {
+			u32 reg = SOC15_REG_OFFSET(GC, 0, mmRLC_SPM_MC_CNTL);
+			u32 data = (vmid & RLC_SPM_MC_CNTL__RLC_SPM_VMID_MASK) << RLC_SPM_MC_CNTL__RLC_SPM_VMID__SHIFT;
+			amdgpu_ring_emit_wreg(ring, reg, data);
+		}
+		return;
+	}
+
 	amdgpu_gfx_off_ctrl(adev, false);
 
 	gfx_v10_0_update_spm_vmid_internal(adev, vmid);
@@ -9692,6 +9702,7 @@ static const struct amdgpu_ring_funcs gfx_v10_0_ring_funcs_gfx = {
 	.get_wptr = gfx_v10_0_ring_get_wptr_gfx,
 	.set_wptr = gfx_v10_0_ring_set_wptr_gfx,
 	.emit_frame_size = /* totally 242 maximum if 16 IBs */
+		5 + /* update_spm_vmid */
 		5 + /* COND_EXEC */
 		7 + /* PIPELINE_SYNC */
 		SOC15_FLUSH_GPU_TLB_NUM_WREG * 5 +
@@ -9749,6 +9760,7 @@ static const struct amdgpu_ring_funcs gfx_v10_0_ring_funcs_compute = {
 	.get_wptr = gfx_v10_0_ring_get_wptr_compute,
 	.set_wptr = gfx_v10_0_ring_set_wptr_compute,
 	.emit_frame_size =
+		5 + /* update_spm_vmid */
 		20 + /* gfx_v10_0_ring_emit_gds_switch */
 		7 + /* gfx_v10_0_ring_emit_hdp_flush */
 		5 + /* hdp invalidate */

@@ -40,6 +40,7 @@
 #define AMDGPU_XCP_NO_PARTITION (~0)
 
 #define AMDGPU_XCP_OPS_KFD	(1 << 0)
+#define AMDGPU_XCP_OPS_IP	BIT(1)
 
 #define XCP_INST_MASK(num_inst, xcp_id)		\
 	(num_inst ? GENMASK(num_inst - 1, 0) << (xcp_id * num_inst) : 0)
@@ -144,7 +145,7 @@ struct amdgpu_xcp_mgr {
 
 struct amdgpu_xcp_mgr_funcs {
 	int (*switch_partition_mode)(struct amdgpu_xcp_mgr *xcp_mgr, int mode,
-				     int *num_xcps);
+				     int *num_xcps, u32 flags);
 	int (*query_partition_mode)(struct amdgpu_xcp_mgr *xcp_mgr);
 	int (*get_ip_details)(struct amdgpu_xcp_mgr *xcp_mgr, int xcp_id,
 			      enum AMDGPU_XCP_IP_BLOCK ip_id,

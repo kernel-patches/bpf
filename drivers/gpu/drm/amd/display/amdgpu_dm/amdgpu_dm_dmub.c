@@ -170,7 +170,7 @@ EXPORT_IF_KUNIT(dm_register_dmub_notify_callback);
  *
  * Reads both apertures before populating the DMUB parameters and DML2 config.
  * Translates their base addresses into MC space for DML2. If either aperture
- * is unavailable, the feature remains disabled.
+ * is unavailable, the feature remains disabled. Only DCN 6.0 supports the feature.
  */
 static void
 dm_get_alt_channel_pstate_switch_aperture(struct amdgpu_device *adev,
@@ -184,6 +184,13 @@ dm_get_alt_channel_pstate_switch_aperture(struct amdgpu_device *adev,
 	u64 aperture_mc_bases[ARRAY_SIZE(region_ids)];
 	u32 i;
 	int r;
+
+	switch (amdgpu_ip_version(adev, DCE_HWIP, 0)) {
+	case IP_VERSION(6, 0, 0):
+		break;
+	default:
+		return;
+	}
 
 	/* Region IDs 5 and 6 identify the p-state switch apertures 1 and 2.
 	 * Do not publish partial aperture configuration if either lookup fails.
@@ -208,7 +215,7 @@ dm_get_alt_channel_pstate_switch_aperture(struct amdgpu_device *adev,
 
 		/* DML2 requires the reserved-region base in MC address space. */
 		aperture_mc_bases[i] = apertures[i].reserved_region_start +
-			adev->gmc.fb_start - adev->vm_manager.vram_base_offset;
+			adev->gmc.vram_start - adev->vm_manager.vram_base_offset;
 	}
 
 	for (i = 0; i < ARRAY_SIZE(region_ids); i++) {
@@ -384,10 +391,16 @@ int dm_dmub_hw_init(struct amdgpu_device *adev)
 		return -ENOMEM;
 	}
 
+	/* Load DMUB caps */
+	dc_dmub_srv_query_caps_cmd(adev->dm.dc->ctx->dmub_srv);
+
 	/* Cursor offload has to be enabled; prime it on every DMUB init,
 	 * including post-suspend and GPU-reset.
 	 */
 	dc_dmub_srv_cursor_offload_init(adev->dm.dc);
+
+	dmub_srv->lsdma_rb_fb = fb_info->fb[DMUB_WINDOW_LSDMA_BUFFER];
+	dmub_lsdma_init(adev->dm.dc->ctx->dmub_srv);
 
 	drm_info(adev_to_drm(adev), "DMUB hardware initialized: version=0x%08X\n",
 		 adev->dm.dmcub_fw_version);

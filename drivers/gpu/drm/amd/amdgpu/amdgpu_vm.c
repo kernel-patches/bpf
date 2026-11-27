@@ -162,7 +162,7 @@ amdgpu_vm_bo_lock_lists(struct amdgpu_vm_bo_base *vm_bo)
 		/* No extra locking needed, protected by the root PD resv lock */
 		amdgpu_vm_assert_locked(vm);
 
-		if (bo->tbo.type == ttm_bo_type_kernel)
+		if (amdgpu_bo_is_vm_bo(bo))
 			return &vm->kernel;
 
 		return &vm->always_valid;
@@ -462,9 +462,13 @@ void amdgpu_vm_bo_base_init(struct amdgpu_vm_bo_base *base,
 int amdgpu_vm_lock_pd(struct amdgpu_vm *vm, struct drm_exec *exec,
 		      unsigned int num_fences)
 {
-	/* We need at least two fences for the VM PD/PT updates */
+	/*
+	 * One fence slot for clearing newly allocated PDs/PTs and PDE/PTE updates,
+	 * another fence slots for TLB invalidation fences, TTM_NUM_MOVE_FENCES
+	 * for validating PDs/PTs after eviction plus anything the caller requested.
+	 */
 	return drm_exec_prepare_obj(exec, &vm->root.bo->tbo.base,
-				    2 + num_fences);
+				    2 + TTM_NUM_MOVE_FENCES + num_fences);
 }
 
 /**
@@ -1215,7 +1219,8 @@ int amdgpu_vm_update_range(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 	if (!unlocked && !dma_fence_is_signaled(vm->last_unlocked)) {
 		struct dma_fence *tmp = dma_fence_get_stub();
 
-		amdgpu_bo_fence(vm->root.bo, vm->last_unlocked, true);
+		dma_resv_add_fence(vm->root.bo->tbo.base.resv, vm->last_unlocked,
+				   DMA_RESV_USAGE_BOOKKEEP);
 		swap(vm->last_unlocked, tmp);
 		dma_fence_put(tmp);
 	}
@@ -1353,6 +1358,7 @@ int amdgpu_vm_bo_update(struct amdgpu_device *adev, struct amdgpu_bo_va *bo_va,
 		}
 	} else if (!bo) {
 		mem = NULL;
+		r = 0;
 
 		/* PRT map operations don't need to sync to anything. */
 
@@ -2138,12 +2144,6 @@ int amdgpu_vm_bo_clear_mappings(struct amdgpu_device *adev,
 	list_for_each_entry_safe(tmp, next, &removed, list) {
 		amdgpu_vm_it_remove(tmp, &vm->va);
 		list_del(&tmp->list);
-
-		if (tmp->start < saddr)
-		    tmp->start = saddr;
-		if (tmp->last > eaddr)
-		    tmp->last = eaddr;
-
 		tmp->bo_va = NULL;
 		list_add(&tmp->list, &vm->freed);
 		trace_amdgpu_vm_bo_unmap(NULL, tmp);
@@ -2725,7 +2725,7 @@ int amdgpu_vm_init(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 
 error_free_root:
 	amdgpu_vm_pt_free_root(adev, vm);
-	amdgpu_bo_unreserve(vm->root.bo);
+	amdgpu_bo_unreserve(root_bo);
 	amdgpu_bo_unref(&root_bo);
 
 error_free_delayed:
@@ -3155,7 +3155,7 @@ bool amdgpu_vm_handle_fault(struct amdgpu_device *adev, u32 pasid,
 		drm_exec_fini(&exec);
 
 		if (!svm_range_restore_pages(adev, pasid, vmid,
-					     node_id, addr >> PAGE_SHIFT, ts, write_fault))
+					     node_id, addr, ts, write_fault))
 			return true;
 
 		/* Re-acquire the VM lock, could be that the VM was freed in between. */

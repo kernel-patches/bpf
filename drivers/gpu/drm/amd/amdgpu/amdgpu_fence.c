@@ -715,9 +715,6 @@ void amdgpu_fence_driver_force_completion(struct amdgpu_ring *ring,
 void amdgpu_ring_set_fence_errors_and_reemit(struct amdgpu_ring *ring,
 					     struct amdgpu_fence *guilty_fence)
 {
-	bool emit_spm_needed = ring->adev->gfx.rlc.funcs->update_spm_vmid &&
-		(ring->funcs->type == AMDGPU_RING_TYPE_COMPUTE ||
-		 ring->funcs->type == AMDGPU_RING_TYPE_GFX);
 	struct dma_fence *unprocessed;
 	struct dma_fence __rcu **ptr;
 	struct amdgpu_fence *fence;
@@ -748,10 +745,8 @@ void amdgpu_ring_set_fence_errors_and_reemit(struct amdgpu_ring *ring,
 		return;
 	}
 	ring->reemit = true;
-	amdgpu_ring_alloc(ring, ring->ring_backup_entries_to_copy);
-	if (emit_spm_needed)
-		ring->adev->gfx.rlc.funcs->update_spm_vmid(ring->adev, ring->xcc_id,
-							   ring->adev->vm_manager.spm_vmid);
+	amdgpu_ring_alloc(ring, ring->ring_backup_entries_to_copy +
+			  (seq - last_seq) * ring->funcs->align_mask);
 	spin_lock_irqsave(&ring->fence_drv.lock, flags);
 	do {
 		last_seq++;
@@ -784,6 +779,10 @@ void amdgpu_ring_set_fence_errors_and_reemit(struct amdgpu_ring *ring,
 					amdgpu_ring_write(ring,
 							  ring->ring_backup[fence->backup_idx + i]);
 			}
+
+			/* A job fence ends a submission, pad it like commit did */
+			if (fence->skip_ib_dw_end_offset)
+				amdgpu_ring_pad_to_align(ring);
 		}
 		rcu_read_unlock();
 	} while (last_seq != seq);

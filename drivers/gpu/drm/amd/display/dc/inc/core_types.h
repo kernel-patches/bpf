@@ -31,6 +31,7 @@
 #include "dcn_calcs.h"
 #include "ddc_service_types.h"
 #include "dc_bios_types.h"
+#include "dsc/dsc.h"
 #include "mem_input.h"
 #include "hubp.h"
 #include "hw/dchubbub.h"
@@ -41,6 +42,7 @@
 #include "panel_cntl.h"
 #include "dmub/inc/dmub_cmd.h"
 #include "bls_builder/bls_builder_legacy_init.h"
+#include "bls_builder/bls_builder.h"
 #include "pg_cntl.h"
 #include "sspl/dc_spl.h"
 
@@ -729,6 +731,8 @@ struct dc_state {
 	 * outputs of each stage run so far
 	 */
 	struct bls_builder_legacy_hw_init_info hw_init_info;
+
+	struct bls_builder_initialization bls_builder_initialization;
 };
 
 struct replay_context {
@@ -805,6 +809,63 @@ struct dc_update_scratch_space {
 	struct pipe_split_policy_backup intermediate_policy;
 	struct dc_surface_update intermediate_updates[MAX_SURFACES];
 	int intermediate_count;
+};
+
+/**
+ * Snapshot of fields from dc_stream_state relevant to link_set_dpms_on_v2().
+ *
+ * Removes dependency on mutable stream object, which would otherwise create
+ * synchronization hazards.
+ */
+struct link_dpms_stream_descriptor {
+	// TODO: Implement
+	int dummy;
+};
+
+/**
+ * DPMS operation context variables.
+ *
+ * This struct is owned by dc_link, sharing its lifetime.
+ * The caller populates the context with update details and validates it.
+ * No other code aside from DPMS sequence itself is allowed to modify it during
+ * execution, while DPMS serialization prevents concurrent reuse.
+ *
+ * This struct is used by top-level link_set_dpms_on/off_v2() and the sequence
+ * steps link_dpms_step_xxx(). The step functions unpack relevant values
+ * and pass them directly as arguments into TX and HWSS. This is done to make
+ * TX and HWSS independent from DPMS, while preventing them from backtracking
+ * to shared state like DC and its state structs.
+ */
+struct link_dpms_ctx {
+	/**
+	 * Mutable link state.
+	 *
+	 * Steps use it to record protocol results and evaluate preconditions.
+	 * Should not be used to access dc_state, dc_stream_state, pipe_ctx.
+	 */
+	struct dc_link *link;
+
+	/**
+	 * Snapshot of relevant fields from dc_stream_state.
+	 *
+	 * Removes dependency on mutable stream object.
+	 */
+	struct link_dpms_stream_descriptor stream_descriptor;
+
+	/**
+	 * Stable validated link configuration.
+	 *
+	 * If unable to reach desired state, DPMS reports failure instead
+	 * of rewriting alternative configuration.
+	 */
+	struct link_config link_config;
+
+	/**
+	 * Source-side link HW transmitter.
+	 *
+	 * This is sole interface used to program all protocol operations.
+	 */
+	const struct link_tx *tx;
 };
 
 #endif /* _CORE_TYPES_H_ */

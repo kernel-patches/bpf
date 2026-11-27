@@ -147,6 +147,7 @@ bool hubbub2_dcc_support_pixel_format(
 		return true;
 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
+	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
 	case SURFACE_PIXEL_FORMAT_GRPH_RGB111110_FIX:
@@ -592,6 +593,7 @@ static bool hubbub2_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower)
 {
 	struct dcn20_hubbub *hubbub1 = TO_DCN20_HUBBUB(hubbub);
@@ -611,8 +613,7 @@ static bool hubbub2_program_watermarks(
 	 * here we are going to LOWER watermarks to go to dummy p-state only, but this has
 	 * to be done prepare_bandwidth, not optimize
 	 */
-	if (hubbub1->base.ctx->dc->clk_mgr->clks.prev_p_state_change_support == true &&
-		hubbub1->base.ctx->dc->clk_mgr->clks.p_state_change_support == false)
+	if (policy.force_safe_to_lower)
 		safe_to_lower = true;
 
 	if (hubbub1_program_pstate_watermarks(hubbub, watermarks, refclk_mhz, safe_to_lower))
@@ -622,7 +623,7 @@ static bool hubbub2_program_watermarks(
 			DCHUBBUB_ARB_SAT_LEVEL, 60 * refclk_mhz);
 	REG_UPDATE(DCHUBBUB_ARB_DF_REQ_OUTSTAND, DCHUBBUB_ARB_MIN_REQ_OUTSTAND, 180);
 
-	hubbub->funcs->allow_self_refresh_control(hubbub, !hubbub->ctx->dc->debug.disable_stutter);
+	hubbub->funcs->allow_self_refresh_control(hubbub, !policy.disable_stutter);
 	return wm_pending;
 }
 
@@ -634,7 +635,7 @@ void hubbub2_read_state(struct hubbub *hubbub, struct dcn_hubbub_state *hubbub_s
 		hubbub_state->vm_fault_addr_msb = REG_READ(DCN_VM_FAULT_ADDR_MSB);
 
 	if (REG(DCN_VM_FAULT_ADDR_LSB))
-		hubbub_state->vm_fault_addr_msb = REG_READ(DCN_VM_FAULT_ADDR_LSB);
+		hubbub_state->vm_fault_addr_lsb = REG_READ(DCN_VM_FAULT_ADDR_LSB);
 
 	if (REG(DCN_VM_FAULT_CNTL))
 		REG_GET(DCN_VM_FAULT_CNTL, DCN_VM_ERROR_STATUS_MODE, &hubbub_state->vm_error_mode);

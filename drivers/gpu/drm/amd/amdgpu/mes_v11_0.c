@@ -1051,6 +1051,8 @@ static int mes_v11_0_misc_op(struct amdgpu_mes *mes,
 				upper_32_bits(input->set_shader_debugger.watch_addresses[i]) & 0xffff;
 		}
 		misc_pkt.set_shader_debugger.trap_en = input->set_shader_debugger.trap_en;
+		misc_pkt.set_shader_debugger.process_context_array_index =
+				input->set_shader_debugger.process_context_array_index;
 		break;
 	case MES_MISC_OP_CHANGE_CONFIG:
 		if ((mes->adev->mes.sched_version & AMDGPU_MES_VERSION_MASK) < 0x63) {
@@ -1886,7 +1888,7 @@ static int mes_v11_0_sw_init(struct amdgpu_ip_block *ip_block)
 	struct amdgpu_device *adev = ip_block->adev;
 	int pipe, r, bo_size;
 
-	adev->mes.use_rs64mem = false;
+	adev->mes.use_rs64mem = true;
 	adev->mes.funcs = &mes_v11_0_funcs;
 	adev->mes.kiq_hw_init = &mes_v11_0_kiq_hw_init;
 	adev->mes.kiq_hw_fini = &mes_v11_0_kiq_hw_fini;

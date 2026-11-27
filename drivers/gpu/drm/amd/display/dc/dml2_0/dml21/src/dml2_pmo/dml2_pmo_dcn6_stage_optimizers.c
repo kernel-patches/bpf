@@ -409,8 +409,8 @@ static bool dcn6_update_worksheet_for_pstate_admissibility(struct dml2_optimizat
 	const double vblank_ratio = 0.8;
 	const double min_vblank_unreserved_ratio = 0.15;
 	const double min_vblank_unreserved_time_us = 50.0;
-	// min reserved for prefetch + 1 line lost for max vstartup
-	const unsigned int min_vblank_unreserved_otg_vlines = 4 + 1;
+	// min reserved for prefetch + 1 line lost for max vstartup, and +1/4 for inefficiency from TSetup/TCalc, in quarter OTG vlines
+	const unsigned int min_vblank_unreserved_otg_vlines_x4 = (4 + 1) * 4 + 1; // 5.25
 
 	unsigned int plane_index, stream_index, stream_index1;
 	double ideal_disallow_time_us, disallow_time_us;
@@ -464,7 +464,7 @@ static bool dcn6_update_worksheet_for_pstate_admissibility(struct dml2_optimizat
 				vblank_time_us = display_config->stream_descriptors[stream_index].timing.vblank_nom *
 					per_stream_pstate_meta[stream_index].otg_vline_time_us;
 				min_unreserved_vblank_time_us = math_max2(
-					per_stream_pstate_meta[stream_index].otg_vline_time_us * min_vblank_unreserved_otg_vlines,
+					per_stream_pstate_meta[stream_index].otg_vline_time_us * min_vblank_unreserved_otg_vlines_x4 / 4.0,
 					math_min2(vblank_time_us * min_vblank_unreserved_ratio,
 						min_vblank_unreserved_time_us));
 
@@ -718,7 +718,7 @@ static void dcn6_build_pstate_meta_per_stream(const struct dml2_display_cfg *dis
 
 	/* common */
 	stream_pstate_meta->valid               = true;
-	stream_pstate_meta->nom_vtotal          = stream_descriptor->timing.vblank_nom + stream_descriptor->timing.v_active;
+	stream_pstate_meta->nom_vtotal          = stream_descriptor->timing.v_total;
 	stream_pstate_meta->otg_vline_time_us   = (double)timing->h_total / timing->pixel_clock_khz * 1000.0;
 	stream_pstate_meta->vblank_start        = timing->v_blank_end + timing->v_active;
 	stream_pstate_meta->nom_refresh_rate_hz = timing->pixel_clock_khz * 1000.0 /
@@ -837,7 +837,10 @@ static void dcn6_build_pstate_meta_per_stream(const struct dml2_display_cfg *dis
 		stream_pstate_meta->method_vactive.common.allow_start_otg_vline =
 				timing->v_blank_end + stream_pstate_meta->method_vactive.max_vactive_det_fill_delay_otg_vlines;
 		stream_pstate_meta->method_vactive.common.allow_end_otg_vline =
-				stream_pstate_meta->vblank_start -
+				stream_pstate_meta->vblank_start +
+				stream_pstate_meta->nom_vtotal -
+				stream_descriptor->timing.v_active -
+				stream_descriptor->timing.vblank_nom -
 				stream_pstate_meta->blackout_otg_vlines +
 				stream_pstate_meta->method_vactive.reserved_blank_required_vlines;
 	} else {

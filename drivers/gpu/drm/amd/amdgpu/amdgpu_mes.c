@@ -111,10 +111,30 @@ static inline u32 amdgpu_mes_get_hqd_mask(u32 num_pipe,
 static void amdgpu_mes_userq_notify_unmap_work_handler(struct work_struct *work);
 static void amdgpu_mes_dbgext_work_fn(struct work_struct *work);
 
+static int get_num_queues_per_xcp(struct amdgpu_device *adev, int num_xcps)
+{
+	int i, num_xcc = adev->gfx.xcc_mask ? NUM_XCC(adev->gfx.xcc_mask) : 1;
+	u32 num_queues = 0;
+
+	for (i = 0; i < AMDGPU_MES_MAX_GFX_PIPES; i++)
+		num_queues += hweight32(adev->mes.gfx_hqd_mask[i]);
+
+	for (i = 0; i < AMDGPU_MES_MAX_COMPUTE_PIPES; i++)
+		num_queues += hweight32(adev->mes.compute_hqd_mask[i]);
+
+	num_xcc /= num_xcps;
+	for (i = 0; i < AMDGPU_MES_MAX_SDMA_PIPES; i++)
+		num_queues += hweight32(adev->mes.sdma_hqd_mask[i]) * num_xcc;
+
+	return num_queues;
+}
+
 int amdgpu_mes_init(struct amdgpu_device *adev)
 {
 	int i, r, num_pipes, num_queues = 0;
 	int num_xcc = adev->gfx.xcc_mask ? NUM_XCC(adev->gfx.xcc_mask) : 1;
+	int max_sdma_pipes = amdgpu_ip_version(adev, GC_HWIP, 0) >= IP_VERSION(13, 0, 0) ?
+		AMDGPU_MES_MAX_SDMA_PIPES : 2;
 	u32 gfx_hqd_mask = amdgpu_mes_get_hqd_mask(adev->gfx.me.num_pipe_per_me,
 				adev->gfx.me.num_queue_per_pipe,
 				adev->gfx.disable_kq ? 0 : adev->gfx.num_gfx_rings);
@@ -172,15 +192,12 @@ int amdgpu_mes_init(struct amdgpu_device *adev)
 
 	num_pipes = adev->sdma.num_inst_per_xcc ?
 		adev->sdma.num_inst_per_xcc : adev->sdma.num_instances;
-	if (num_pipes > AMDGPU_MES_MAX_SDMA_PIPES)
+	if (num_pipes > max_sdma_pipes)
 		dev_warn(adev->dev, "more SDMA pipes than supported by MES! (%d vs %d)\n",
-			 num_pipes, AMDGPU_MES_MAX_SDMA_PIPES);
+			 num_pipes, max_sdma_pipes);
 
-	for (i = 0; i < AMDGPU_MES_MAX_SDMA_PIPES; i++) {
-		if (i >= num_pipes)
-			break;
+	for (i = 0; i < min(num_pipes, max_sdma_pipes); i++)
 		adev->mes.sdma_hqd_mask[i] = 0xfc;
-	}
 
 	dev_info(adev->dev,
 			 "MES: vmid_uq_mask_mmhub 0x%08x, vmid_uq_mask_gfxhub 0x%08x\n",
@@ -229,21 +246,19 @@ int amdgpu_mes_init(struct amdgpu_device *adev)
 		goto error_doorbell;
 
 	if (amdgpu_ip_version(adev, GC_HWIP, 0) >= IP_VERSION(11, 0, 0)) {
-		/* When queue/pipe reset is done in MES instead of in the
-		 * driver, MES passes hung queues information to the driver in
-		 * hung_queue_hqd_info. Calculate required space to store this
-		 * information.
+		/* When queue/pipe reset is handled by MES instead of by the
+		 * driver, driver provides the buffer for MES to store the hung
+		 * queues information. Calculate required buffer size, which is
+		 * the number of maximum queues. This number varies with compute
+		 * partition mode. We allocate the biggest size, which is SPX,
+		 * num_xcps = 1.
 		 */
-		for (i = 0; i < AMDGPU_MES_MAX_GFX_PIPES; i++)
-			num_queues += hweight32(adev->mes.gfx_hqd_mask[i]);
-
-		for (i = 0; i < AMDGPU_MES_MAX_COMPUTE_PIPES; i++)
-			num_queues += hweight32(adev->mes.compute_hqd_mask[i]);
-
-		for (i = 0; i < AMDGPU_MES_MAX_SDMA_PIPES; i++)
-			num_queues += hweight32(adev->mes.sdma_hqd_mask[i]) * num_xcc;
+		num_queues = get_num_queues_per_xcp(adev, 1);
 
 		adev->mes.hung_queue_hqd_info_offset = num_queues;
+		/* Double num_queues. The first half is to store doorbell offset
+		 * and the second half is to store hqd_info.
+		 */
 		adev->mes.hung_queue_db_array_size = num_queues * 2;
 	}
 
@@ -534,7 +549,8 @@ int amdgpu_mes_detect_and_reset_hung_queues(struct amdgpu_device *adev,
 {
 	struct mes_detect_and_reset_queue_input input;
 	u32 *db_array = adev->mes.hung_queue_db_array_cpu_addr;
-	int hqd_info_offset = adev->mes.hung_queue_hqd_info_offset, r, i;
+	int hqd_info_offset, r, i;
+	int num_xcps = 1;
 
 	if (!hung_db_num || !hung_db_array)
 		return -EINVAL;
@@ -559,9 +575,13 @@ int amdgpu_mes_detect_and_reset_hung_queues(struct amdgpu_device *adev,
 		return r;
 	}
 
+	if (adev->xcp_mgr)
+		num_xcps = adev->xcp_mgr->num_xcps;
+	hqd_info_offset = get_num_queues_per_xcp(adev, num_xcps);
+
 	*hung_db_num = 0;
 	/* MES passes hung queues' doorbell to driver */
-	for (i = 0; i < adev->mes.hung_queue_hqd_info_offset; i++) {
+	for (i = 0; i < hqd_info_offset; i++) {
 		/* Finding hung queues where db_array[i] is a valid doorbell */
 		if (db_array[i] != AMDGPU_MES_INVALID_DB_OFFSET) {
 			dev_dbg(adev->dev, "MES: hung queue doorbell 0x%x\n", db_array[i]);
@@ -742,6 +762,7 @@ int amdgpu_mes_hdp_flush(struct amdgpu_device *adev)
 
 int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 				uint64_t process_context_addr,
+				uint32_t process_context_array_index,
 				uint32_t spi_gdbg_per_vmid_cntl,
 				const uint32_t *tcp_watch_cntl,
 				const uint64_t *watch_addresses,
@@ -761,6 +782,8 @@ int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 	op_input.xcc_id = xcc_id;
 	op_input.op = MES_MISC_OP_SET_SHADER_DEBUGGER;
 	op_input.set_shader_debugger.process_context_addr = process_context_addr;
+	op_input.set_shader_debugger.process_context_array_index =
+		process_context_array_index;
 	op_input.set_shader_debugger.flags.u32all = flags;
 
 	/* use amdgpu mes_flush_shader_debugger instead */
@@ -790,6 +813,7 @@ int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 
 int amdgpu_mes_flush_shader_debugger(struct amdgpu_device *adev,
 				     uint64_t process_context_addr,
+				     uint32_t process_context_array_index,
 				     uint32_t xcc_id)
 {
 	struct mes_misc_op_input op_input = {0};
@@ -804,6 +828,8 @@ int amdgpu_mes_flush_shader_debugger(struct amdgpu_device *adev,
 	op_input.xcc_id = xcc_id;
 	op_input.op = MES_MISC_OP_SET_SHADER_DEBUGGER;
 	op_input.set_shader_debugger.process_context_addr = process_context_addr;
+	op_input.set_shader_debugger.process_context_array_index =
+		process_context_array_index;
 	op_input.set_shader_debugger.flags.process_ctx_flush = true;
 
 	amdgpu_mes_lock(&adev->mes);
@@ -1047,6 +1073,10 @@ int amdgpu_mes_rs64mem_setup_bitmaps(struct amdgpu_mes *mes)
 	struct amdgpu_device *adev = container_of(mes, struct amdgpu_device, mes);
 
 	if (!mes->use_rs64mem || !mes->ctx_array_size_cpu_ptr)
+		return 0;
+
+	/* Keep the slots live processes and queues hold across MES re-init. */
+	if (mes->proc_ctx_bitmap && mes->gang_ctx_bitmap)
 		return 0;
 
 	/*

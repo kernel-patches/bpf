@@ -3227,10 +3227,7 @@ static int kfd_ioctl_set_debug_trap(struct file *filep, struct kfd_process *p, v
 
 	switch (args->op) {
 	case KFD_IOC_DBG_TRAP_ENABLE:
-		if (target != p)
-			target->debugger_process = p;
-
-		r = kfd_dbg_trap_enable(target,
+		r = kfd_dbg_trap_enable(target, p,
 					args->enable.dbg_fd,
 					(void __user *)args->enable.rinfo_ptr,
 					&args->enable.rinfo_size);
@@ -3396,19 +3393,20 @@ static inline int profile_lock_device(struct kfd_process *p,
 	struct kfd_dev *kfd;
 	int status = -EINVAL;
 	struct amdgpu_ptl *ptl;
+	int r = 0;
 
 	if (!p)
 		return -EINVAL;
 
 	mutex_lock(&p->mutex);
 	pdd = kfd_process_device_data_by_id(p, gpu_id);
-	/* Bind for the runtime PM reference before programming the perfmon clock */
+	/* Runtime PM reference only: the caller may have no VM on this GPU yet */
 	if (pdd && op == 1)
-		pdd = kfd_bind_process_to_device(pdd->dev, p);
+		r = kfd_process_device_runtime_get(pdd);
 	mutex_unlock(&p->mutex);
 
-	if (IS_ERR(pdd))
-		return PTR_ERR(pdd);
+	if (r)
+		return r;
 	if (!pdd || !pdd->dev || !pdd->dev->kfd)
 		return -EINVAL;
 
@@ -3474,13 +3472,13 @@ static int kfd_profiler_perfmon_clk(struct kfd_process *p, uint32_t gpu_id,
 
 	mutex_lock(&p->mutex);
 	pdd = kfd_process_device_data_by_id(p, gpu_id);
-	/* Bind for the runtime PM reference before programming the perfmon clock */
+	/* Runtime PM reference only: the caller may have no VM on this GPU yet */
 	if (pdd && enable)
-		pdd = kfd_bind_process_to_device(pdd->dev, p);
+		r = kfd_process_device_runtime_get(pdd);
 	mutex_unlock(&p->mutex);
 
-	if (IS_ERR(pdd))
-		return PTR_ERR(pdd);
+	if (r)
+		return r;
 	if (!pdd || !pdd->dev || !pdd->dev->kfd)
 		return -EINVAL;
 

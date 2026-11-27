@@ -121,7 +121,8 @@ int amdgpu_ib_schedule(struct amdgpu_ring *ring, struct amdgpu_job *job,
 		       struct dma_fence **f)
 {
 	struct amdgpu_device *adev = ring->adev;
-	bool emit_spm_needed = adev->gfx.rlc.funcs->update_spm_vmid &&
+	bool emit_spm_needed = adev->gfx.rlc.funcs &&
+		adev->gfx.rlc.funcs->update_spm_vmid &&
 		(ring->funcs->type == AMDGPU_RING_TYPE_COMPUTE ||
 		 ring->funcs->type == AMDGPU_RING_TYPE_GFX);
 	struct amdgpu_ib *ib;
@@ -213,7 +214,7 @@ int amdgpu_ib_schedule(struct amdgpu_ring *ring, struct amdgpu_job *job,
 		amdgpu_ring_emit_pipeline_sync(ring);
 
 	if (emit_spm_needed)
-		adev->gfx.rlc.funcs->update_spm_vmid(adev, ring->xcc_id,
+		adev->gfx.rlc.funcs->update_spm_vmid(adev, ring->xcc_id, ring,
 						     adev->vm_manager.spm_vmid);
 
 	if (emit_gds_needed)

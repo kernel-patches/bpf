@@ -230,12 +230,44 @@ static void dm_test_set_psr_caps_no_dmub_psr(struct kunit *test)
 {
 	struct dc_link *link = alloc_test_psr_caps_link(test);
 	struct amdgpu_dm_connector *aconnector = alloc_test_aconnector(test);
+	unsigned int old_feature_mask;
+	bool ret;
 
 	link->psr_settings.psr_version = DC_PSR_VERSION_1;
 	link->ctx->dc->caps.dmub_caps.psr = false;
 
-	KUNIT_EXPECT_FALSE(test, amdgpu_dm_set_psr_caps(link, aconnector));
+	old_feature_mask = amdgpu_dm_psr_get_dc_feature_mask();
+	amdgpu_dm_psr_set_dc_feature_mask(old_feature_mask & ~DC_PSR_MASK);
+
+	ret = amdgpu_dm_set_psr_caps(link, aconnector);
+	amdgpu_dm_psr_set_dc_feature_mask(old_feature_mask);
+
+	KUNIT_EXPECT_FALSE(test, ret);
 	KUNIT_EXPECT_EQ(test, link->psr_settings.psr_version,
+			DC_PSR_VERSION_UNSUPPORTED);
+}
+
+/**
+ * dm_test_set_psr_caps_feature_mask_no_dmub_psr() - DC_PSR_MASK opts in without DMUB PSR cap.
+ * @test: KUnit test context.
+ */
+static void dm_test_set_psr_caps_feature_mask_no_dmub_psr(struct kunit *test)
+{
+	struct dc_link *link = alloc_test_psr_caps_link(test);
+	struct amdgpu_dm_connector *aconnector = alloc_test_aconnector(test);
+	unsigned int old_feature_mask;
+	bool ret;
+
+	link->ctx->dc->caps.dmub_caps.psr = false;
+
+	old_feature_mask = amdgpu_dm_psr_get_dc_feature_mask();
+	amdgpu_dm_psr_set_dc_feature_mask(old_feature_mask | DC_PSR_MASK);
+
+	ret = amdgpu_dm_set_psr_caps(link, aconnector);
+	amdgpu_dm_psr_set_dc_feature_mask(old_feature_mask);
+
+	KUNIT_EXPECT_TRUE(test, ret);
+	KUNIT_EXPECT_NE(test, link->psr_settings.psr_version,
 			DC_PSR_VERSION_UNSUPPORTED);
 }
 
@@ -712,6 +744,7 @@ static struct kunit_case dm_psr_test_cases[] = {
 	KUNIT_CASE(dm_test_set_psr_caps_null_link),
 	KUNIT_CASE(dm_test_set_psr_caps_null_connector),
 	KUNIT_CASE(dm_test_set_psr_caps_no_dmub_psr),
+	KUNIT_CASE(dm_test_set_psr_caps_feature_mask_no_dmub_psr),
 	KUNIT_CASE(dm_test_set_psr_caps_non_edp),
 	KUNIT_CASE(dm_test_set_psr_caps_disconnected),
 	KUNIT_CASE(dm_test_set_psr_caps_no_dpcd_psr),

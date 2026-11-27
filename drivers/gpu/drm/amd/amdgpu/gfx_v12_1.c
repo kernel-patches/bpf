@@ -217,7 +217,7 @@ static int gfx_v12_1_init_cp_compute_microcode_bo(struct amdgpu_device *adev);
 static void gfx_v12_1_xcc_update_medium_grain_clock_gating(
 	struct amdgpu_device *adev, bool enable, int xcc_id, bool force);
 static void gfx_v12_1_update_spm_vmid(struct amdgpu_device *adev, int xcc_id,
-				      unsigned int vmid);
+				      struct amdgpu_ring *ring, unsigned vmid);
 
 static void gfx_v12_1_wait_reg_mem(struct amdgpu_ring *ring, int eng_sel,
 				   int mem_space, int opt, uint32_t addr0,
@@ -1518,9 +1518,8 @@ static u32 gfx_v12_1_get_sh_mem_config(struct amdgpu_device *adev)
 {
 	u32 sh_mem_config = DEFAULT_SH_MEM_CONFIG;
 
-	/* GC 12.1.0 A0 requires RETRY_DISABLE in SH_MEM_CONFIG. */
-	if (SOC_V1_0_DIE_REV_XCD(adev->rev_id) == 0)
-		sh_mem_config |= 1 << SH_MEM_CONFIG__RETRY_DISABLE__SHIFT;
+	/* XNACK cannot be enabled for GFX12.1 */
+	sh_mem_config |= 1 << SH_MEM_CONFIG__RETRY_DISABLE__SHIFT;
 
 	return sh_mem_config;
 }
@@ -1567,14 +1566,12 @@ static void gfx_v12_1_xcc_init_compute_vmid(struct amdgpu_device *adev,
 
 static void gfx_v12_1_xcc_xnack_set_chicken_bits(struct amdgpu_device *adev, int xcc_id)
 {
-	/* NOTE: COMPRESSION_ENABLE is used a chicken bit to enable/disable xcc xnack */
+	/* NOTE: COMPRESSION_ENABLE is used as a chicken bit to enable/disable xcc xnack
+	 * Since xnack retry is disabled for GFX12.1, set it to 0 unconditionally
+	 */
 	mutex_lock(&adev->srbm_mutex);
-	if (!adev->gmc.noretry) {
-		WREG32_FIELD15_PREREG(GC, GET_INST(GC, xcc_id),
-				      TCP_PERFCOUNTER_FILTER, COMPRESSION_ENABLE, 0x1);
-	} else
-		WREG32_FIELD15_PREREG(GC, GET_INST(GC, xcc_id),
-				      TCP_PERFCOUNTER_FILTER, COMPRESSION_ENABLE, 0x0);
+	WREG32_FIELD15_PREREG(GC, GET_INST(GC, xcc_id),
+			      TCP_PERFCOUNTER_FILTER, COMPRESSION_ENABLE, 0x0);
 	mutex_unlock(&adev->srbm_mutex);
 }
 
@@ -1866,7 +1863,7 @@ static int gfx_v12_1_xcc_rlc_resume(struct amdgpu_device *adev,
 	int r;
 
 	/* init spm vmid with 0xf */
-	gfx_v12_1_update_spm_vmid(adev, xcc_id, adev->vm_manager.spm_vmid);
+	gfx_v12_1_update_spm_vmid(adev, xcc_id, NULL, adev->vm_manager.spm_vmid);
 
 	if (adev->firmware.load_type == AMDGPU_FW_LOAD_PSP) {
 		gfx_v12_1_xcc_init_csb(adev, xcc_id);
@@ -2945,9 +2942,13 @@ static void gfx_v12_1_update_perf_clk(struct amdgpu_device *adev,
 
 static void gfx_v12_1_update_spm_vmid(struct amdgpu_device *adev,
 				      int xcc_id,
-				      unsigned int vmid)
+				      struct amdgpu_ring *ring,
+				      unsigned vmid)
 {
 	u32 reg, data;
+
+	if (ring)
+		return;
 
 	reg = SOC15_REG_OFFSET(GC, GET_INST(GC, xcc_id), regRLC_SPM_MC_CNTL);
 	if (amdgpu_sriov_is_pp_one_vf(adev))
@@ -3760,6 +3761,58 @@ static void gfx_v12_1_emit_mem_sync(struct amdgpu_ring *ring)
 	amdgpu_ring_write(ring, gcr_cntl); /* GCR_CNTL */
 }
 
+/*
+ * A runtime partition switch does not pass through GFX hw_fini/hw_init.
+ * Stop the GFX compute path while the old partition is still programmed,
+ * then restore it after the new mode is committed.
+ */
+static int gfx_v12_1_pre_px_switch(struct amdgpu_ip_block *ip_block)
+{
+	struct amdgpu_device *adev = ip_block->adev;
+	int xcc_id, pipe, num_xcc = NUM_XCC(adev->gfx.xcc_mask);
+
+	if (!adev->enable_mes_kiq)
+		return 0;
+
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++) {
+		if (!adev->mes.ring[MES_PIPE_INST(xcc_id,
+						  AMDGPU_MES_SCHED_PIPE)].sched.ready)
+			return 0;
+	}
+
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++)
+		gfx_v12_1_xcc_fini(adev, xcc_id);
+
+	/*
+	 * MES firmware restarts with its read pointer at zero. Clear both
+	 * rings and their writeback pointers before bringing the GFX compute
+	 * path back up, otherwise firmware can replay stale packets.
+	 */
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++) {
+		for (pipe = 0; pipe < AMDGPU_MAX_MES_PIPES; pipe++)
+			amdgpu_ring_clear_ring_and_ptrs(
+				&adev->mes.ring[MES_PIPE_INST(xcc_id, pipe)]);
+	}
+
+	adev->gfx.px_switch_stopped = true;
+	return 0;
+}
+
+static int gfx_v12_1_post_px_switch(struct amdgpu_ip_block *ip_block)
+{
+	struct amdgpu_device *adev = ip_block->adev;
+	uint16_t xcc_mask;
+
+	if (!adev->enable_mes_kiq || !adev->gfx.px_switch_stopped)
+		return 0;
+
+	/* Cleared first so a failed resume is not run a second time. */
+	adev->gfx.px_switch_stopped = false;
+	xcc_mask = GENMASK(NUM_XCC(adev->gfx.xcc_mask) - 1, 0);
+
+	return gfx_v12_1_xcc_cp_resume(adev, xcc_mask);
+}
+
 static const struct amd_ip_funcs gfx_v12_1_ip_funcs = {
 	.name = "gfx_v12_1",
 	.early_init = gfx_v12_1_early_init,
@@ -3775,6 +3828,8 @@ static const struct amd_ip_funcs gfx_v12_1_ip_funcs = {
 	.get_clockgating_state = gfx_v12_1_get_clockgating_state,
 	.dump_ip_state = gfx_v12_1_ip_dump,
 	.print_ip_state = gfx_v12_1_ip_print,
+	.pre_px_switch = gfx_v12_1_pre_px_switch,
+	.post_px_switch = gfx_v12_1_post_px_switch,
 };
 
 static const struct amdgpu_ring_funcs gfx_v12_1_ring_funcs_compute = {

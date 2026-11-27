@@ -36,7 +36,7 @@
  */
 #include "link_hdmi_frl.h"
 #include "link_ddc.h"
-#include "link/link_dpms.h"
+#include "link/link_dpms_v1.h"
 #include "link/link_validation.h"
 #include "resource.h"
 #include "dccg.h"
@@ -461,7 +461,8 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 			sizeof(offset), &test_req.byte, sizeof(test_req.byte));
 	FRL_INFO("FRL TEST REQ:  FLT_no_timeout = %d \n", test_req.fields.FLT_NO_TIMEOUT);
 
-	if (test_req.fields.FLT_NO_TIMEOUT && ddc_service->link->frl_flags.no_timeout) {
+	if (test_req.fields.FLT_NO_TIMEOUT && ddc_service->link->frl_flags.no_timeout &&
+			ddc_service->link->frl_flags.no_timeout_frl_link_rate == link_settings->frl_link_rate) {
 		bool de_emphasis_only = false;
 		bool pre_shoot_only = false;
 		bool no_ffe = false;
@@ -514,8 +515,7 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 
 	do {
 		flt_poll_curr = dm_get_timestamp(ddc_service->ctx);
-					elapsed = dm_get_elapse_time_in_ns(ddc_service->ctx,
-						flt_poll_curr, flt_poll_start);
+		elapsed = dm_get_elapse_time_in_ns(ddc_service->ctx, flt_poll_curr, flt_poll_start);
 		if (elapsed < (num_polls * wait_time_ns))
 			continue;
 		num_polls++;
@@ -539,6 +539,7 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 
 	if (test_req.fields.FLT_NO_TIMEOUT) {
 		ddc_service->link->frl_flags.no_timeout = true;
+		ddc_service->link->frl_flags.no_timeout_frl_link_rate = link_settings->frl_link_rate;
 
 		/*Specify FRL rate*/
 		write_buffer[0] = HDMI_SCDC_CONFIG_1;
@@ -622,8 +623,7 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 
 		do {
 			flt_poll_curr = dm_get_timestamp(ddc_service->ctx);
-					elapsed = dm_get_elapse_time_in_ns(ddc_service->ctx,
-						flt_poll_curr, flt_poll_start);
+			elapsed = dm_get_elapse_time_in_ns(ddc_service->ctx, flt_poll_curr, flt_poll_start);
 			if (elapsed < (num_polls * wait_time_ns))
 				continue;
 			num_polls++;
@@ -836,6 +836,15 @@ enum link_result hdmi_frl_perform_link_training_with_fallback(
 
 		msleep(200);
 
+		/* If we're in a NO_TIMEOUT state and link rate changes, cycle the link on/off
+		 * so that the new link rate is properly applied */
+		if (link->frl_flags.no_timeout) {
+			if (link->frl_flags.no_timeout_frl_link_rate != link->frl_link_settings.frl_link_rate) {
+				link->hpo_frl_link_enc->funcs->disable_link_encoder(link->hpo_frl_link_enc);
+				link->link_enc->funcs->disable_output(link->link_enc, SIGNAL_TYPE_HDMI_FRL);
+			}
+		}
+
 		link->ctx->dc->hwss.setup_hdmi_frl_link(link, 0,
 				frl_phy_clock_source_id);
 
@@ -893,8 +902,13 @@ void hdmi_frl_verify_link_cap(struct dc_link *link,
 	if (link->frl_flags.force_frl_rate == 0xF)
 		return;
 
+	/* Only honour the force FRL monitor patch when VBIOS reports the encoder
+	 * as FRL capable, otherwise the stream would be forced to a signal type
+	 * the ASIC cannot drive.
+	 */
 	if (link->local_sink &&
-		link->local_sink->edid_caps.panel_patch.force_frl)
+		link->local_sink->edid_caps.panel_patch.force_frl &&
+		link->link_enc->features.flags.bits.IS_HDMI_FRL_CAPABLE)
 			link->frl_flags.force_frl_always = true;
 
 	if (!link->frl_flags.force_frl_max &&
@@ -1025,8 +1039,8 @@ void hdmi_frl_set_preferred_link_settings(struct dc *dc,
 	link_stream->link->frl_link_settings = *link_setting;
 	link_stream->link->frl_verified_link_cap = *link_setting;
 
-	while (link_stat != LINK_RESULT_SUCCESS) {
-		link_set_dpms_off(pipe);
+	while (link_stat != LINK_RESULT_SUCCESS && link_stat != LINK_RESULT_NO_TIMEOUT) {
+		link->dc->link_srv->set_dpms_off(pipe);
 		/* For DCN3.0, can also have 4:1 combine mode.
 		 * TODO: Add function get_odm_combine_mode that has different
 		 *       implementation for DCN2/DCN3AG and DCN3.0
@@ -1103,7 +1117,7 @@ void hdmi_frl_set_preferred_link_settings(struct dc *dc,
 		link_stat = hdmi_frl_perform_link_training_with_retries(link_stream->link);
 
 		/* Enable FRL packet transmission */
-		if (link_stat == LINK_RESULT_SUCCESS) {
+		if (link_stat == LINK_RESULT_SUCCESS || link_stat == LINK_RESULT_NO_TIMEOUT) {
 			link_stream->link->hpo_frl_link_enc->funcs->enable_output(
 					link_stream->link->hpo_frl_link_enc);
 			if (link_stream->link->frl_flags.apply_vsdb_rcc_wa)
@@ -1158,6 +1172,10 @@ static void update_borrow_mode_from_dsc_padding(struct dsc_padding_params *dsc_p
 	uint32_t h_active = timing->h_addressable + timing->h_border_left + timing->h_border_right;
 	uint32_t h_blank = timing->h_total - h_active;
 	struct frl_borrow_params *borrow_params = &frl_link_settings->borrow_params;
+
+	if (dsc_padding_params->dsc_hactive_padding == 0 &&
+	    dsc_padding_params->dsc_htotal_padding == 0)
+		return;
 
 	borrow_params->borrow_mode = frl_modify_borrow_mode_for_dsc_padding(timing->pix_clk_100hz,
 		h_active,

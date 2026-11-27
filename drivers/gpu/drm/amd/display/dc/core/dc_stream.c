@@ -862,6 +862,20 @@ uint32_t dc_stream_get_vblank_counter(const struct dc_stream_state *stream)
 	return 0;
 }
 
+uint32_t dc_otg_get_vblank_counter(struct dc *dc, int otg_inst)
+{
+	struct resource_context *res_ctx = &dc->current_state->res_ctx;
+
+	dc_exit_ips_for_hw_access(dc);
+
+	struct timing_generator *tg = res_ctx->pipe_ctx[otg_inst].stream_res.tg;
+
+	if (!tg)
+		return 0;
+
+	return tg->funcs->get_frame_count(tg);
+}
+
 bool dc_stream_send_dp_sdp(const struct dc_stream_state *stream,
 		const uint8_t *custom_sdp_message,
 		unsigned int sdp_message_size)
@@ -935,6 +949,30 @@ bool dc_stream_get_scanoutpos(const struct dc_stream_state *stream,
 	}
 
 	return ret;
+}
+
+bool dc_otg_get_scanoutpos(struct dc *dc, int otg_inst,
+				  uint32_t *v_blank_start,
+				  uint32_t *v_blank_end,
+				  uint32_t *h_position,
+				  uint32_t *v_position)
+{
+	struct resource_context *res_ctx = &dc->current_state->res_ctx;
+
+	dc_exit_ips_for_hw_access(dc);
+
+	struct timing_generator *tg = res_ctx->pipe_ctx[otg_inst].stream_res.tg;
+
+	if (!tg)
+		return false;
+
+	tg->funcs->get_scanoutpos(tg,
+				  v_blank_start,
+				  v_blank_end,
+				  h_position,
+				  v_position);
+
+	return true;
 }
 
 bool dc_stream_dmdata_status_done(struct dc *dc, struct dc_stream_state *stream)

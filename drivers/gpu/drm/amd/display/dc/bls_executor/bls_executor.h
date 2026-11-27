@@ -17,5 +17,5 @@ enum dc2_bls_exec_result {
 
 enum dc2_bls_exec_result dc2_bls_execute(
 		struct dc2 *dc2,
-		const struct block_sequence *steps,
+		struct block_sequence *steps,
 		unsigned int num_steps);

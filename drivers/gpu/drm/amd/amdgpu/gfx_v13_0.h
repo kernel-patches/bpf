@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 Advanced Micro Devices, Inc.
+ * Copyright 2025 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,21 +21,11 @@
  *
  */
 
-#ifndef __AMDGPU_CONNECTORS_H__
-#define __AMDGPU_CONNECTORS_H__
+#ifndef __GFX_V13_0_H__
+#define __GFX_V13_0_H__
 
-void amdgpu_connector_hotplug(struct drm_connector *connector);
-int amdgpu_connector_get_monitor_bpc(struct drm_connector *connector);
-u16 amdgpu_connector_encoder_get_dp_bridge_encoder_id(struct drm_connector *connector);
-bool amdgpu_connector_is_dp12_capable(struct drm_connector *connector);
-void
-amdgpu_connector_add(struct amdgpu_device *adev,
-		      uint32_t connector_id,
-		      uint32_t supported_device,
-		      int connector_type,
-		      struct amdgpu_i2c_bus_rec *i2c_bus,
-		      uint16_t connector_object_id,
-		      struct amdgpu_hpd *hpd,
-		      struct amdgpu_router *router);
+extern const struct amdgpu_ip_block_version gfx_v13_0_ip_block;
 
+int gfx_v13_0_request_gfx_index_mutex(struct amdgpu_device *adev,
+				      bool req);
 #endif

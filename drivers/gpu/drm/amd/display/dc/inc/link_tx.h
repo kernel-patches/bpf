@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 Advanced Micro Devices, Inc.
+ * Copyright 2026 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -19,15 +19,41 @@
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
  *
+ * Authors: AMD
+ *
  */
+#ifndef LINK_TX_H
+#define LINK_TX_H
 
-#ifndef __ATOMBIOS_I2C_H__
-#define __ATOMBIOS_I2C_H__
+#include "dc/inc/core_types.h"
+#include "dc/inc/core_status.h"
 
-int amdgpu_atombios_i2c_xfer(struct i2c_adapter *i2c_adap,
-		      struct i2c_msg *msgs, int num);
-u32 amdgpu_atombios_i2c_func(struct i2c_adapter *adap);
-void amdgpu_atombios_i2c_channel_trans(struct amdgpu_device* adev,
-		u8 slave_addr, u8 line_number, u8 offset, u8 data);
+struct dc_link;
+struct link_resource;
+struct link_tx;
+struct link_tx_funcs;
+
+/**
+ * Private DPMS v2 context, opaque type forward-declared only.
+ */
+struct link_tx_v2_ctx;
+
+struct link_tx {
+	const struct link_tx_funcs *funcs;
+	struct dc_link *link;
+	struct link_tx_v2_ctx *ctx;
+};
+
+/**
+ * Virtual table of function pointers for link protocol programming.
+ *
+ * Analogous to HWSS, but takes link_tx instead of pipe_ctx, as the latter
+ * was deemed too broad and open, resulting in synchronization hazards.
+ */
+struct link_tx_funcs {
+	// TODO: Implement
+	void (*destroy)(struct link_tx *tx);
+};
 
 #endif
+
