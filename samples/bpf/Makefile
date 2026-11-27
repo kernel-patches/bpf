@@ -77,7 +77,6 @@ always-y += lathist_kern.o
 always-y += offwaketime.bpf.o
 always-y += spintest.bpf.o
 always-y += map_perf_test.bpf.o
-always-y += parse_varlen.o parse_simple.o parse_ldabs.o
 always-y += trace_event_kern.o
 always-y += sampleip_kern.o
 always-y += lwt_len_hist.bpf.o
