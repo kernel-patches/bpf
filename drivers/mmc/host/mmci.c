@@ -278,6 +278,7 @@ static struct variant_data variant_stm32_sdmmc = {
 	.busy_detect		= true,
 	.busy_detect_flag	= MCI_STM32_BUSYD0,
 	.busy_detect_mask	= MCI_STM32_BUSYD0ENDMASK,
+	.reset_on_resume	= true,
 	.init			= sdmmc_variant_init,
 };
 
@@ -307,6 +308,7 @@ static struct variant_data variant_stm32_sdmmcv2 = {
 	.busy_detect		= true,
 	.busy_detect_flag	= MCI_STM32_BUSYD0,
 	.busy_detect_mask	= MCI_STM32_BUSYD0ENDMASK,
+	.reset_on_resume	= true,
 	.init			= sdmmc_variant_init,
 };
 
@@ -336,6 +338,7 @@ static struct variant_data variant_stm32_sdmmcv3 = {
 	.busy_detect		= true,
 	.busy_detect_flag	= MCI_STM32_BUSYD0,
 	.busy_detect_mask	= MCI_STM32_BUSYD0ENDMASK,
+	.reset_on_resume	= true,
 	.init			= sdmmc_variant_init,
 };
 
@@ -2586,8 +2589,63 @@ static int mmci_runtime_resume(struct device *dev)
 	return 0;
 }
 
+static int mmci_reset_on_resume(struct mmci_host *host)
+{
+	struct device *dev = mmc_dev(host->mmc);
+	unsigned long flags;
+	int ret;
+
+	if (!host->variant->reset_on_resume || !host->rst ||
+	    host->mmc->ios.power_mode != MMC_POWER_OFF)
+		return 0;
+
+	ret = clk_prepare_enable(host->clk);
+	if (ret) {
+		dev_err(dev, "failed to enable clock: %d\n", ret);
+		return ret;
+	}
+
+	ret = reset_control_assert(host->rst);
+	if (ret) {
+		dev_err(dev, "failed to assert reset: %d\n", ret);
+		goto out;
+	}
+
+	udelay(2);
+
+	ret = reset_control_deassert(host->rst);
+	if (ret) {
+		dev_err(dev, "failed to deassert reset: %d\n", ret);
+		goto out;
+	}
+
+	spin_lock_irqsave(&host->lock, flags);
+	writel(host->clk_reg, host->base + MMCICLOCK);
+	writel(host->datactrl_reg, host->base + MMCIDATACTRL);
+	writel(host->pwr_reg, host->base + MMCIPOWER);
+	mmci_reg_delay(host);
+	spin_unlock_irqrestore(&host->lock, flags);
+
+out:
+	clk_disable_unprepare(host->clk);
+
+	return ret;
+}
+
+static int mmci_resume_noirq(struct device *dev)
+{
+	struct amba_device *adev = to_amba_device(dev);
+	struct mmc_host *mmc = amba_get_drvdata(adev);
+
+	if (!mmc)
+		return 0;
+
+	return mmci_reset_on_resume(mmc_priv(mmc));
+}
+
 static const struct dev_pm_ops mmci_dev_pm_ops = {
 	SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
+	NOIRQ_SYSTEM_SLEEP_PM_OPS(NULL, mmci_resume_noirq)
 	RUNTIME_PM_OPS(mmci_runtime_suspend, mmci_runtime_resume, NULL)
 };
 
