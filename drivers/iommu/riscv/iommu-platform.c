@@ -164,8 +164,8 @@ static const struct of_device_id riscv_iommu_of_match[] = {
 };
 
 static const struct acpi_device_id riscv_iommu_acpi_match[] = {
-	{ "RSCV0004", 0 },
-	{}
+	{ .id = "RSCV0004" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, riscv_iommu_acpi_match);
 
