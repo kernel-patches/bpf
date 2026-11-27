@@ -30,11 +30,11 @@
 #include "xe_pm.h"
 #include "xe_res_cursor.h"
 #include "xe_sriov.h"
+#include "xe_tile.h"
 #include "xe_tile_printk.h"
 #include "xe_tile_sriov_vf.h"
 #include "xe_tlb_inval.h"
 #include "xe_wa.h"
-#include "xe_wopcm.h"
 
 /**
  * DOC: Global Graphics Translation Table (GGTT)
@@ -414,7 +414,7 @@ static int ggtt_probe(struct xe_ggtt *ggtt, u64 *start, u64 *size)
 		return -ENOMEM;
 	}
 
-	*start = xe_wopcm_size(xe);
+	*start = xe_tile_wopcm_size(ggtt->tile);
 	*size = (gsm_size / 8) * (u64)XE_PAGE_SIZE - *start;
 
 	return 0;
@@ -422,13 +422,11 @@ static int ggtt_probe(struct xe_ggtt *ggtt, u64 *start, u64 *size)
 
 static int ggtt_get_range_from_guc(struct xe_ggtt *ggtt, u64 *start, u64 *size)
 {
-	struct xe_device *xe = tile_to_xe(ggtt->tile);
-	u64 wopcm = xe_wopcm_size(xe);
-
 	*start = xe_tile_sriov_vf_ggtt_base(ggtt->tile);
 	*size = xe_tile_sriov_vf_ggtt(ggtt->tile);
 
-	if (*start < wopcm || *start + *size > GUC_GGTT_TOP) {
+	/* We can't check start against WOPCM as VF doesn't have access to the WOPCM size */
+	if (*start + *size > GUC_GGTT_TOP) {
 		xe_log_err_fatal(ggtt->tile, GGTT, -ERANGE,
 				 "Invalid GGTT configuration: %#llx-%#llx\n",
 				 *start, *start + *size - 1);
@@ -734,11 +732,6 @@ static void xe_ggtt_invalidate_engine(struct xe_ggtt *ggtt)
 	ggtt_invalidate_gt_engine_tlb(ggtt->tile->media_gt);
 }
 
-static inline u64 xe_ggtt_bottom(struct xe_ggtt *ggtt)
-{
-	return xe_wopcm_size(tile_to_xe(ggtt->tile));
-}
-
 /**
  * xe_ggtt_shift_nodes() - Shift GGTT nodes to adjust for a change in usable address range.
  * @ggtt: the &xe_ggtt struct instance
@@ -750,13 +743,13 @@ static inline u64 xe_ggtt_bottom(struct xe_ggtt *ggtt)
  * This function may be called multiple times during recovery, but if
  * @new_start is unchanged from the current base, it's a noop.
  *
- * @new_start should be a value between the GGTT bottom and #GUC_GGTT_TOP.
+ * @new_start should be a value between the WOPCM size and #GUC_GGTT_TOP. VFs
+ * don't have access to the WOPCM size so we can't test against that.
  */
 void xe_ggtt_shift_nodes(struct xe_ggtt *ggtt, u64 new_start)
 {
 	guard(mutex)(&ggtt->lock);
 
-	xe_tile_assert(ggtt->tile, new_start >= xe_ggtt_bottom(ggtt));
 	xe_tile_assert(ggtt->tile, new_start + ggtt->size <= GUC_GGTT_TOP);
 #ifdef CONFIG_PCI_IOV
 	xe_tile_assert(ggtt->tile, ggtt->shareable_size == 0);

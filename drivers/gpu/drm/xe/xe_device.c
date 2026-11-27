@@ -8,7 +8,9 @@
 #include <linux/aperture.h>
 #include <linux/delay.h>
 #include <linux/error-injection.h>
+#include <linux/nodemask.h>
 #include <linux/units.h>
+#include <linux/workqueue.h>
 
 #include <drm/drm_client.h>
 #include <drm/drm_gem_ttm_helper.h>
@@ -126,6 +128,8 @@ static int xe_file_open(struct drm_device *dev, struct drm_file *file)
 		xef->pid = task->pid;
 		put_task_struct(task);
 	}
+
+	xe_debugfs_client_add(file);
 
 	return 0;
 }
@@ -387,6 +391,9 @@ static void xe_device_destroy(struct drm_device *dev, void *dummy)
 	if (xe->preempt_fence_wq)
 		destroy_workqueue(xe->preempt_fence_wq);
 
+	if (xe->rebind_wq)
+		destroy_workqueue(xe->rebind_wq);
+
 	if (xe->ordered_wq)
 		destroy_workqueue(xe->ordered_wq);
 
@@ -436,6 +443,10 @@ struct xe_device *xe_device_create(struct pci_dev *pdev)
 	err = xe_device_init_early(xe);
 	if (err)
 		return ERR_PTR(err);
+
+	xe->userptr_repin_timeout_ms = num_online_nodes() > 1 ?
+		XE_USERPTR_REPIN_TIMEOUT_MS_NUMA_DEFAULT :
+		XE_USERPTR_REPIN_TIMEOUT_MS_DEFAULT;
 
 	return xe;
 }
@@ -516,10 +527,11 @@ int xe_device_init_early(struct xe_device *xe)
 
 	xe->preempt_fence_wq = alloc_ordered_workqueue("xe-preempt-fence-wq",
 						       WQ_MEM_RECLAIM);
+	xe->rebind_wq = alloc_workqueue("xe-rebind-wq", WQ_UNBOUND, 0);
 	xe->ordered_wq = alloc_ordered_workqueue("xe-ordered-wq", 0);
 	xe->unordered_wq = alloc_workqueue("xe-unordered-wq", WQ_PERCPU, 0);
 	xe->destroy_wq = alloc_workqueue("xe-destroy-wq", WQ_PERCPU | WQ_MEM_RECLAIM, 0);
-	if (!xe->ordered_wq || !xe->unordered_wq ||
+	if (!xe->ordered_wq || !xe->unordered_wq || !xe->rebind_wq ||
 	    !xe->preempt_fence_wq || !xe->destroy_wq) {
 		/*
 		 * Cleanup done in xe_device_destroy via
@@ -934,6 +946,10 @@ int xe_device_probe(struct xe_device *xe)
 	override_has_cached_pt(xe);
 
 	for_each_tile(tile, xe, id) {
+		err = xe_tile_wopcm_init(tile);
+		if (err)
+			return err;
+
 		err = xe_ggtt_init_early(tile->mem.ggtt);
 		if (err)
 			return err;
@@ -1086,17 +1102,17 @@ int xe_device_probe(struct xe_device *xe)
 	if (err)
 		goto err_unregister_display;
 
+	xe_vsec_init(xe);
+
 	xe_debugfs_register(xe);
 
 	err = xe_hwmon_register(xe);
 	if (err)
-		goto err_unregister_display;
+		goto err_unregister_vsec;
 
 	err = xe_i2c_probe(xe);
 	if (err)
 		goto err_unregister_hwmon;
-
-	xe_vsec_init(xe);
 
 	err = xe_sriov_init_late(xe);
 	if (err)
@@ -1112,6 +1128,8 @@ int xe_device_probe(struct xe_device *xe)
 
 err_unregister_hwmon:
 	xe_hwmon_unregister(xe);
+err_unregister_vsec:
+	xe_vsec_remove(xe);
 err_unregister_display:
 	xe_display_unregister(xe);
 	drm_dev_unregister(&xe->drm);
@@ -1122,6 +1140,7 @@ err_unregister_display:
 void xe_device_remove(struct xe_device *xe)
 {
 	xe_hwmon_unregister(xe);
+	xe_vsec_remove(xe);
 	xe_display_unregister(xe);
 
 	drm_dev_unplug(&xe->drm);

@@ -13,12 +13,6 @@ Firmware Layout
 .. kernel-doc:: drivers/gpu/drm/xe/abi/uc_fw_abi.h
    :doc: GSC-based Firmware Layout
 
-Write Once Protected Content Memory (WOPCM) Layout
-==================================================
-
-.. kernel-doc:: drivers/gpu/drm/xe/xe_wopcm.c
-   :doc: Write Once Protected Content Memory (WOPCM) Layout
-
 GuC CTB Blob
 ============
 

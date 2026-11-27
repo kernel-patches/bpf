@@ -12,9 +12,7 @@
 
 static u64 ggtt_test_accessible_size(struct kunit *test)
 {
-	struct xe_tile *tile = xe_device_get_root_tile(test->priv);
-
-	return GUC_GGTT_TOP - xe_wopcm_size(tile_to_xe(tile));
+	return GUC_GGTT_TOP - GGTT_TEST_START;
 }
 
 static void ggtt_test_fini(void *data)

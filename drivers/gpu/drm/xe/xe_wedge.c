@@ -157,7 +157,7 @@ void xe_wedge_declare(struct xe_device *xe, unsigned long method)
 	 * hangs, so wedge the device with 'none' recovery method and have
 	 * it available to the user for debugging.
 	 */
-	if (xe->wedged.mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET)
+	if (xe_wedge_mode_is_no_reset(xe))
 		xe->wedged.method = DRM_WEDGE_RECOVERY_NONE;
 	else
 		xe->wedged.method = method;
@@ -203,8 +203,7 @@ static bool wedge_mode_needs_policy_update(struct xe_device *xe, enum xe_wedged_
 	if (xe->wedged.mode == mode)
 		return false;
 
-	if (xe->wedged.mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET ||
-	    mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET)
+	if (xe_wedge_mode_is_no_reset(xe) || mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET)
 		return true;
 
 	return false;

@@ -47,15 +47,16 @@
 #include "xe_sleep.h"
 #include "xe_sriov.h"
 #include "xe_sriov_pf_migration.h"
+#include "xe_tile.h"
 #include "xe_uc.h"
 #include "xe_uc_fw.h"
 #include "xe_wa.h"
-#include "xe_wopcm.h"
 
 static u32 guc_bo_ggtt_addr(struct xe_guc *guc,
 			    struct xe_bo *bo)
 {
-	struct xe_device *xe = guc_to_xe(guc);
+	struct xe_tile *tile = gt_to_tile(guc_to_gt(guc));
+	struct xe_device *xe = tile_to_xe(tile);
 	u32 addr;
 
 	/*
@@ -64,10 +65,12 @@ static u32 guc_bo_ggtt_addr(struct xe_guc *guc,
 	 * might be different for each tile. So, just always ask for the address
 	 * on the target GuC.
 	 */
-	addr = __xe_bo_ggtt_addr(bo, gt_to_tile(guc_to_gt(guc))->id);
+	addr = __xe_bo_ggtt_addr(bo, tile->id);
+
+	if (!IS_SRIOV_VF(xe))
+		xe_assert(xe, addr >= xe_tile_wopcm_size(tile));
 
 	/* GuC addresses above GUC_GGTT_TOP don't map through the GTT */
-	xe_assert(xe, addr >= xe_wopcm_size(guc_to_xe(guc)));
 	xe_assert(xe, addr < GUC_GGTT_TOP);
 	xe_assert(xe, xe_bo_size(bo) <= GUC_GGTT_TOP - addr);
 
@@ -664,6 +667,16 @@ int xe_guc_opt_in_features_enable(struct xe_guc *guc)
 	if (supports_dynamic_ics(guc))
 		klvs[count++] = PREP_GUC_KLV_TAG(OPT_IN_FEATURE_DYNAMIC_INHIBIT_CONTEXT_SWITCH);
 
+	/*
+	 * 64 bit semaphore instruction field check support was added in GuC
+	 * v70.64.0, which maps to compatibility version v1.33.0.
+	 * Only GTs that support 64 bit semaphores (has_sem64) can opt in to
+	 * this feature.
+	 */
+	if ((GUC_SUBMIT_VER(guc) >= MAKE_GUC_VER(1, 33, 0)) &&
+	    guc_to_gt(guc)->info.has_sem64)
+		klvs[count++] = PREP_GUC_KLV_TAG(OPT_IN_FEATURE_SEMAPHORE_INSTRUCTION_FIELDS_CHECK);
+
 	if (count) {
 		xe_assert(xe, count <= OPT_IN_MAX_DWORDS);
 
@@ -891,9 +904,10 @@ static u32 guc_additional_cache_size(struct xe_device *xe)
  */
 int xe_guc_init_post_hwconfig(struct xe_guc *guc)
 {
+	struct xe_device *xe = guc_to_xe(guc);
 	int ret;
 
-	if (IS_SRIOV_VF(guc_to_xe(guc)))
+	if (IS_SRIOV_VF(xe))
 		return vf_guc_init_post_hwconfig(guc);
 
 	ret = xe_guc_realloc_post_hwconfig(guc);
@@ -906,19 +920,7 @@ int xe_guc_init_post_hwconfig(struct xe_guc *guc)
 
 	guc_init_params_post_hwconfig(guc);
 
-	ret = xe_guc_submit_init(guc);
-	if (ret)
-		return ret;
-
-	ret = xe_guc_db_mgr_init(&guc->dbm, ~0);
-	if (ret)
-		return ret;
-
 	ret = xe_guc_pc_init(&guc->pc);
-	if (ret)
-		return ret;
-
-	ret = xe_guc_rc_init(guc);
 	if (ret)
 		return ret;
 
@@ -927,7 +929,32 @@ int xe_guc_init_post_hwconfig(struct xe_guc *guc)
 		return ret;
 
 	ret = xe_guc_buf_cache_init_with_size(&guc->buf,
-					      guc_additional_cache_size(guc_to_xe(guc)));
+					      guc_additional_cache_size(xe));
+	if (ret)
+		return ret;
+
+	/*
+	 * The GuC keeps accessing its GGTT-mapped buffers until it is reset,
+	 * so move guc_fini_hw() after all GuC allocations above to have the
+	 * reset done before any of them is unpinned and its GGTT PTEs cleared.
+	 * Teardown actions that must run before the reset, either because they
+	 * still talk to the GuC (like GuC RC) or because they stop the CT and
+	 * submission (like GuC submit), must be registered after this point.
+	 */
+	devm_remove_action(xe->drm.dev, guc_fini_hw, guc);
+	ret = devm_add_action_or_reset(xe->drm.dev, guc_fini_hw, guc);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_submit_init(guc);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_db_mgr_init(&guc->dbm, ~0);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_rc_init(guc);
 	if (ret)
 		return ret;
 

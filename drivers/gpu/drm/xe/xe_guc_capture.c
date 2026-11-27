@@ -35,6 +35,7 @@
 #include "xe_map.h"
 #include "xe_mmio.h"
 #include "xe_sched_job.h"
+#include "xe_wedge.h"
 
 /*
  * struct __guc_capture_bufstate
@@ -1962,7 +1963,7 @@ xe_guc_capture_get_matching_and_lock(struct xe_exec_queue *q)
 
 	xe = gt_to_xe(q->gt);
 
-	if (xe->wedged.mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET)
+	if (xe_wedge_mode_is_no_reset(xe))
 		return NULL;
 
 	if (!xe_device_uc_enabled(xe))

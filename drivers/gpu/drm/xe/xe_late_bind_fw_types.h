@@ -75,6 +75,8 @@ struct xe_late_bind {
 	bool component_added;
 	/** @disable: to block late binding reload during pm resume flow*/
 	bool disable;
+	/** @force_ocode_load: force OCODE loading even if already running */
+	bool force_ocode_load;
 };
 
 #endif

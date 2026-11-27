@@ -18,6 +18,7 @@
 #include <linux/delay.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
+#include <linux/sched/signal.h>
 #include <linux/swap.h>
 
 #include <generated/xe_wa_oob.h>
@@ -44,6 +45,7 @@
 #include "xe_tile.h"
 #include "xe_tlb_inval.h"
 #include "xe_trace_bo.h"
+#include "xe_userptr.h"
 #include "xe_vm_madvise.h"
 #include "xe_wa.h"
 
@@ -538,8 +540,33 @@ static bool vm_suspend_rebind_worker(struct xe_vm *vm)
  */
 void xe_vm_resume_rebind_worker(struct xe_vm *vm)
 {
-	queue_work(vm->xe->ordered_wq, &vm->preempt.rebind_work);
+	xe_vm_queue_rebind_worker(vm);
 }
+
+#if IS_ENABLED(CONFIG_DRM_XE_USERPTR_INVAL_INJECT)
+/*
+ * Force one retry per rebind sequence. The sequence spans requeues of the
+ * worker, so the state must live in the vm.
+ */
+static bool xe_vm_rebind_worker_inject_retry(struct xe_vm *vm)
+{
+	return !vm->preempt.inval_inject_tries++;
+}
+
+static void xe_vm_rebind_worker_reset_inject(struct xe_vm *vm)
+{
+	vm->preempt.inval_inject_tries = 0;
+}
+#else
+static bool xe_vm_rebind_worker_inject_retry(struct xe_vm *vm)
+{
+	return false;
+}
+
+static void xe_vm_rebind_worker_reset_inject(struct xe_vm *vm)
+{
+}
+#endif
 
 static void preempt_rebind_work_func(struct work_struct *w)
 {
@@ -550,7 +577,6 @@ static void preempt_rebind_work_func(struct work_struct *w)
 	LIST_HEAD(preempt_fences);
 	int err = 0;
 	long wait;
-	int __maybe_unused tries = 0;
 
 	xe_assert(vm->xe, xe_vm_in_preempt_fence_mode(vm));
 	trace_xe_vm_rebind_worker_enter(vm);
@@ -563,7 +589,6 @@ static void preempt_rebind_work_func(struct work_struct *w)
 		return;
 	}
 
-retry:
 	if (!try_wait_for_completion(&vm->xe->pm_block) && vm_suspend_rebind_worker(vm)) {
 		up_write(&vm->lock);
 		/* We don't actually block but don't make progress. */
@@ -613,19 +638,13 @@ retry:
 		goto out_unlock;
 	}
 
-#define retry_required(__tries, __vm) \
-	(IS_ENABLED(CONFIG_DRM_XE_USERPTR_INVAL_INJECT) ? \
-	(!(__tries)++ || __xe_vm_userptr_needs_repin(__vm)) : \
-	__xe_vm_userptr_needs_repin(__vm))
-
 	xe_svm_notifier_lock(vm);
-	if (retry_required(tries, vm)) {
+	if (xe_vm_rebind_worker_inject_retry(vm) ||
+	    __xe_vm_userptr_needs_repin(vm)) {
 		xe_svm_notifier_unlock(vm);
 		err = -EAGAIN;
 		goto out_unlock;
 	}
-
-#undef retry_required
 
 	xe_vm_bump_lru(vm, &exec);
 
@@ -641,19 +660,19 @@ out_unlock_outer:
 		trace_xe_vm_rebind_worker_retry(vm);
 
 		/*
-		 * We can't block in workers on a VF which supports migration
-		 * given this can block the VF post-migration workers from
-		 * getting scheduled.
+		 * Drop all locks and requeue rather than retrying in-line.
+		 * This avoids blocking other work items, such as VF
+		 * post-migration workers, and lets other users of the vm
+		 * lock make progress between attempts.
 		 */
-		if (IS_SRIOV_VF(vm->xe) &&
-		    xe_sriov_vf_migration_supported(vm->xe)) {
-			up_write(&vm->lock);
-			xe_vm_queue_rebind_worker(vm);
-			return;
-		}
-
-		goto retry;
+		up_write(&vm->lock);
+		free_preempt_fences(&preempt_fences);
+		xe_vm_queue_rebind_worker(vm);
+		trace_xe_vm_rebind_worker_exit(vm);
+		return;
 	}
+
+	xe_vm_rebind_worker_reset_inject(vm);
 
 	if (err) {
 		drm_warn(&vm->xe->drm, "VM worker error: %d\n", err);
@@ -2401,6 +2420,26 @@ static void prep_vma_destroy(struct xe_vm *vm, struct xe_vma *vma,
 		xe_vm_remove_vma(vm, vma);
 }
 
+static void unprep_vma_destroy(struct xe_vm *vm, struct xe_vma *vma,
+			       bool post_commit)
+{
+	xe_svm_notifier_lock(vm);
+	vma->gpuva.flags &= ~XE_VMA_DESTROYED;
+	if (IS_ENABLED(CONFIG_DRM_GPUSVM) && !xe_vm_in_fault_mode(vm) &&
+	    xe_vma_is_userptr(vma) &&
+	    xe_vma_userptr_check_repin(to_userptr_vma(vma))) {
+		struct xe_userptr_vma *uvma = to_userptr_vma(vma);
+
+		spin_lock(&vm->userptr.invalidated_lock);
+		list_move_tail(&uvma->userptr.invalidate_link,
+			       &vm->userptr.invalidated);
+		spin_unlock(&vm->userptr.invalidated_lock);
+	}
+	xe_svm_notifier_unlock(vm);
+	if (post_commit)
+		xe_vm_insert_vma(vm, vma);
+}
+
 #undef ULL
 #define ULL	unsigned long long
 
@@ -2744,14 +2783,6 @@ static struct xe_vma *new_vma(struct xe_vm *vm, struct drm_gpuva_op_map *op,
 
 		if (xe_vma_is_userptr(vma)) {
 			err = xe_vma_userptr_pin_pages(to_userptr_vma(vma));
-			/*
-			 * -EBUSY has dedicated meaning that a user fence
-			 * attached to the VMA is busy, in practice
-			 * xe_vma_userptr_pin_pages can only fail with -EBUSY if
-			 * we are low on memory so convert this to -ENOMEM.
-			 */
-			if (err == -EBUSY)
-				err = -ENOMEM;
 		}
 	}
 	if (err) {
@@ -3093,13 +3124,8 @@ static void xe_vma_op_unwind(struct xe_vm *vm, struct xe_vma_op *op,
 
 		xe_vm_assert_write_mode_or_garbage_collector(vm);
 
-		if (vma) {
-			xe_svm_notifier_lock(vm);
-			vma->gpuva.flags &= ~XE_VMA_DESTROYED;
-			xe_svm_notifier_unlock(vm);
-			if (post_commit)
-				xe_vm_insert_vma(vm, vma);
-		}
+		if (vma)
+			unprep_vma_destroy(vm, vma, post_commit);
 		break;
 	}
 	case DRM_GPUVA_OP_REMAP:
@@ -3117,9 +3143,6 @@ static void xe_vma_op_unwind(struct xe_vm *vm, struct xe_vma_op *op,
 			xe_vma_destroy_unlocked(op->remap.next);
 		}
 		if (vma) {
-			xe_svm_notifier_lock(vm);
-			vma->gpuva.flags &= ~XE_VMA_DESTROYED;
-			xe_svm_notifier_unlock(vm);
 			if (post_commit) {
 				/*
 				 * Restore the old va range, in case of the
@@ -3131,8 +3154,8 @@ static void xe_vma_op_unwind(struct xe_vm *vm, struct xe_vma_op *op,
 					op->remap.old_start;
 				op->base.remap.unmap->va->va.range =
 					op->remap.old_range;
-				xe_vm_insert_vma(vm, vma);
 			}
+			unprep_vma_destroy(vm, vma, post_commit);
 		}
 		break;
 	}
@@ -4055,11 +4078,13 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	struct drm_gpuva_ops **ops = NULL;
 	struct xe_vm *vm;
 	struct xe_exec_queue *q = NULL;
-	u32 num_syncs, num_ufence = 0;
+	u32 num_syncs, num_ufence;
 	struct xe_sync_entry *syncs = NULL;
 	struct drm_xe_vm_bind_op *bind_ops = NULL;
 	struct xe_vma_ops vops = { .flags = 0, };
+	struct xe_userptr_repin repin = {};
 	struct dma_fence *fence;
+	bool repin_again;
 	int err;
 	int i;
 
@@ -4092,6 +4117,9 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	/* Ensure all UNMAPs visible */
 	xe_svm_flush(vm);
 
+retry:
+	repin_again = false;
+	num_ufence = 0;
 	err = down_write_killable(&vm->lock);
 	if (err)
 		goto put_exec_queue;
@@ -4195,6 +4223,7 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	xe_vma_ops_init(&vops, vm, q, syncs, num_syncs);
 	if (args->num_binds > 1)
 		vops.flags |= XE_VMA_OPS_ARRAY_OF_BINDS;
+	xe_userptr_repin_begin(&repin);
 	for (i = 0; i < args->num_binds; ++i) {
 		u64 range = bind_ops[i].range;
 		u64 addr = bind_ops[i].addr;
@@ -4210,12 +4239,15 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 		if (IS_ERR(ops[i])) {
 			err = PTR_ERR(ops[i]);
 			ops[i] = NULL;
+			repin_again = err == -EAGAIN;
 			goto unwind_ops;
 		}
 
 		err = vm_bind_ioctl_ops_parse(vm, ops[i], &vops);
-		if (err)
+		if (err) {
+			repin_again = err == -EAGAIN;
 			goto unwind_ops;
+		}
 
 #ifdef TEST_VM_OPS_ERROR
 		if (flags & FORCE_OP_ERROR) {
@@ -4278,6 +4310,27 @@ release_vm_lock:
 		up_read(&vm->lock);
 	else
 		up_write(&vm->lock);
+	if (repin_again) {
+		/*
+		 * A userptr repin keeps failing due to concurrent CPU mapping
+		 * changes. New vmas are created on every attempt so the overall
+		 * timeout is tracked here. Retry with all locks dropped.
+		 */
+		u32 timeout_ms = READ_ONCE(vm->xe->userptr_repin_timeout_ms);
+
+		if (xe_userptr_repin_should_retry(&repin, timeout_ms)) {
+			bos = NULL;
+			ops = NULL;
+			syncs = NULL;
+			vops.flags = 0;
+			cond_resched();
+			if (!signal_pending(current))
+				goto retry;
+			err = -ERESTARTSYS;
+		} else {
+			err = -EBUSY;
+		}
+	}
 put_exec_queue:
 	if (q)
 		xe_exec_queue_put(q);

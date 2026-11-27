@@ -84,6 +84,9 @@ struct xe_tile {
 		/** @mem.ggtt: Global graphics translation table */
 		struct xe_ggtt *ggtt;
 
+		/** @mem.wopcm_size: Size of the WOPCM for this tile */
+		u32 wopcm_size;
+
 		/**
 		 * @mem.kernel_bb_pool: Pool from which batchbuffers are allocated.
 		 *

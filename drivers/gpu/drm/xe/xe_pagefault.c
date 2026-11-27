@@ -191,6 +191,10 @@ static int xe_pagefault_handle_vma(struct xe_gt *gt, struct xe_vma *vma,
 			struct xe_userptr_vma *uvma = to_userptr_vma(vma);
 
 			err = xe_vma_userptr_pin_pages(uvma);
+			if (err == -EAGAIN) {
+				cond_resched();
+				continue;
+			}
 			if (err) {
 				xe_pagefault_set_error(pf, XE_PAGEFAULT_ERROR_VMA_USERPTR_PIN);
 				return err;

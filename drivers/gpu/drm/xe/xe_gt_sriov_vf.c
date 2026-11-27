@@ -38,7 +38,6 @@
 #include "xe_tlb_inval.h"
 #include "xe_uc_fw.h"
 #include "xe_wedge.h"
-#include "xe_wopcm.h"
 
 #define make_u64_from_u32(hi, lo) ((u64)((u64)(u32)(hi) << 32 | (u32)(lo)))
 

@@ -272,43 +272,38 @@ static int send_page_offline_cmd(struct xe_device *xe, u64 page_address,
 	request.page_address = page_address;
 	request.action = action;
 
-	if (action == XE_RAS_PAGE_ACTION_OFFLINE)
-		xe_log_err(xe, DEVICE_MEMORY, 0, "Requesting firmware to offline page 0x%llx\n",
-			   page_address);
-	else
-		xe_log_err(xe, DEVICE_MEMORY, 0, "Requesting firmware to remove page 0x%llx from queue\n",
-			   page_address);
-
 	xe_sysctrl_create_command(&command, XE_SYSCTRL_GROUP_GFSP, XE_SYSCTRL_CMD_PAGE_OFFLINE,
 				  &request, sizeof(request), &response, sizeof(response));
 
 	ret = xe_sysctrl_send_command(&xe->sc, &command, &rlen);
 	if (ret) {
-		xe_log_err(xe, SYSCTRL, ret, "failed to send page offline command\n");
+		xe_err(xe, "sysctrl: failed to send page offline command %d\n", ret);
 		return ret;
 	}
 
 	if (rlen != sizeof(response)) {
-		xe_log_err(xe, SYSCTRL, -EINVAL,
-			   "unexpected page offline response length %zu (expected %zu)\n",
-			   rlen, sizeof(response));
+		xe_err(xe, "sysctrl: unexpected page offline response length %zu (expected %zu)\n",
+		       rlen, sizeof(response));
 		return -EINVAL;
 	}
 
 	ret = ras_status_to_errno(response.status);
 	if (ret) {
-		xe_log_err(xe, SYSCTRL, ret, "page offline command failed with status %u\n",
-			   response.status);
+		xe_err(xe, "sysctrl: page offline command failed with status %#x\n",
+		       response.status);
 		return ret;
 	}
 
 	if (action == XE_RAS_PAGE_ACTION_OFFLINE) {
+		xe_info(xe, "[RAS]: Page address 0x%llx offlined\n", page_address);
 		ret = xa_err(xa_store(&state->offlined_pages,
 				      page_address >> XE_PTE_SHIFT,
 				      XE_RAS_PAGE_OFFLINED, GFP_KERNEL));
 		if (ret)
-			xe_err(xe, "Failed to store offlined page 0x%llx: %d\n", page_address,
-			       ret);
+			xe_err(xe, "[RAS]: Failed to store offlined page 0x%llx: %d\n",
+			       page_address, ret);
+	} else {
+		xe_info(xe, "[RAS]: Page address 0x%llx removed from queue\n", page_address);
 	}
 
 	return 0;
@@ -322,15 +317,14 @@ static int handle_page_offline(struct xe_device *xe, u64 page_address, bool noti
 	int ret;
 
 	if (!IS_ALIGNED(page_address, XE_PAGE_SIZE)) {
-		xe_log_err(xe, SYSCTRL, -EINVAL, "Unaligned physical page address: 0x%llx\n",
-			   page_address);
+		xe_err(xe, "[RAS]: Unaligned page address: 0x%llx\n", page_address);
 		return -EINVAL;
 	}
 
 	/* User policy set to disable page offlining */
 	if (xe_ras_get_disable_vram_page_offline(xe)) {
 		action = XE_RAS_PAGE_ACTION_REMOVE;
-		xe_log_err(xe, DEVICE_MEMORY, -EOPNOTSUPP, "User policy set to disable page offlining\n");
+		xe_dbg(xe, "[RAS]: User policy set to disable page offlining\n");
 		goto notify;
 	}
 
@@ -350,34 +344,23 @@ static int handle_page_offline(struct xe_device *xe, u64 page_address, bool noti
 	switch (ret) {
 	case 0:
 		action = XE_RAS_PAGE_ACTION_REMOVE;
-		xe_log_err(xe, DEVICE_MEMORY, ret,
-			   "Poison detected at physical address 0x%llx, page soft-offlined\n",
-			   page_address);
 		break;
 	case -EIO:
-		xe_log_err(xe, DEVICE_MEMORY, ret,
-			   "Poison detected at physical address 0x%llx, page belongs to critical BO and cannot be soft-offlined\n",
-			   page_address);
+		xe_err(xe, "[RAS]: Page address 0x%llx belongs to critical BO\n", page_address);
 		return ret;
 	case -EEXIST:
+		xe_dbg(xe, "[RAS]: Repeated error on already soft-offlined page address 0x%llx\n",
+		       page_address);
 		if (xa_load(&state->offlined_pages, page_address >> XE_PTE_SHIFT))
 			action = XE_RAS_PAGE_ACTION_REMOVE;
 		else
 			action = XE_RAS_PAGE_ACTION_OFFLINE;
-
-		xe_log_err(xe, DEVICE_MEMORY, ret,
-			   "Double-bit ECC error detected at physical address 0x%llx, page soft-offlined\n",
-			   page_address);
 		break;
 	case -ENOMEM:
-		xe_log_err(xe, DEVICE_MEMORY, ret,
-			   "Poison detected at physical address 0x%llx, failed to soft-offline\n",
-			   page_address);
-		return ret;
 	default:
-		xe_log_err(xe, DEVICE_MEMORY, ret, "Failed to handle address fault at physical address 0x%llx\n",
-			   page_address);
-		return 0;
+		xe_err(xe, "[RAS]: Failed to offline page address 0x%llx: %d\n", page_address, ret);
+		/* Only allocation failure is propagated, other errors are not actionable */
+		return ret == -ENOMEM ? ret : 0;
 	}
 
  notify:
@@ -437,15 +420,15 @@ static void process_offline_pages(struct xe_device *xe, u32 cmd, void *req, size
 
 		ret = xe_sysctrl_send_command(&xe->sc, &command, &rlen);
 		if (ret) {
-			xe_log_err(xe, SYSCTRL, ret, "failed to get page offline data, cmd=%#x\n",
-				   cmd);
+			xe_err(xe, "sysctrl: failed to get page offline data %d, cmd=%#x\n", ret,
+			       cmd);
 			return;
 		}
 
 		if (rlen != resp_size) {
-			xe_log_err(xe, SYSCTRL, -EINVAL,
-				   "unexpected page offline response length %zu (expected %zu), cmd=%#x\n",
-				   rlen, resp_size, cmd);
+			xe_err(xe,
+			       "sysctrl: unexpected page offline response length %zu (expected %zu), cmd=%#x\n",
+			       rlen, resp_size, cmd);
 			return;
 		}
 
@@ -475,9 +458,8 @@ static void process_offline_pages(struct xe_device *xe, u32 cmd, void *req, size
 			total_pages = common->total_pages;
 
 		if (count > total_pages) {
-			xe_log_err(xe, SYSCTRL, -EINVAL,
-				   "Pages returned exceed total pages %u, returned %u, cmd=%#x\n",
-				   total_pages, count, cmd);
+			xe_err(xe, "sysctrl: pages returned %u exceed total pages %u, cmd=%#x\n",
+			       count, total_pages, cmd);
 			return;
 		}
 	} while (common->additional_data);
@@ -763,8 +745,7 @@ static int get_counter(struct xe_device *xe, struct xe_ras_error_class *counter,
 	*value = response.value;
 	if (emit_cper)
 		xe_cper_emit_counter(xe, ras_sev_to_cper_sev(counter->common.severity),
-				     ras_comp_to_hw_sigid(counter->common.component),
-				     counter, &response);
+				     ras_comp_to_hw_sigid(counter->common.component), &response);
 	return 0;
 }
 
@@ -907,6 +888,11 @@ enum xe_ras_recovery_action xe_ras_process_errors(struct xe_device *xe)
 			case XE_RAS_COMP_DEVICE_MEMORY:
 				action = handle_device_memory_errors(xe, arr);
 				break;
+			case XE_RAS_COMP_FABRIC:
+				xe_log_comp(xe, ras_sev_to_cper_sev(severity), FABRIC,
+					    &arr->counter, sizeof(arr->counter),
+					    "error detected\n");
+				fallthrough;
 			default:
 				/* For any other component, reset */
 				action = XE_RAS_RECOVERY_ACTION_RESET;
@@ -1122,6 +1108,189 @@ int xe_ras_set_threshold(struct xe_device *xe, u8 severity, u8 component, u32 th
 	xe_dbg(xe, "[RAS]: set threshold %u for %s %s\n", response.threshold,
 	       comp_to_str(counter->common.component), sev_to_str(counter->common.severity));
 	return 0;
+}
+
+static int get_info_queue(struct xe_device *xe,
+			  struct xe_ras_get_info_queue_request *request,
+			  struct xe_ras_get_info_queue_response *response)
+{
+	struct xe_sysctrl_mailbox_command command = {0};
+	const struct xe_ras_info_queue_header *hdr;
+	size_t rlen;
+	int ret;
+
+	xe_sysctrl_create_command(&command, XE_SYSCTRL_GROUP_GFSP, XE_SYSCTRL_CMD_GET_INFO_QUEUE,
+				  request, sizeof(*request), response, sizeof(*response));
+
+	ret = xe_sysctrl_send_command(&xe->sc, &command, &rlen);
+	if (ret) {
+		xe_err(xe, "sysctrl: failed to get info queue %d\n", ret);
+		return ret;
+	}
+
+	if (rlen != sizeof(*response)) {
+		xe_err(xe, "sysctrl: unexpected get info queue response length %zu (expected %zu)\n",
+		       rlen, sizeof(*response));
+		return -EIO;
+	}
+
+	ret = ras_status_to_errno(response->status);
+	if (ret) {
+		xe_err(xe, "sysctrl: get info queue command failed with status %#x\n",
+		       response->status);
+		return ret;
+	}
+
+	hdr = &response->qdata_resp.header;
+	xe_dbg(xe, "[RAS]: get info queue: total=%u offset=%u size=%u flags=%#x num_headers=%u\n",
+	       hdr->total_size, hdr->chunk_offset, hdr->chunk_size, hdr->flags, hdr->num_headers);
+
+	return 0;
+}
+
+static bool chunk_is_valid(const struct xe_ras_info_queue_header *hdr,
+			   u32 expected_offset, u32 total_size, u32 dest_size)
+{
+	u32 end;
+
+	return hdr->total_size && hdr->total_size == total_size &&
+	       hdr->chunk_offset == expected_offset &&
+	       hdr->chunk_size && hdr->chunk_size <= XE_RAS_INFO_QUEUE_MAX_CHUNK_SIZE &&
+	       !check_add_overflow(hdr->chunk_offset, hdr->chunk_size, &end) &&
+	       end <= min_t(u32, total_size, XE_RAS_INFO_QUEUE_MAX_TOTAL_SIZE) &&
+	       end <= dest_size;
+}
+
+static u32 get_first_chunk(struct xe_device *xe,
+			   const struct xe_ras_get_counter_response *counter_resp,
+			   u8 *dest_buf, u32 dest_size, u32 *flags)
+{
+	const struct xe_ras_info_queue_header *hdr = &counter_resp->first.header;
+
+	if (!chunk_is_valid(hdr, 0, hdr->total_size, dest_size)) {
+		xe_warn(xe, "[RAS]: invalid first info queue chunk (total=%u offset=%u size=%u, expected offset=0)\n",
+			hdr->total_size, hdr->chunk_offset, hdr->chunk_size);
+		return 0;
+	}
+
+	memcpy(dest_buf, counter_resp->first.data, hdr->chunk_size);
+	*flags = hdr->flags;
+
+	return hdr->chunk_size;
+}
+
+static u32 get_remaining_chunks(struct xe_device *xe,
+				const struct xe_ras_get_counter_response *counter_resp,
+				u8 *dest_buf, u32 dest_size, u32 offset, u32 flags)
+{
+	u32 total_size = counter_resp->first.header.total_size;
+	u32 requests_left = XE_SYSCTRL_FLOOD_LIMIT * 2;
+	int ret;
+
+	while (flags & XE_RAS_INFO_QUEUE_FLAG_MORE_DATA && offset < dest_size) {
+		struct xe_ras_info_queue_data_request *qdata_req;
+		struct xe_ras_get_info_queue_response response = {};
+		struct xe_ras_get_info_queue_request request = {};
+		struct xe_ras_info_queue_header *hdr;
+
+		qdata_req = &request.qdata_req;
+		qdata_req->offset = offset;
+		qdata_req->size = min_t(u32, XE_RAS_INFO_QUEUE_MAX_CHUNK_SIZE, dest_size - offset);
+		qdata_req->session_id = counter_resp->counter;
+
+		ret = get_info_queue(xe, &request, &response);
+		if (ret) {
+			xe_err(xe, "[RAS]: info queue drain aborted: fetch at offset=%u, ret = %d\n",
+			       offset, ret);
+			return offset;
+		}
+
+		hdr = &response.qdata_resp.header;
+
+		if (!chunk_is_valid(hdr, offset, total_size, dest_size)) {
+			xe_warn(xe, "[RAS]: invalid info queue chunk (total=%u offset=%u size=%u, expected offset=%u)\n",
+				hdr->total_size, hdr->chunk_offset, hdr->chunk_size, offset);
+			return offset;
+		}
+
+		memcpy(dest_buf + offset, response.qdata_resp.data, hdr->chunk_size);
+		offset += hdr->chunk_size;
+		flags = hdr->flags;
+
+		if (!--requests_left) {
+			xe_warn(xe, "[RAS]: info queue flooding, aborted at offset=%u\n", offset);
+			break;
+		}
+	}
+
+	if (offset != dest_size) {
+		xe_warn(xe, "[RAS]: info queue drain incomplete, missed %u size\n",
+			dest_size - offset);
+	}
+
+	return min_t(u32, offset, dest_size);
+}
+
+/**
+ * xe_ras_get_info_queue_size() - Get the total size of the RAS info queue
+ * @xe: xe device
+ * @response: Counter response carrying the first info queue chunk
+ *
+ * Return: Info queue size in bytes, capped at the supported maximum, or zero
+ * if no usable info queue is present.
+ */
+u32 xe_ras_get_info_queue_size(struct xe_device *xe,
+			       const struct xe_ras_get_counter_response *response)
+{
+	u32 total_size;
+
+	if (!response->has_info_queue)
+		return 0;
+
+	total_size = response->first.header.total_size;
+	if (!total_size) {
+		xe_warn(xe, "[RAS]: info queue reports zero size\n");
+		return 0;
+	}
+
+	if (total_size > XE_RAS_INFO_QUEUE_MAX_TOTAL_SIZE) {
+		xe_warn(xe, "[RAS]: info queue size %u exceeds max size %u, truncating\n",
+			total_size, XE_RAS_INFO_QUEUE_MAX_TOTAL_SIZE);
+		total_size = XE_RAS_INFO_QUEUE_MAX_TOTAL_SIZE;
+	}
+	return total_size;
+}
+
+/**
+ * xe_ras_drain_info_queue() - Drain the full RAS info queue into a flat buffer
+ * @xe: xe device
+ * @response: counter response carrying the first embedded chunk
+ * @dest_buf: destination buffer supplied by the caller
+ * @dest_size: size of @dest_buf in bytes
+ *
+ * Copies the first chunk already embedded in @response, then loops
+ * issuing GET_INFO_QUEUE to fetch any remaining chunks until the queue
+ * signals no more data or a transport/bounds error is encountered.  On
+ * transport or bounds errors the function stops and returns whatever has
+ * been assembled so far.
+ *
+ * Returns: Number of valid bytes written into @dest_buf.
+ */
+u32 xe_ras_drain_info_queue(struct xe_device *xe,
+			    const struct xe_ras_get_counter_response *response,
+			    u8 *dest_buf, u32 dest_size)
+{
+	u32 flags, offset;
+
+	xe_assert(xe, response->has_info_queue);
+	xe_assert(xe, dest_buf);
+	xe_assert(xe, dest_size);
+
+	offset = get_first_chunk(xe, response, dest_buf, dest_size, &flags);
+	if (!offset)
+		return 0;
+
+	return get_remaining_chunks(xe, response, dest_buf, dest_size, offset, flags);
 }
 
 static ssize_t gpu_health_show(struct device *dev, struct device_attribute *attr, char *buf)

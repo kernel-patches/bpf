@@ -12,6 +12,11 @@
 
 #include "xe_ras_types.h"
 
+/* Entries built from RAS error logs carry fixed-size details */
+#define XE_CPER_INTEL_EVENT_SIZE \
+	(offsetof(struct xe_cper_intel_event, metadata) + \
+	 sizeof_field(struct xe_ras_error_log, details))
+
 /*
  * Validation bits definition for validation_bits in struct
  * xe_cper_intel_hdr. When set, corresponding fields in header
@@ -67,14 +72,50 @@ struct xe_cper_intel_hdr {
 	/** @drv_version: Driver source version string (THIS_MODULE->srcversion) */
 	char drv_version[25];
 	/** @reserved: Reserved for future use, must be zero */
-	u8 reserved[261];
+	u8 reserved[258];
+	/** @einfo_size: Size of xe_cper_intel_info */
+	u16 einfo_size;
+	/** @reserved1: Reserved for future use, must be zero */
+	u8 reserved1;
+} __packed;
+
+/**
+ * struct xe_cper_intel_info - Variable-length Intel-specific CPER error information
+ *
+ * Contains the counter and event queue, and is appended after
+ * &xe_cper_intel_hdr when detailed error information is available.
+ */
+struct xe_cper_intel_info {
+	/** @counter: Error class (severity, component, location, cause) */
+	struct xe_ras_error_class counter;
+	/** @error_count: Total number of errors recorded */
+	u32 error_count;
+	/** @event_queue_size: Total size of @event_queue in bytes */
+	u32 event_queue_size;
+	/** @event_queue_count: Number of events in @event_queue */
+	u32 event_queue_count;
+	/** @event_queue: Packed array of xe_cper_intel_event records */
+	u8 event_queue[];
+} __packed;
+
+/**
+ * struct xe_cper_intel_event - Single error event in the CPER event queue
+ */
+struct xe_cper_intel_event {
+	/** @size: Byte size of the @metadata payload */
+	u32 size;
+	/** @timestamp: &xe_ras_error_log::timestamp */
+	u64 timestamp;
+	/** @metadata: &xe_ras_error_log::details */
+	u8 metadata[];
 } __packed;
 
 /**
  * struct xe_cper_nonstd_record - Intel GPU CPER record
  *
  * Contains the standard CPER record header, section descriptor, and the
- * Intel error section header.
+ * Intel section header. A &xe_cper_intel_info payload may be
+ * appended dynamically.
  */
 struct xe_cper_nonstd_record {
 	/** @record_hdr: Standard CPER record header (UEFI Appendix N.2.1) */
@@ -97,6 +138,20 @@ struct xe_device_guid_entry {
 	u16       device_id;
 	/** @guid: Corresponding UUIDv5 device GUID */
 	guid_t    guid;
+};
+
+/**
+ * struct xe_cper_info_entry - One CPER info payload and its source counter
+ */
+struct xe_cper_info_entry {
+	/** @hdr: Error class and error count used for the CPER section header */
+	struct xe_ras_dynamic_counter_hdr hdr;
+	/** @einfo: Allocated info payload, NULL if none */
+	struct xe_cper_intel_info *einfo;
+	/** @einfo_size: Byte size of @einfo including the event queue */
+	u32 einfo_size;
+	/** @timestamp: Timestamp of the first occurrence of this error class */
+	u64 timestamp;
 };
 
 /**
