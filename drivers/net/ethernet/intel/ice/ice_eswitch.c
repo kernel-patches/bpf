@@ -11,6 +11,34 @@
 #include "ice_tc_lib.h"
 
 /**
+ * ice_eswitch_resync_uplink - hand the uplink filters back after switchdev
+ * @uplink_vsi: the uplink VSI
+ */
+static void ice_eswitch_resync_uplink(struct ice_vsi *uplink_vsi)
+{
+	struct ice_pf *pf = uplink_vsi->back;
+
+	while (test_and_set_bit(ICE_CFG_BUSY, uplink_vsi->state))
+		usleep_range(1000, 2000);
+
+	/* VLAN changes during the session may have added these */
+	ice_fltr_clear_vlan_vsi_promisc(&pf->hw, uplink_vsi,
+					ICE_MCAST_VLAN_PROMISC_BITS);
+	ice_fltr_clear_vsi_promisc(&pf->hw, uplink_vsi->idx,
+				   ICE_MCAST_PROMISC_BITS, 0);
+	uplink_vsi->current_netdev_flags &= ~IFF_ALLMULTI;
+
+	clear_bit(ICE_VSI_ESWITCH_UPLINK, uplink_vsi->state);
+	set_bit(ICE_VSI_PROMISC_CHANGED, uplink_vsi->state);
+	set_bit(ICE_VSI_UMAC_FLTR_CHANGED, uplink_vsi->state);
+	set_bit(ICE_VSI_MMAC_FLTR_CHANGED, uplink_vsi->state);
+	clear_bit_unlock(ICE_CFG_BUSY, uplink_vsi->state);
+
+	set_bit(ICE_FLAG_FLTR_SYNC, pf->flags);
+	ice_service_task_schedule(pf);
+}
+
+/**
  * ice_eswitch_setup_env - configure eswitch HW filters
  * @pf: pointer to PF struct
  *
@@ -27,6 +55,12 @@ static int ice_eswitch_setup_env(struct ice_pf *pf)
 	if (if_running && !test_and_set_bit(ICE_VSI_DOWN, uplink_vsi->state))
 		if (ice_down(uplink_vsi))
 			return -ENODEV;
+
+	/* the eswitch owns the uplink promisc config until the resync */
+	while (test_and_set_bit(ICE_CFG_BUSY, uplink_vsi->state))
+		usleep_range(1000, 2000);
+	set_bit(ICE_VSI_ESWITCH_UPLINK, uplink_vsi->state);
+	clear_bit_unlock(ICE_CFG_BUSY, uplink_vsi->state);
 
 	ice_remove_vsi_fltr(&pf->hw, uplink_vsi->idx);
 	ice_vsi_cfg_sw_lldp(uplink_vsi, true, false);
@@ -76,6 +110,8 @@ err_vlan_zero:
 				       ICE_FWD_TO_VSI);
 	if (if_running)
 		ice_up(uplink_vsi);
+
+	ice_eswitch_resync_uplink(uplink_vsi);
 
 	return -ENODEV;
 }
@@ -318,6 +354,7 @@ static int ice_eswitch_enable_switchdev(struct ice_pf *pf)
 
 err_br_offloads:
 	ice_eswitch_release_env(pf);
+	ice_eswitch_resync_uplink(uplink_vsi);
 	return -ENODEV;
 }
 
@@ -331,6 +368,9 @@ static void ice_eswitch_disable_switchdev(struct ice_pf *pf)
 	ice_eswitch_release_env(pf);
 
 	pf->eswitch.is_running = false;
+
+	/* after is_running is cleared, so no rx mode change is lost */
+	ice_eswitch_resync_uplink(pf->eswitch.uplink_vsi);
 }
 
 /**

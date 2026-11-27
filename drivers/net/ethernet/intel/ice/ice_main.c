@@ -394,6 +394,10 @@ static int ice_vsi_sync_fltr(struct ice_vsi *vsi)
 		}
 	}
 	err = 0;
+	/* the eswitch owns the uplink promisc config during a session */
+	if (test_bit(ICE_VSI_ESWITCH_UPLINK, vsi->state))
+		goto exit;
+
 	/* check for changes in promiscuous modes */
 	if (changed_flags & IFF_ALLMULTI) {
 		if (vsi->current_netdev_flags & IFF_ALLMULTI) {
@@ -438,6 +442,12 @@ static int ice_vsi_sync_fltr(struct ice_vsi *vsi)
 						      ICE_MCAST_PROMISC_BITS);
 				if (err)
 					goto out_promisc;
+			} else if (ice_is_vsi_dflt_vsi(vsi)) {
+				/* still the default VSI, so subscribe it */
+				err = ice_set_promisc(vsi,
+						      ICE_MCAST_PROMISC_BITS);
+				if (err)
+					goto out_promisc;
 			}
 		} else {
 			/* Clear Rx filter to remove traffic from wire */
@@ -450,10 +460,11 @@ static int ice_vsi_sync_fltr(struct ice_vsi *vsi)
 						IFF_PROMISC;
 					goto out_promisc;
 				}
-				if (vsi->netdev->features &
-				    NETIF_F_HW_VLAN_CTAG_FILTER)
-					vlan_ops->ena_rx_filtering(vsi);
 			}
+
+			/* pruning can be off even without our DFLT rule */
+			if (vsi->netdev->features & NETIF_F_HW_VLAN_CTAG_FILTER)
+				vlan_ops->ena_rx_filtering(vsi);
 
 			/* disable allmulti here, but only if allmulti is not
 			 * still enabled for the netdev
