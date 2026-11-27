@@ -63,10 +63,4 @@ static inline void intel_uncore_write_fw(struct intel_uncore *uncore,
 	xe_mmio_write32(__compat_uncore_to_mmio(uncore), reg, val);
 }
 
-static inline bool
-intel_uncore_arm_unclaimed_mmio_detection(struct intel_uncore *uncore)
-{
-	return false;
-}
-
 #endif /* __INTEL_UNCORE_H__ */

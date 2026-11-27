@@ -1752,8 +1752,8 @@ static bool _panel_replay_compute_config(struct intel_crtc_state *crtc_state,
 
 	/* Remaining checks are for eDP only */
 
-	/* Every joined pipe needs its own PSR/Panel Replay register block. */
-	if (intel_crtc_joined_pipe_mask(crtc_state) & ~(BIT(PIPE_A) | BIT(PIPE_B)))
+	/* PSR/PR is per transcoder, joined pipes use the primary's. */
+	if (!transcoder_has_psr2(display, crtc_state->cpu_transcoder))
 		return false;
 
 	/* 128b/132b Panel Replay is not supported on eDP */

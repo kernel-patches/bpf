@@ -27,7 +27,6 @@
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 
-#include "display/intel_display_core.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_regs.h"
@@ -42,6 +41,14 @@
 
 #define FORCEWAKE_ACK_TIMEOUT_MS 50
 #define GT_FIFO_TIMEOUT_MS	 10
+
+/* Iterate over initialised fw domains */
+#define for_each_fw_domain_masked(domain__, mask__, uncore__, tmp__) \
+	for (tmp__ = (mask__); tmp__ ;) \
+		for_each_if(domain__ = (uncore__)->fw_domain[__mask_next_bit(tmp__)])
+
+#define for_each_fw_domain(domain__, uncore__, tmp__) \
+	for_each_fw_domain_masked(domain__, (uncore__)->fw_domains, uncore__, tmp__)
 
 struct intel_uncore *to_intel_uncore(struct drm_device *drm)
 {
@@ -2690,6 +2697,24 @@ intel_uncore_forcewake_for_reg(struct intel_uncore *uncore,
 	drm_WARN_ON(&uncore->i915->drm, fw_domains & ~uncore->fw_domains);
 
 	return fw_domains;
+}
+
+void intel_uncore_fw_domains_show(struct seq_file *m, struct intel_uncore *uncore)
+{
+	struct intel_uncore_forcewake_domain *fw_domain;
+	unsigned int tmp;
+
+	spin_lock_irq(&uncore->lock);
+
+	seq_printf(m, "user.bypass_count = %u\n",
+		   uncore->user_forcewake_count);
+
+	for_each_fw_domain(fw_domain, uncore, tmp)
+		seq_printf(m, "%s.wake_count = %u\n",
+			   intel_uncore_forcewake_domain_to_str(fw_domain->id),
+			   READ_ONCE(fw_domain->wake_count));
+
+	spin_unlock_irq(&uncore->lock);
 }
 
 #if IS_ENABLED(CONFIG_DRM_I915_SELFTEST)

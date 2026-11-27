@@ -16,6 +16,17 @@ struct intel_encoder;
 struct intel_panel;
 enum pipe;
 
+struct intel_panel_bl_funcs {
+	/* Connector and platform specific backlight functions */
+	int (*setup)(struct intel_connector *connector, enum pipe pipe);
+	u32 (*get)(struct intel_connector *connector, enum pipe pipe);
+	void (*set)(const struct drm_connector_state *conn_state, u32 level);
+	void (*disable)(const struct drm_connector_state *conn_state, u32 level);
+	void (*enable)(const struct intel_crtc_state *crtc_state,
+		       const struct drm_connector_state *conn_state, u32 level);
+	u32 (*hz_to_pwm)(struct intel_connector *connector, u32 hz);
+};
+
 void intel_backlight_init_funcs(struct intel_panel *panel);
 int intel_backlight_setup(struct intel_connector *connector, enum pipe pipe);
 void intel_backlight_destroy(struct intel_panel *panel);

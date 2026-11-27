@@ -27,6 +27,7 @@
 #include <drm/drm_print.h>
 #include <video/mipi_display.h>
 
+#include "intel_backlight.h"
 #include "intel_display_core.h"
 #include "intel_display_types.h"
 #include "intel_dsi.h"

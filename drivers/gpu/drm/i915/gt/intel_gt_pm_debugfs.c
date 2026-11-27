@@ -70,20 +70,8 @@ static int fw_domains_show(struct seq_file *m, void *data)
 {
 	struct intel_gt *gt = m->private;
 	struct intel_uncore *uncore = gt->uncore;
-	struct intel_uncore_forcewake_domain *fw_domain;
-	unsigned int tmp;
 
-	spin_lock_irq(&uncore->lock);
-
-	seq_printf(m, "user.bypass_count = %u\n",
-		   uncore->user_forcewake_count);
-
-	for_each_fw_domain(fw_domain, uncore, tmp)
-		seq_printf(m, "%s.wake_count = %u\n",
-			   intel_uncore_forcewake_domain_to_str(fw_domain->id),
-			   READ_ONCE(fw_domain->wake_count));
-
-	spin_unlock_irq(&uncore->lock);
+	intel_uncore_fw_domains_show(m, uncore);
 
 	return 0;
 }

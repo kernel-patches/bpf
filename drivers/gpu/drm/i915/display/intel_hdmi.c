@@ -561,8 +561,10 @@ void hsw_write_infoframe(struct intel_encoder *encoder,
 	      !crtc_state->has_panel_replay && type == DP_SDP_VSC))
 		val |= hsw_infoframe_enable(type);
 
-	if (type == DP_SDP_VSC)
+	if (type == DP_SDP_VSC) {
+		val &= ~VSC_SELECT_MASK;
 		val |= VSC_DIP_HW_DATA_SW_HEA;
+	}
 
 	intel_de_write(display, ctl_reg, val);
 	intel_de_posting_read(display, ctl_reg);
@@ -1570,8 +1572,8 @@ int intel_hdmi_hdcp_toggle_signalling(struct intel_digital_port *dig_port,
 					 cpu_transcoder, enable,
 					 TRANS_DDI_HDCP_SIGNALLING);
 	if (ret) {
-		drm_err(display->drm, "%s HDCP signalling failed (%d)\n",
-			enable ? "Enable" : "Disable", ret);
+		drm_err(display->drm, "HDCP signalling %s failed (%pe)\n",
+			str_enable_disable(enable), ERR_PTR(ret));
 		return ret;
 	}
 

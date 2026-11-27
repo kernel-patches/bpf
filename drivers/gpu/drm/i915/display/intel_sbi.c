@@ -81,6 +81,18 @@ void intel_sbi_write(struct intel_display *display, u16 reg, u32 value,
 	intel_sbi_rw(display, reg, destination, &value, false);
 }
 
+u32 intel_sbi_rmw(struct intel_display *display, u16 reg, u32 clear, u32 set,
+		  enum intel_sbi_destination destination)
+{
+	u32 old, val;
+
+	old = intel_sbi_read(display, reg, destination);
+	val = (old & ~clear) | set;
+	intel_sbi_write(display, reg, val, destination);
+
+	return old;
+}
+
 void intel_sbi_init(struct intel_display *display)
 {
 	mutex_init(&display->sbi.lock);

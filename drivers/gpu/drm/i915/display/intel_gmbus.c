@@ -891,90 +891,6 @@ static const struct i2c_algorithm gmbus_algorithm = {
 	.functionality	= gmbus_func
 };
 
-static bool intel_gmbus_is_adapter(struct intel_connector *connector)
-{
-	struct i2c_adapter *adapter = connector->base.ddc;
-
-	return adapter && adapter->algo == &gmbus_algorithm;
-}
-
-static int intel_force_bit_banging_show(struct seq_file *m, void *data)
-{
-	struct intel_connector *connector = m->private;
-	struct intel_gmbus *bus = container_of(connector->base.ddc,
-					       struct intel_gmbus, adapter);
-	struct intel_display *display = bus->display;
-	bool force_bit_banging;
-
-	mutex_lock(&display->gmbus.mutex);
-	force_bit_banging = bus->debugfs_force_bit;
-	mutex_unlock(&display->gmbus.mutex);
-
-	seq_printf(m, "%u\n", force_bit_banging);
-
-	return 0;
-}
-
-static ssize_t intel_force_bit_banging_write(struct file *file,
-					     const char __user *ubuf,
-					     size_t len, loff_t *offp)
-{
-	struct seq_file *m = file->private_data;
-	struct intel_connector *connector = m->private;
-	struct intel_gmbus *bus = container_of(connector->base.ddc,
-					       struct intel_gmbus, adapter);
-	struct intel_display *display = bus->display;
-	bool force_bit_banging;
-	bool changed = false;
-	u32 force_bit = 0;
-	int ret;
-
-	ret = kstrtobool_from_user(ubuf, len, &force_bit_banging);
-	if (ret)
-		return ret;
-
-	mutex_lock(&display->gmbus.mutex);
-	if (force_bit_banging != bus->debugfs_force_bit) {
-		bus->force_bit += force_bit_banging ? 1 : -1;
-		force_bit = bus->force_bit;
-		bus->debugfs_force_bit = force_bit_banging;
-		changed = true;
-	}
-	mutex_unlock(&display->gmbus.mutex);
-
-	if (changed)
-		drm_dbg_kms(display->drm,
-			    "%sabling bit-banging on %s. force bit now %d\n",
-			    force_bit_banging ? "en" : "dis",
-			    connector->base.ddc->name, force_bit);
-
-	*offp += len;
-
-	return len;
-}
-
-static int intel_force_bit_banging_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, intel_force_bit_banging_show, inode->i_private);
-}
-
-static const struct file_operations intel_force_bit_banging_fops = {
-	.owner = THIS_MODULE,
-	.open = intel_force_bit_banging_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-	.write = intel_force_bit_banging_write,
-};
-
-void intel_gmbus_connector_debugfs_add(struct intel_connector *connector)
-{
-	if (intel_gmbus_is_adapter(connector))
-		debugfs_create_file("intel_force_bit_banging", 0644,
-				    connector->base.debugfs_entry, connector,
-				    &intel_force_bit_banging_fops);
-}
-
 static void gmbus_lock_bus(struct i2c_adapter *adapter,
 			   unsigned int flags)
 {
@@ -1099,19 +1015,26 @@ struct i2c_adapter *intel_gmbus_get_adapter(struct intel_display *display,
 	return &display->gmbus.bus[pin]->adapter;
 }
 
+static void intel_gmbus_force_bit_unlocked(struct i2c_adapter *adapter, bool force_bit)
+{
+	struct intel_gmbus *bus = to_intel_gmbus(adapter);
+	struct intel_display *display = bus->display;
+
+	lockdep_assert_held(&display->gmbus.mutex);
+
+	bus->force_bit += force_bit ? 1 : -1;
+	drm_dbg_kms(display->drm, "%s bit-banging on %s. force bit now %d\n",
+		    str_enable_disable(force_bit), adapter->name,
+		    bus->force_bit);
+}
+
 void intel_gmbus_force_bit(struct i2c_adapter *adapter, bool force_bit)
 {
 	struct intel_gmbus *bus = to_intel_gmbus(adapter);
 	struct intel_display *display = bus->display;
 
 	mutex_lock(&display->gmbus.mutex);
-
-	bus->force_bit += force_bit ? 1 : -1;
-	drm_dbg_kms(display->drm,
-		    "%sabling bit-banging on %s. force bit now %d\n",
-		    force_bit ? "en" : "dis", adapter->name,
-		    bus->force_bit);
-
+	intel_gmbus_force_bit_unlocked(adapter, force_bit);
 	mutex_unlock(&display->gmbus.mutex);
 }
 
@@ -1143,4 +1066,71 @@ void intel_gmbus_teardown(struct intel_display *display)
 void intel_gmbus_irq_handler(struct intel_display *display)
 {
 	wake_up_all(&display->gmbus.wait_queue);
+}
+
+static int intel_force_bit_banging_show(struct seq_file *m, void *data)
+{
+	struct i2c_adapter *adapter = m->private;
+	struct intel_gmbus *bus = to_intel_gmbus(adapter);
+	struct intel_display *display = bus->display;
+	bool force_bit_banging;
+
+	mutex_lock(&display->gmbus.mutex);
+	force_bit_banging = bus->debugfs_force_bit;
+	mutex_unlock(&display->gmbus.mutex);
+
+	seq_printf(m, "%u\n", force_bit_banging);
+
+	return 0;
+}
+
+static ssize_t intel_force_bit_banging_write(struct file *file,
+					     const char __user *ubuf,
+					     size_t len, loff_t *offp)
+{
+	struct seq_file *m = file->private_data;
+	struct i2c_adapter *adapter = m->private;
+	struct intel_gmbus *bus = to_intel_gmbus(adapter);
+	struct intel_display *display = bus->display;
+	bool force_bit;
+	int ret;
+
+	ret = kstrtobool_from_user(ubuf, len, &force_bit);
+	if (ret)
+		return ret;
+
+	mutex_lock(&display->gmbus.mutex);
+	if (force_bit != bus->debugfs_force_bit) {
+		intel_gmbus_force_bit_unlocked(adapter, force_bit);
+		bus->debugfs_force_bit = force_bit;
+	}
+	mutex_unlock(&display->gmbus.mutex);
+
+	*offp += len;
+
+	return len;
+}
+
+static int intel_force_bit_banging_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, intel_force_bit_banging_show, inode->i_private);
+}
+
+static const struct file_operations intel_force_bit_banging_fops = {
+	.owner = THIS_MODULE,
+	.open = intel_force_bit_banging_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+	.write = intel_force_bit_banging_write,
+};
+
+void intel_gmbus_connector_debugfs_add(struct intel_connector *connector)
+{
+	struct i2c_adapter *adapter = connector->base.ddc;
+
+	if (adapter && adapter->algo == &gmbus_algorithm)
+		debugfs_create_file("intel_force_bit_banging", 0644,
+				    connector->base.debugfs_entry, adapter,
+				    &intel_force_bit_banging_fops);
 }
