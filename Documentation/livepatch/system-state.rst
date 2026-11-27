@@ -6,9 +6,10 @@ Some users are really reluctant to reboot a system. This brings the need
 to provide more livepatches and maintain some compatibility between them.
 
 Maintaining more livepatches is much easier with cumulative livepatches.
-Each new livepatch completely replaces any older one. It can keep,
-add, and even remove fixes. And it is typically safe to replace any version
-of the livepatch with any other one thanks to the atomic replace feature.
+A new version of a cumulative livepatch with the same ``provides`` id
+completely replaces the older one. It can keep, add, and even remove fixes.
+And it is typically safe to replace any version of the livepatch with any
+other one thanks to the atomic replace feature.
 
 The problems might come with shadow variables and callbacks. They might
 change the system behavior or state so that it is no longer safe to
@@ -70,14 +71,15 @@ The check is done when the livepatch is enabled. The rules are:
 
   - Any completely new system state modification is allowed.
 
-  - System state modifications with the same or higher version are allowed
-    for already modified system states.
+  - A livepatch that replaces an existing one must handle all system
+    state modifications from the livepatches that are being replaced.
+    The version of the state must be the same or higher than the
+    version of the state that is being replaced.
 
-  - Cumulative livepatches must handle all system state modifications from
-    already installed livepatches.
-
-  - Non-cumulative livepatches are allowed to touch already modified
-    system states.
+  - A livepatch that does not replace any existing one must not touch
+    already modified system states. It would conflict with the already
+    installed livepatches and the load would get rejected, see
+    the conflict rules in Documentation/livepatch/cumulative-patches.rst.
 
 3. Supported scenarios
 ======================
