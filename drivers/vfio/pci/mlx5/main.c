@@ -884,8 +884,8 @@ static ssize_t mlx5vf_resume_write(struct file *filp, const char __user *buf,
 				   size_t len, loff_t *pos)
 {
 	struct mlx5_vf_migration_file *migf = filp->private_data;
-	struct mlx5_vhca_data_buffer *vhca_buf = migf->buf[0];
-	struct mlx5_vhca_data_buffer *vhca_buf_header = migf->buf_header[0];
+	struct mlx5_vhca_data_buffer *vhca_buf;
+	struct mlx5_vhca_data_buffer *vhca_buf_header;
 	loff_t requested_length;
 	bool has_work = false;
 	ssize_t done = 0;
@@ -895,16 +895,21 @@ static ssize_t mlx5vf_resume_write(struct file *filp, const char __user *buf,
 		return -ESPIPE;
 	pos = &filp->f_pos;
 
-	if (*pos < 0 ||
-	    check_add_overflow((loff_t)len, *pos, &requested_length))
-		return -EINVAL;
-
 	mutex_lock(&migf->mvdev->state_mutex);
 	mutex_lock(&migf->lock);
 	if (migf->state == MLX5_MIGF_STATE_ERROR) {
 		ret = -ENODEV;
 		goto out_unlock;
 	}
+
+	if (*pos < 0 ||
+	    check_add_overflow((loff_t)len, *pos, &requested_length)) {
+		done = -EINVAL;
+		goto out_unlock;
+	}
+
+	vhca_buf = migf->buf[0];
+	vhca_buf_header = migf->buf_header[0];
 
 	while (len || has_work) {
 		has_work = false;

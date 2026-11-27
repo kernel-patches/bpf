@@ -90,6 +90,8 @@ FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES(null_uuid, NULL);
 
 FIXTURE_SETUP(vfio_pci_sriov_uapi_test)
 {
+	SKIP_IF_IOMMU_MODE_UNAVAILABLE(return, variant->iommu_mode);
+
 	self->iommu = iommu_init(variant->iommu_mode);
 
 	self->pf_token = UUID_1;
@@ -163,6 +165,8 @@ TEST(failed_second_open_does_not_clobber_token)
 	struct iommu *iommu;
 	int ret;
 
+	SKIP_IF_IOMMU_MODE_UNAVAILABLE(return, MODE_IOMMUFD);
+
 	iommu = iommu_init(MODE_IOMMUFD);
 
 	/* Create and bind PF using UUID_1 */
@@ -210,6 +214,7 @@ static void vf_setup(void)
 {
 	char *vf_driver;
 	int nr_vfs;
+	int ret;
 
 	nr_vfs = sysfs_sriov_totalvfs_get(pf_bdf);
 	if (nr_vfs <= 0)
@@ -220,7 +225,12 @@ static void vf_setup(void)
 		ksft_exit_skip("SR-IOV already configured for the PF: %s\n", pf_bdf);
 
 	/* Create only one VF for testing */
-	sysfs_sriov_numvfs_set(pf_bdf, 1);
+	ret = __sysfs_sriov_numvfs_set(pf_bdf, 1);
+	if (ret == -ENOENT)
+		ksft_exit_skip("Cannot enable SR-IOV on %s (vfio-pci requires enable_sriov=1)\n",
+			       pf_bdf);
+
+	VFIO_ASSERT_EQ(ret, 0);
 
 	/*
 	 * Setup an exit handler to destroy the VF in case of failures

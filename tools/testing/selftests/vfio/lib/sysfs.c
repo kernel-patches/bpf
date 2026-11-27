@@ -33,15 +33,12 @@ static void readlink_base(const char *path, const char *data_fmt, void *out_data
 	VFIO_ASSERT_EQ(ret, 1);
 }
 
-static int sysfs_val_get_int(const char *component, const char *name,
-			     const char *file)
+static int sysfs_path_get_int(const char *path)
 {
-	char path[PATH_MAX];
 	char buf[32];
 	int ret;
 	int fd;
 
-	snprintf_assert(path, PATH_MAX, "/sys/bus/pci/%s/%s/%s", component, name, file);
 	fd = open(path, O_RDONLY);
 	if (fd < 0)
 		return fd;
@@ -56,17 +53,33 @@ static int sysfs_val_get_int(const char *component, const char *name,
 	return ret;
 }
 
-static void sysfs_val_set(const char *component, const char *name,
-			  const char *file, const char *val)
+static int sysfs_val_get_int(const char *component, const char *name,
+			     const char *file)
 {
 	char path[PATH_MAX];
+
+	snprintf_assert(path, PATH_MAX, "/sys/bus/pci/%s/%s/%s", component, name, file);
+	return sysfs_path_get_int(path);
+}
+
+static int sysfs_val_set(const char *component, const char *name,
+			 const char *file, const char *val)
+{
+	char path[PATH_MAX];
+	ssize_t ret;
 	int fd;
 
 	snprintf_assert(path, PATH_MAX, "/sys/bus/pci/%s/%s/%s", component, name, file);
 	VFIO_ASSERT_GT(fd = open(path, O_WRONLY), 0);
 
-	VFIO_ASSERT_EQ(write(fd, val, strlen(val)), strlen(val));
+	ret = write(fd, val, strlen(val));
+	if (ret < 0)
+		ret = -errno;
+	else
+		VFIO_ASSERT_EQ(ret, strlen(val));
+
 	VFIO_ASSERT_EQ(close(fd), 0);
+	return ret < 0 ? ret : 0;
 }
 
 static int sysfs_device_val_get(const char *bdf, const char *file)
@@ -74,17 +87,17 @@ static int sysfs_device_val_get(const char *bdf, const char *file)
 	return sysfs_val_get_int("devices", bdf, file);
 }
 
-static void sysfs_device_val_set(const char *bdf, const char *file, const char *val)
+static int sysfs_device_val_set(const char *bdf, const char *file, const char *val)
 {
-	sysfs_val_set("devices", bdf, file, val);
+	return sysfs_val_set("devices", bdf, file, val);
 }
 
-static void sysfs_device_val_set_int(const char *bdf, const char *file, int val)
+static int sysfs_device_val_set_int(const char *bdf, const char *file, int val)
 {
 	char val_str[32];
 
 	snprintf_assert(val_str, sizeof(val_str), "%d", val);
-	sysfs_device_val_set(bdf, file, val_str);
+	return sysfs_device_val_set(bdf, file, val_str);
 }
 
 int sysfs_sriov_totalvfs_get(const char *bdf)
@@ -97,9 +110,24 @@ int sysfs_sriov_numvfs_get(const char *bdf)
 	return sysfs_device_val_get(bdf, "sriov_numvfs");
 }
 
+/**
+ * __sysfs_sriov_numvfs_set() - Set the number of VFs enabled on a PF
+ * @bdf: BDF of the PF.
+ * @numvfs: Number of VFs to enable, or 0 to disable SR-IOV.
+ *
+ * Return: 0 on success, or a negative errno on failure. The kernel returns
+ * -ENOENT if SR-IOV cannot be configured on the PF, e.g. because its driver
+ * does not support configuring SR-IOV or has it disabled (vfio-pci unless its
+ * enable_sriov module parameter is set).
+ */
+int __sysfs_sriov_numvfs_set(const char *bdf, int numvfs)
+{
+	return sysfs_device_val_set_int(bdf, "sriov_numvfs", numvfs);
+}
+
 void sysfs_sriov_numvfs_set(const char *bdf, int numvfs)
 {
-	sysfs_device_val_set_int(bdf, "sriov_numvfs", numvfs);
+	VFIO_ASSERT_EQ(__sysfs_sriov_numvfs_set(bdf, numvfs), 0);
 }
 
 char *sysfs_sriov_vf_bdf_get(const char *pf_bdf, int i)
@@ -147,4 +175,18 @@ char *sysfs_driver_get(const char *bdf)
 	VFIO_ASSERT_NOT_NULL(out_driver);
 
 	return out_driver;
+}
+
+/**
+ * sysfs_kernel_warn_count_get() - Get the number of kernel warnings since boot
+ *
+ * Read /sys/kernel/warn_count, which counts the warnings (e.g. WARN(), KASAN,
+ * and UBSAN reports) the kernel has encountered since boot.
+ *
+ * Return: The number of warnings, or a negative value if the kernel does not
+ * support /sys/kernel/warn_count.
+ */
+int sysfs_kernel_warn_count_get(void)
+{
+	return sysfs_path_get_int("/sys/kernel/warn_count");
 }

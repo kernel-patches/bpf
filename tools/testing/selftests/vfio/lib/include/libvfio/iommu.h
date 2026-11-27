@@ -15,8 +15,6 @@ struct iommu_mode {
 	unsigned long iommu_type;
 };
 
-extern const char *default_iommu_mode;
-
 struct dma_region {
 	struct list_head link;
 	void *vaddr;
@@ -32,8 +30,36 @@ struct iommu {
 	struct list_head dma_regions;
 };
 
+/*
+ * Pass NULL for iommu_mode to use the most preferred IOMMU mode that is
+ * available on the current system. iommu_init() fails the test if the mode
+ * is not available, so check iommu_mode_is_available() first to skip instead.
+ */
 struct iommu *iommu_init(const char *iommu_mode);
 void iommu_cleanup(struct iommu *iommu);
+
+/*
+ * Returns true if the given IOMMU mode is available on the current system,
+ * or, if iommu_mode is NULL, if any IOMMU mode is available.
+ */
+bool iommu_mode_is_available(const char *iommu_mode);
+
+/*
+ * Returns a message explaining that the given IOMMU mode is not available,
+ * or, if iommu_mode is NULL, that no IOMMU mode is available, e.g. for tests
+ * to print when skipping. The returned string may be overwritten by the next
+ * call.
+ */
+const char *iommu_mode_unavailable_msg(const char *iommu_mode);
+
+/* Returns a comma-separated list of the names of all IOMMU modes. */
+const char *iommu_mode_names_all(void);
+
+/*
+ * Returns a comma-separated list of the names of the IOMMU modes that are
+ * available on the current system, or "none" if no IOMMU mode is available.
+ */
+const char *iommu_mode_names_available(void);
 
 int __iommu_map(struct iommu *iommu, struct dma_region *region);
 
@@ -78,5 +104,18 @@ FIXTURE_VARIANT_ADD_IOMMU_MODE(vfio_type1v2_iommu, ##__VA_ARGS__); \
 FIXTURE_VARIANT_ADD_IOMMU_MODE(iommufd_compat_type1, ##__VA_ARGS__); \
 FIXTURE_VARIANT_ADD_IOMMU_MODE(iommufd_compat_type1v2, ##__VA_ARGS__); \
 FIXTURE_VARIANT_ADD_IOMMU_MODE(iommufd, ##__VA_ARGS__)
+
+/*
+ * Skip the current kselftest harness test if _iommu_mode is not available,
+ * or, if _iommu_mode is NULL, if no IOMMU mode is available. The statement
+ * argument is passed to SKIP(), e.g. return.
+ */
+#define SKIP_IF_IOMMU_MODE_UNAVAILABLE(statement, _iommu_mode) do {		\
+	const char *__iommu_mode = (_iommu_mode);				\
+										\
+	if (!iommu_mode_is_available(__iommu_mode))				\
+		SKIP(statement, "%s",						\
+		     iommu_mode_unavailable_msg(__iommu_mode));			\
+} while (0)
 
 #endif /* SELFTESTS_VFIO_LIB_INCLUDE_LIBVFIO_IOMMU_H */

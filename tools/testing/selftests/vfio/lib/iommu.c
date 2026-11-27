@@ -20,14 +20,18 @@
 #include "../../../kselftest.h"
 #include <libvfio.h>
 
-const char *default_iommu_mode = MODE_IOMMUFD;
+#define NO_IOMMU_MODE_AVAILABLE_MSG \
+	"No IOMMU mode is available. Is VFIO (or IOMMUFD) loaded and enabled?"
 
-/* Reminder: Keep in sync with FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES(). */
+/*
+ * Ordered by preference, i.e. iommu_init(NULL) picks the first mode in this
+ * list that is available on the current system.
+ *
+ * Reminder: Keep in sync with FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES().
+ */
 static const struct iommu_mode iommu_modes[] = {
 	{
-		.name = MODE_VFIO_TYPE1_IOMMU,
-		.container_path = "/dev/vfio/vfio",
-		.iommu_type = VFIO_TYPE1_IOMMU,
+		.name = MODE_IOMMUFD,
 	},
 	{
 		.name = MODE_VFIO_TYPE1V2_IOMMU,
@@ -35,8 +39,8 @@ static const struct iommu_mode iommu_modes[] = {
 		.iommu_type = VFIO_TYPE1v2_IOMMU,
 	},
 	{
-		.name = MODE_IOMMUFD_COMPAT_TYPE1,
-		.container_path = "/dev/iommu",
+		.name = MODE_VFIO_TYPE1_IOMMU,
+		.container_path = "/dev/vfio/vfio",
 		.iommu_type = VFIO_TYPE1_IOMMU,
 	},
 	{
@@ -45,16 +49,104 @@ static const struct iommu_mode iommu_modes[] = {
 		.iommu_type = VFIO_TYPE1v2_IOMMU,
 	},
 	{
-		.name = MODE_IOMMUFD,
+		.name = MODE_IOMMUFD_COMPAT_TYPE1,
+		.container_path = "/dev/iommu",
+		.iommu_type = VFIO_TYPE1_IOMMU,
 	},
 };
 
-static const struct iommu_mode *lookup_iommu_mode(const char *iommu_mode)
+static bool iommufd_probe(void)
+{
+	/* iommufd mode requires VFIO device cdevs (CONFIG_VFIO_DEVICE_CDEV). */
+	return !access("/dev/vfio/devices", F_OK) &&
+	       !access("/dev/iommu", R_OK | W_OK);
+}
+
+static bool vfio_container_probe(const struct iommu_mode *mode)
+{
+	bool available;
+	int fd;
+
+	/*
+	 * Container modes, including the iommufd_compat modes, access devices
+	 * through VFIO groups (CONFIG_VFIO_GROUP). Check for them explicitly,
+	 * since iommufd provides the compat container even without VFIO groups.
+	 */
+	if (access("/sys/class/vfio", F_OK))
+		return false;
+
+	fd = open(mode->container_path, O_RDWR);
+	if (fd < 0)
+		return false;
+
+	available = ioctl(fd, VFIO_CHECK_EXTENSION, mode->iommu_type) > 0;
+	close(fd);
+	return available;
+}
+
+static bool iommu_mode_probe(const struct iommu_mode *mode)
+{
+	if (mode->container_path)
+		return vfio_container_probe(mode);
+
+	return iommufd_probe();
+}
+
+/* Returns the most preferred IOMMU mode that is available, or NULL if none. */
+static const struct iommu_mode *iommu_mode_detect(void)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(iommu_modes); i++) {
+		if (iommu_mode_probe(&iommu_modes[i]))
+			return &iommu_modes[i];
+	}
+
+	return NULL;
+}
+
+static const char *iommu_mode_names(bool include_unavailable)
+{
+	static char all_names[256];
+	static char avl_names[sizeof(all_names)];
+	char *names = include_unavailable ? all_names : avl_names;
+	int i, len = 0;
+
+	if (names[0])
+		return names;
+
+	for (i = 0; i < ARRAY_SIZE(iommu_modes); i++) {
+		if (!include_unavailable && !iommu_mode_probe(&iommu_modes[i]))
+			continue;
+
+		len += snprintf(names + len, sizeof(all_names) - len, "%s%s",
+				names[0] ? ", " : "", iommu_modes[i].name);
+		VFIO_ASSERT_LT(len, (int)sizeof(all_names));
+	}
+
+	return names[0] ? names : "none";
+}
+
+const char *iommu_mode_names_all(void)
+{
+	return iommu_mode_names(true);
+}
+
+const char *iommu_mode_names_available(void)
+{
+	return iommu_mode_names(false);
+}
+
+/*
+ * Returns the IOMMU mode with the given name, or if iommu_mode is NULL, the
+ * most preferred IOMMU mode that is available (or NULL if none).
+ */
+static const struct iommu_mode *iommu_mode_lookup(const char *iommu_mode)
 {
 	int i;
 
 	if (!iommu_mode)
-		iommu_mode = default_iommu_mode;
+		return iommu_mode_detect();
 
 	for (i = 0; i < ARRAY_SIZE(iommu_modes); i++) {
 		if (strcmp(iommu_mode, iommu_modes[i].name))
@@ -63,7 +155,29 @@ static const struct iommu_mode *lookup_iommu_mode(const char *iommu_mode)
 		return &iommu_modes[i];
 	}
 
-	VFIO_FAIL("Unrecognized IOMMU mode: %s\n", iommu_mode);
+	VFIO_FAIL("Unrecognized IOMMU mode '%s'.  Known modes: %s.\n",
+		  iommu_mode, iommu_mode_names_all());
+}
+
+bool iommu_mode_is_available(const char *iommu_mode)
+{
+	if (!iommu_mode)
+		return iommu_mode_detect();
+
+	return iommu_mode_probe(iommu_mode_lookup(iommu_mode));
+}
+
+const char *iommu_mode_unavailable_msg(const char *iommu_mode)
+{
+	static char msg[512];
+
+	if (!iommu_mode || !iommu_mode_detect())
+		return NO_IOMMU_MODE_AVAILABLE_MSG;
+
+	snprintf(msg, sizeof(msg),
+		 "IOMMU mode '%s' is not available.  Available modes: %s.",
+		 iommu_mode, iommu_mode_names_available());
+	return msg;
 }
 
 int __iommu_hva2iova(struct iommu *iommu, void *vaddr, iova_t *iova)
@@ -425,7 +539,8 @@ struct iommu *iommu_init(const char *iommu_mode)
 
 	INIT_LIST_HEAD(&iommu->dma_regions);
 
-	iommu->mode = lookup_iommu_mode(iommu_mode);
+	iommu->mode = iommu_mode_lookup(iommu_mode);
+	VFIO_ASSERT_NOT_NULL(iommu->mode, NO_IOMMU_MODE_AVAILABLE_MSG);
 
 	container_path = iommu->mode->container_path;
 	if (container_path) {
