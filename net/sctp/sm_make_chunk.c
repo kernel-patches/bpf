@@ -2317,6 +2317,12 @@ int sctp_verify_init(struct net *net, const struct sctp_endpoint *ep,
 		return sctp_process_inv_mandatory(asoc, chunk, errp);
 
 	sctp_walk_params(param, peer_init) {
+		/* Validate the length even if the second pass stops early. */
+		if (param.p->type == SCTP_PARAM_COOKIE_PRESERVATIVE &&
+			ntohs(param.p->length) != sizeof(*param.life))
+				return sctp_process_inv_paramlength(asoc, param.p,
+													chunk, errp);
+
 		if (param.p->type == SCTP_PARAM_STATE_COOKIE)
 			has_cookie = true;
 	}
