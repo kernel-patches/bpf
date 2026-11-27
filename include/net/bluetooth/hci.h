@@ -3176,6 +3176,8 @@ struct hci_evt_le_create_big_complete {
 	__le16  bis_handle[];
 } __packed;
 
+#define HCI_EVT_LE_TERM_BIG_COMPLETE	0x1c
+
 #define HCI_EVT_LE_BIG_SYNC_ESTABLISHED 0x1d
 struct hci_evt_le_big_sync_established {
 	__u8    status;

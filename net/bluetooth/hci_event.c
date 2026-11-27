@@ -6279,6 +6279,12 @@ static void hci_le_past_received_evt(struct hci_dev *hdev, void *data,
 		bt_dev_err(hdev,
 			   "Unable to find connection for dst %pMR sid 0x%2.2x",
 			   &ev->bdaddr, ev->sid);
+		/* No PA sync is pending, the PAST parameters are just left
+		 * set from a previous one, so terminate the sync instead of
+		 * leaving it behind in the controller.
+		 */
+		if (!ev->status)
+			hci_le_pa_term_sync(hdev, ev->sync_handle);
 		goto unlock;
 	}
 
@@ -6808,11 +6814,18 @@ static void hci_le_pa_sync_established_evt(struct hci_dev *hdev, void *data,
 					   struct sk_buff *skb)
 {
 	struct hci_ev_le_pa_sync_established *ev = data;
-	int mask = hdev->link_mode;
+	int mask = 0;
 	__u8 flags = 0;
 	struct hci_conn *pa_sync, *conn;
 
 	bt_dev_dbg(hdev, "status 0x%2.2x", ev->status);
+
+	/* HCI_LE_Periodic_Advertising_Create_Sync_Cancel is only sent when
+	 * hci_le_pa_create_sync() times out, which create_pa_complete()
+	 * already reports.
+	 */
+	if (ev->status == HCI_ERROR_CANCELLED_BY_HOST)
+		return;
 
 	hci_dev_lock(hdev);
 	hci_store_wake_reason(hdev, &ev->bdaddr, ev->bdaddr_type);
@@ -6829,13 +6842,18 @@ static void hci_le_pa_sync_established_evt(struct hci_dev *hdev, void *data,
 
 	clear_bit(HCI_CONN_CREATE_PA_SYNC, conn->flags);
 
-	conn->sync_handle = le16_to_cpu(ev->handle);
+	if (!ev->status)
+		conn->sync_handle = le16_to_cpu(ev->handle);
 	conn->sid = HCI_SID_INVALID;
 
 	mask |= hci_proto_connect_ind(hdev, &ev->bdaddr, PA_LINK,
 				      &flags);
 	if (!(mask & HCI_LM_ACCEPT)) {
-		hci_le_pa_term_sync(hdev, ev->handle);
+		/* A failed sync has no handle, the one in the event may be
+		 * another sync's.
+		 */
+		if (!ev->status)
+			hci_le_pa_term_sync(hdev, ev->handle);
 		goto unlock;
 	}
 
@@ -6849,7 +6867,8 @@ static void hci_le_pa_sync_established_evt(struct hci_dev *hdev, void *data,
 	if (IS_ERR(pa_sync))
 		goto unlock;
 
-	pa_sync->sync_handle = le16_to_cpu(ev->handle);
+	if (!ev->status)
+		pa_sync->sync_handle = le16_to_cpu(ev->handle);
 
 	if (ev->status) {
 		set_bit(HCI_CONN_PA_SYNC_FAILED, pa_sync->flags);

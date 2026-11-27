@@ -91,7 +91,7 @@ static void hci_uart_write_work(struct work_struct *work)
 /* ------- Interface to HCI layer ------ */
 
 /* Reset device */
-static int hci_uart_flush(struct hci_dev *hdev)
+static void __hci_uart_flush(struct hci_dev *hdev, bool resume_tx)
 {
 	struct hci_uart *hu  = hci_get_drvdata(hdev);
 
@@ -112,11 +112,19 @@ static int hci_uart_flush(struct hci_dev *hdev)
 		hu->proto->flush(hu);
 	}
 
+	if (!resume_tx)
+		return;
+
 	/* Resume TX and replay a wakeup recorded while it was stopped. */
 	enable_work(&hu->write_work);
 	clear_bit(HCI_UART_SENDING, &hu->tx_state);
 	if (test_bit(HCI_UART_TX_WAKEUP, &hu->tx_state))
 		hci_uart_tx_wakeup(hu);
+}
+
+static int hci_uart_flush(struct hci_dev *hdev)
+{
+	__hci_uart_flush(hdev, true);
 
 	return 0;
 }
@@ -150,22 +158,34 @@ static int hci_uart_open(struct hci_dev *hdev)
 static int hci_uart_close(struct hci_dev *hdev)
 {
 	struct hci_uart *hu = hci_get_drvdata(hdev);
+	bool close_port;
 
 	BT_DBG("hdev %p", hdev);
 
 	if (!test_bit(HCI_UART_PROTO_READY, &hu->flags))
 		return 0;
 
-	hci_uart_flush(hdev);
+	close_port = hci_test_quirk(hdev, HCI_QUIRK_NON_PERSISTENT_SETUP);
+
+	/* Keep write_work disabled until the port is closed. */
+	__hci_uart_flush(hdev, !close_port);
 	hdev->flush = NULL;
 
 	/* When QUIRK HCI_QUIRK_NON_PERSISTENT_SETUP is set by driver,
 	 * BT SOC is completely powered OFF during BT OFF, holding port
 	 * open may drain the battery.
 	 */
-	if (hci_test_quirk(hdev, HCI_QUIRK_NON_PERSISTENT_SETUP)) {
+	if (close_port) {
+		/* Drain wakeups that passed the PROTO_READY test. */
+		percpu_down_write(&hu->proto_lock);
 		clear_bit(HCI_UART_PROTO_READY, &hu->flags);
+		percpu_up_write(&hu->proto_lock);
+
 		serdev_device_close(hu->serdev);
+
+		clear_bit(HCI_UART_TX_WAKEUP, &hu->tx_state);
+		enable_work(&hu->write_work);
+		clear_bit(HCI_UART_SENDING, &hu->tx_state);
 	}
 
 	return 0;
