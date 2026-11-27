@@ -1843,6 +1843,22 @@ static void tls_rx_reader_unlock(struct sock *sk, struct tls_sw_context_rx *ctx)
 	release_sock(sk);
 }
 
+static bool tls_rx_list_add(struct sock *sk, struct sk_buff_head *list,
+			    struct sk_buff *skb)
+{
+	bool forced = false;
+
+	if (!skb->sk) {
+		forced = !sk_rmem_schedule(sk, skb, skb->truesize);
+		if (forced)
+			sk_forced_mem_schedule(sk, skb->truesize);
+		skb_set_owner_r(skb, sk);
+	}
+	__skb_queue_tail(list, skb);
+
+	return forced;
+}
+
 int tls_sw_recvmsg(struct sock *sk,
 		   struct msghdr *msg,
 		   size_t len,
@@ -1940,7 +1956,7 @@ int tls_sw_recvmsg(struct sock *sk,
 			DEBUG_NET_WARN_ON_ONCE(darg.zc);
 			tls_rx_rec_done(ctx);
 put_on_rx_list_err:
-			__skb_queue_tail(&ctx->rx_list, darg.skb);
+			tls_rx_list_add(sk, &ctx->rx_list, darg.skb);
 			goto recv_end;
 		}
 
@@ -1970,7 +1986,8 @@ put_on_rx_list_err:
 put_on_rx_list:
 				decrypted += chunk;
 				len -= chunk;
-				__skb_queue_tail(&ctx->rx_list, skb);
+				if (tls_rx_list_add(sk, &ctx->rx_list, skb))
+					goto recv_end;
 				if (unlikely(control != TLS_RECORD_TYPE_DATA))
 					break;
 				continue;

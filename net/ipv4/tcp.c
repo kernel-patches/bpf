@@ -925,6 +925,7 @@ void sk_forced_mem_schedule(struct sock *sk, int size)
 
 	sk_memory_allocated_add(sk, amt);
 }
+EXPORT_SYMBOL_GPL(sk_forced_mem_schedule);
 
 struct sk_buff *tcp_stream_alloc_skb(struct sock *sk, gfp_t gfp,
 				     bool force_schedule)
