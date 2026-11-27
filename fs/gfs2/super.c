@@ -59,7 +59,7 @@ enum evict_behavior {
 void gfs2_jindex_free(struct gfs2_sbd *sdp)
 {
 	struct list_head list;
-	struct gfs2_jdesc *jd;
+	struct gfs2_jdesc *jd, *tmp;
 
 	spin_lock(&sdp->sd_jindex_spin);
 	list_add(&list, &sdp->sd_jindex_list);
@@ -71,8 +71,7 @@ void gfs2_jindex_free(struct gfs2_sbd *sdp)
 	sdp->sd_jdesc = NULL;
 	up_write(&sdp->sd_log_flush_lock);
 
-	while (!list_empty(&list)) {
-		jd = list_first_entry(&list, struct gfs2_jdesc, jd_list);
+	list_for_each_entry_safe(jd, tmp, &list, jd_list) {
 		BUG_ON(jd->jd_log_bio);
 		gfs2_free_journal_extents(jd);
 		list_del(&jd->jd_list);
@@ -324,7 +323,7 @@ struct lfcc {
 static int gfs2_lock_fs_check_clean(struct gfs2_sbd *sdp)
 {
 	struct gfs2_jdesc *jd;
-	struct lfcc *lfcc;
+	struct lfcc *lfcc, *tmp;
 	LIST_HEAD(list);
 	struct gfs2_log_header_host lh;
 	int error, error2;
@@ -381,8 +380,7 @@ relock_shared:
 	gfs2_assert_withdraw(sdp, !error2);
 
 out:
-	while (!list_empty(&list)) {
-		lfcc = list_first_entry(&list, struct lfcc, list);
+	list_for_each_entry_safe(lfcc, tmp, &list, list) {
 		list_del(&lfcc->list);
 		gfs2_glock_dq_uninit(&lfcc->gh);
 		kfree(lfcc);
@@ -727,8 +725,8 @@ out:
  *
  */
 
-static int gfs2_freeze_super(struct super_block *sb, enum freeze_holder who,
-			     const void *freeze_owner)
+int gfs2_freeze_super(struct super_block *sb, enum freeze_holder who,
+		      const void *freeze_owner)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 	int error;
@@ -796,8 +794,8 @@ static int gfs2_freeze_fs(struct super_block *sb)
  *
  */
 
-static int gfs2_thaw_super(struct super_block *sb, enum freeze_holder who,
-			   const void *freeze_owner)
+int gfs2_thaw_super(struct super_block *sb, enum freeze_holder who,
+		    const void *freeze_owner)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 	int error;

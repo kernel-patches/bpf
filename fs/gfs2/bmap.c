@@ -2223,10 +2223,9 @@ int gfs2_file_dealloc(struct gfs2_inode *ip)
 
 void gfs2_free_journal_extents(struct gfs2_jdesc *jd)
 {
-	struct gfs2_journal_extent *jext;
+	struct gfs2_journal_extent *jext, *tmp;
 
-	while(!list_empty(&jd->extent_list)) {
-		jext = list_first_entry(&jd->extent_list, struct gfs2_journal_extent, list);
+	list_for_each_entry_safe(jext, tmp, &jd->extent_list, list) {
 		list_del(&jext->list);
 		kfree(jext);
 	}
