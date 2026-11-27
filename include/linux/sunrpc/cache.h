@@ -119,7 +119,6 @@ struct cache_detail {
 	struct list_head	requests;
 	struct list_head	readers;
 	spinlock_t		queue_lock;
-	wait_queue_head_t	queue_wait;
 	u64			next_seqno;
 
 	atomic_t		writers;		/* how many time is /channel open */

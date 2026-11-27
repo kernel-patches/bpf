@@ -342,6 +342,9 @@ static int proc_tgid_net_readdir(struct file *file, struct dir_context *ctx)
 	net = get_proc_task_net(file_inode(file));
 	if (net != NULL) {
 		ret = proc_readdir_de(file, ctx, net->proc_net);
+		/* the 1 at EOF is for proc_root_readdir() only */
+		if (ret > 0)
+			ret = 0;
 		put_net(net);
 	}
 	return ret;
@@ -351,6 +354,7 @@ const struct file_operations proc_net_operations = {
 	.llseek		= generic_file_llseek,
 	.read		= generic_read_dir,
 	.iterate_shared	= proc_tgid_net_readdir,
+	.release	= proc_dir_release,
 };
 
 static __net_init int proc_net_ns_init(struct net *net)
@@ -409,7 +413,13 @@ out:
 
 static __net_exit void proc_net_ns_exit(struct net *net)
 {
+	struct proc_dir_entry *left;
+
 	remove_proc_entry("stat", net->proc_net);
+	/* Whatever is left still points at net->proc_net and so at net. */
+	left = rb_entry_safe(rb_first(&net->proc_net->subdir),
+			     struct proc_dir_entry, subdir_node);
+	WARN(left, "/proc/net: leaking at least '%s'\n", left->name);
 	pde_free(net->proc_net);
 }
 

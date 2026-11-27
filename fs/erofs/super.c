@@ -906,6 +906,11 @@ static int erofs_fc_reconfigure(struct fs_context *fc)
 	if (test_opt(&sbi->opt, SUPERBLOCK_SHARE))
 		return -EBUSY;
 
+	/* Enabling inode sharing by remount is not supported.  */
+	if (test_opt(&new_sbi->opt, INODE_SHARE) &&
+	    !test_opt(&sbi->opt, INODE_SHARE))
+		return -EBUSY;
+
 	if (new_sbi->domain_id)
 		erofs_info(sb, "ignoring reconfiguration for domain_id.");
 

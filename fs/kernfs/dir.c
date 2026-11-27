@@ -1553,10 +1553,18 @@ static void __kernfs_remove(struct kernfs_node *kn)
 
 	pr_debug("kernfs %s: removing\n", kernfs_rcu_name(kn));
 
-	/* prevent new usage by marking all nodes removing and deactivating */
+	/*
+	 * Prevent new usage by marking all nodes removing and deactivating.
+	 *
+	 * Clear i_nlink before a node turns inactive.  From then on
+	 * kernfs_dop_revalidate() fails and a lookup can kill the node's
+	 * dentries, and only a dentry dying with i_nlink at 0 sends
+	 * IN_DELETE_SELF.
+	 */
 	down_write(&kernfs_root(kn)->kernfs_iattr_rwsem);
 	pos = NULL;
 	while ((pos = kernfs_next_descendant_post(pos, kn))) {
+		kernfs_clear_inode_nlink(pos);
 		pos->flags |= KERNFS_REMOVING;
 		if (kernfs_active(pos))
 			atomic_add(KN_DEACTIVATED_BIAS, &pos->active);
@@ -1586,8 +1594,6 @@ static void __kernfs_remove(struct kernfs_node *kn)
 				parent ? parent->iattr : NULL;
 
 			down_write(&kernfs_root(kn)->kernfs_iattr_rwsem);
-
-			kernfs_clear_inode_nlink(pos);
 
 			/* update timestamps on the parent */
 			if (ps_iattr) {

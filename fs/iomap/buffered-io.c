@@ -1761,7 +1761,7 @@ iomap_fill_dirty_folios(
 	}
 
 	count = filemap_get_folios_dirty(mapping, &pstart, pend, iter->fbatch);
-	*start = (pstart << PAGE_SHIFT);
+	*start = (loff_t)pstart << PAGE_SHIFT;
 	*iomap_flags |= IOMAP_F_FOLIO_BATCH;
 	return count;
 }
