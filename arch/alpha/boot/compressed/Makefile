@@ -22,7 +22,7 @@ KBUILD_CFLAGS += -fno-asynchronous-unwind-tables
 KBUILD_CFLAGS += -pipe -mcpu=ev4 -mno-fp-regs -ffixed-8
 KBUILD_CFLAGS += -DDISABLE_BRANCH_PROFILING -D__DISABLE_EXPORTS
 KBUILD_CFLAGS += $(CC_FLAGS_DIALECT)
-KBUILD_AFLAGS := -D__ASSEMBLY__ $(KBUILD_CFLAGS)
+KBUILD_AFLAGS := $(KBUILD_CFLAGS)
 
 # The stub has no sanitizer or coverage runtime. arch/alpha/lib/lib.a is
 # built with the kernel's instrumentation and -mcpu=, so build private

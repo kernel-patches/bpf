@@ -8,7 +8,7 @@
 #ifndef __ASM_UNIFIED_H
 #define __ASM_UNIFIED_H
 
-#if defined(__ASSEMBLY__)
+#if defined(__ASSEMBLER__)
 	.syntax unified
 #else
 __asm__(".syntax unified");
@@ -29,7 +29,7 @@ __asm__(".syntax unified");
 
 #define ARM(x...)
 #define THUMB(x...)	x
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 #define W(instr)	instr.w
 #else
 #define WASM(instr)	#instr ".w"
@@ -42,7 +42,7 @@ __asm__(".syntax unified");
 
 #define ARM(x...)	x
 #define THUMB(x...)
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 #define W(instr)	instr
 #else
 #define WASM(instr)	#instr

@@ -16,7 +16,7 @@
 #define KEXEC_ARM_ATAGS_OFFSET  0x1000
 #define KEXEC_ARM_ZIMAGE_OFFSET 0x8000
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #define ARCH_HAS_KIMAGE_ARCH
 struct kimage_arch {
@@ -78,6 +78,6 @@ static inline struct page *boot_pfn_to_page(unsigned long boot_pfn)
 }
 #define boot_pfn_to_page boot_pfn_to_page
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif /* _ARM_KEXEC_H */

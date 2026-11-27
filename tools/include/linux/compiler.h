@@ -2,7 +2,7 @@
 #ifndef __LINUX_COMPILER_H
 #define __LINUX_COMPILER_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/compiler_types.h>
 
@@ -221,6 +221,6 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 #endif
 #endif
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif /* __LINUX_COMPILER_H */

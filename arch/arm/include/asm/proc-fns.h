@@ -13,7 +13,7 @@
 #include <asm/glue-proc.h>
 #include <asm/page.h>
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 struct mm_struct;
 
@@ -196,6 +196,6 @@ static inline void cpu_set_ttbcr(unsigned int ttbcr)
 
 #endif
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 #endif /* __KERNEL__ */
 #endif /* __ASM_PROCFNS_H */

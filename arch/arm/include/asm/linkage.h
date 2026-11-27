@@ -9,7 +9,7 @@
   .type name, %function; \
   END(name)
 
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 
 /*
  * Variants of SYM_TYPED_START/SYM_TYPED_FUNC_START that align the
@@ -36,6 +36,6 @@
 #define SYM_TYPED_FUNC_START_ALIGNED(name, align)	\
 	SYM_TYPED_START_ALIGNED(name, SYM_L_GLOBAL, align)
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif

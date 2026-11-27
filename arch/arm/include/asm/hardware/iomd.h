@@ -11,7 +11,7 @@
 #define __ASMARM_HARDWARE_IOMD_H
 
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /*
  * We use __raw_base variants here so that we give the compiler the
@@ -167,7 +167,7 @@
 #define VDMA_START	IOMD_VIDSTART
 #define VDMA_END	IOMD_VIDEND
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 extern unsigned int vram_half_sam;
 #define video_set_dma(start,end,offset)				\
 do {								\

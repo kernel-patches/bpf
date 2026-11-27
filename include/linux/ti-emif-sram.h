@@ -10,7 +10,7 @@
 
 #include <linux/kbuild.h>
 #include <linux/types.h>
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 struct emif_regs_amx3 {
 	u32 emif_sdcfg_val;

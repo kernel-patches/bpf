@@ -7,7 +7,7 @@
 #ifndef _ASM_ARM_CURRENT_H
 #define _ASM_ARM_CURRENT_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #include <asm/insn.h>
 
 struct task_struct;
@@ -60,6 +60,6 @@ static __always_inline __attribute_const__ struct task_struct *get_current(void)
 
 #define current get_current()
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif /* _ASM_ARM_CURRENT_H */

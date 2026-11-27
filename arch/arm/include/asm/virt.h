@@ -15,7 +15,7 @@
  */
 #define BOOT_CPU_MODE_MISMATCH	PSR_N_BIT
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #include <asm/cacheflush.h>
 
 #ifdef CONFIG_ARM_VIRT_EXT
@@ -74,7 +74,7 @@ static inline bool is_kernel_in_hyp_mode(void)
 #define HVC_SET_VECTORS 0
 #define HVC_SOFT_RESTART 1
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #define HVC_STUB_ERR	0xbadca11
 

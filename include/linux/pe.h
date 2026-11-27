@@ -240,7 +240,7 @@
 #define IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS	20 /* Extended DLL characteristics bits */
 #define IMAGE_DEBUG_TYPE_PERFMAP		21 /* Location of associated Ready To Run PerfMap file */
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 struct mz_hdr {
 	uint16_t magic;		/* MZ_MAGIC */
@@ -546,6 +546,6 @@ struct win_certificate {
 	uint16_t cert_type;
 };
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 #endif /* __LINUX_PE_H */

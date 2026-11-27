@@ -24,7 +24,7 @@
 #define MAX_NR_CLUSTERS		2
 #endif
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/types.h>
 #include <asm/cacheflush.h>
@@ -307,7 +307,7 @@ struct sync_struct {
 #include <asm/asm-offsets.h>
 #define __CACHE_WRITEBACK_GRANULE CACHE_WRITEBACK_GRANULE
 
-#endif /* ! __ASSEMBLY__ */
+#endif /* ! __ASSEMBLER__ */
 
 /* Definitions for mcpm_sync_struct */
 #define CPU_DOWN		0x11

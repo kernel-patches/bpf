@@ -102,7 +102,7 @@
 #define __REFDATA        .section       ".ref.data", "aw"
 #define __REFCONST       .section       ".ref.rodata", "a"
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 /*
  * Used for initialization calls..
  */
@@ -180,7 +180,7 @@ extern struct module __this_module;
   
 #ifndef MODULE
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /*
  * initcalls are now grouped by functionality into separate
@@ -375,7 +375,7 @@ extern const struct obs_kernel_param __setup_start[], __setup_end[];
 /* Relies on boot_command_line being set */
 void __init parse_early_param(void);
 void __init parse_early_options(char *cmdline);
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #else /* MODULE */
 

@@ -10,7 +10,7 @@
 
 #endif /* __STRUCT_EXEC_OVERRIDE__ */
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /* these go in the N_MACHTYPE field */
 enum machine_type {
@@ -247,5 +247,5 @@ struct relocation_info
 };
 #endif /* no N_RELOCATION_INFO_DECLARED.  */
 
-#endif /*__ASSEMBLY__ */
+#endif /*__ASSEMBLER__ */
 #endif /* _UAPI__A_OUT_GNU_H__ */

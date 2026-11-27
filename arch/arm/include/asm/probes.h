@@ -11,7 +11,7 @@
 #ifndef _ASM_PROBES_H
 #define _ASM_PROBES_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 typedef u32 probes_opcode_t;
 
@@ -37,7 +37,7 @@ struct arch_probes_insn {
 	bool				kprobe_direct_exec;
 };
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 /*
  * We assume one instruction can consume at most 64 bytes stack, which is
