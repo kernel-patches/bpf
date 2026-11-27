@@ -589,8 +589,9 @@ static int __maybe_unused tegra186_timer_resume(struct device *dev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(tegra186_timer_pm_ops, tegra186_timer_suspend,
-			 tegra186_timer_resume);
+static const struct dev_pm_ops tegra186_timer_pm_ops = {
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(tegra186_timer_suspend, tegra186_timer_resume)
+};
 
 static const struct tegra186_timer_soc tegra186_timer = {
 	.num_timers = 10,

@@ -1168,22 +1168,11 @@ static struct platform_driver sh_cmt_device_driver = {
 	.id_table	= sh_cmt_id_table,
 };
 
-static int __init sh_cmt_init(void)
-{
-	return platform_driver_register(&sh_cmt_device_driver);
-}
-
-static void __exit sh_cmt_exit(void)
-{
-	platform_driver_unregister(&sh_cmt_device_driver);
-}
+subsys_platform_driver(sh_cmt_device_driver);
 
 #ifdef CONFIG_SUPERH
 sh_early_platform_init("earlytimer", &sh_cmt_device_driver);
 #endif
-
-subsys_initcall(sh_cmt_init);
-module_exit(sh_cmt_exit);
 
 MODULE_AUTHOR("Magnus Damm");
 MODULE_DESCRIPTION("SuperH CMT Timer Driver");

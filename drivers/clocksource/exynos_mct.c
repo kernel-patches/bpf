@@ -645,10 +645,13 @@ static int __init mct_init_dt(struct device_node *np, unsigned int int_type)
 	int nr_local;
 	int ret;
 
-	nr_local = of_property_count_u32_elems(np, "samsung,local-timers");
-	if (nr_local == 0)
-		return -EINVAL;
-	if (nr_local > 0) {
+	if (of_property_present(np, "samsung,local-timers")) {
+		nr_local = of_property_count_u32_elems(np, "samsung,local-timers");
+		if (nr_local < 0)
+			return nr_local;
+		if (!nr_local)
+			return -EINVAL;
+
 		if (nr_local > ARRAY_SIZE(local_idx))
 			return -EINVAL;
 

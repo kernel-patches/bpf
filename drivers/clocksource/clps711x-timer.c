@@ -76,7 +76,7 @@ static int __init _clps711x_clkevt_init(struct clk *clock, void __iomem *base,
 static int __init clps711x_timer_init(struct device_node *np)
 {
 	unsigned int irq = irq_of_parse_and_map(np, 0);
-	struct clk *clock = of_clk_get(np, 0);
+	struct clk *clock;
 	void __iomem *base = of_iomap(np, 0);
 	int ret = 0;
 
@@ -86,6 +86,8 @@ static int __init clps711x_timer_init(struct device_node *np)
 		ret = -EINVAL;
 		goto unmap_io;
 	}
+
+	clock = of_clk_get(np, 0);
 	if (IS_ERR(clock)) {
 		ret = PTR_ERR(clock);
 		goto unmap_io;
@@ -103,6 +105,7 @@ static int __init clps711x_timer_init(struct device_node *np)
 		break;
 	}
 
+	clk_put(clock);
 unmap_io:
 	iounmap(base);
 	return ret;

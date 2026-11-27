@@ -211,10 +211,6 @@ static int nxp_stm_clocksource_init(struct device *dev, struct stm_timer *stm_ti
 	if (ret)
 		return ret;
 
-	stm_sched_clock = stm_timer;
-
-	sched_clock_register(nxp_stm_read_sched_clock, 32, stm_timer->rate);
-
 	dev_dbg(dev, "Registered clocksource %s\n", name);
 
 	return 0;
@@ -471,6 +467,15 @@ static int nxp_stm_timer_probe(struct platform_device *pdev)
 					nxp_stm_clockevent_starting_cpu, NULL);
 		if (ret < 0)
 			return ret;
+	}
+
+	/*
+	 * STM counters run independently at the same rate. Use the first
+	 * probed instance for sched_clock to avoid timestamp jumps.
+	 */
+	if (!stm_sched_clock) {
+		stm_sched_clock = stm_timer;
+		sched_clock_register(nxp_stm_read_sched_clock, 32, stm_timer->rate);
 	}
 
 	return 0;

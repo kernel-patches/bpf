@@ -339,7 +339,7 @@ static const unsigned int sh_mtu2_channel_offsets[] = {
 static int sh_mtu2_setup_channel(struct sh_mtu2_channel *ch, unsigned int index,
 				 struct sh_mtu2_device *mtu)
 {
-	char name[6];
+	char name[16];
 	int irq;
 	int ret;
 
@@ -505,22 +505,11 @@ static struct platform_driver sh_mtu2_device_driver = {
 	.id_table	= sh_mtu2_id_table,
 };
 
-static int __init sh_mtu2_init(void)
-{
-	return platform_driver_register(&sh_mtu2_device_driver);
-}
-
-static void __exit sh_mtu2_exit(void)
-{
-	platform_driver_unregister(&sh_mtu2_device_driver);
-}
+subsys_platform_driver(sh_mtu2_device_driver);
 
 #ifdef CONFIG_SUPERH
 sh_early_platform_init("earlytimer", &sh_mtu2_device_driver);
 #endif
-
-subsys_initcall(sh_mtu2_init);
-module_exit(sh_mtu2_exit);
 
 MODULE_AUTHOR("Magnus Damm");
 MODULE_DESCRIPTION("SuperH MTU2 Timer Driver");
