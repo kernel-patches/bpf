@@ -319,6 +319,8 @@
 				regulator-min-microvolt = <3300000>;
 				regulator-max-microvolt = <3300000>;
 				regulator-name = "vcc-3v3-phy1-lcd";
+				/* enough time for the PHY to fully power on */
+				regulator-enable-ramp-delay = <150000>;
 			};
 
 			reg_cpusldo: cpusldo {
@@ -341,7 +343,6 @@
 		reg = <0x36>;
 		#interrupt-cells = <1>;
 		interrupt-controller;
-		status = "okay";
 
 		vin1-supply = <&reg_vcc5v>;
 		vin2-supply = <&reg_vcc5v>;
