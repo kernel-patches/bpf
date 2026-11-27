@@ -1499,6 +1499,9 @@ static int ahash_update_first(struct ahash_request *req)
 
 static int ahash_finup_first(struct ahash_request *req)
 {
+	if (!req->nbytes)
+		return ahash_final_no_ctx(req);
+
 	return ahash_digest(req);
 }
 

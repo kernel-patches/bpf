@@ -671,14 +671,24 @@ static int cpt_aead_init(struct crypto_aead *atfm, u8 cipher_type, u8 mac_type)
 
 	ret = get_se_device(&pdev, &cpu_num);
 	if (ret)
-		return ret;
+		goto err_free_hash;
 
 	ctx->pdev = pdev;
 	ret = cn10k_cpt_hw_ctx_init(pdev, &ctx->er_ctx);
 	if (ret)
-		return ret;
+		goto err_free_hash;
 
-	return cpt_aead_fallback_init(ctx, alg);
+	ret = cpt_aead_fallback_init(ctx, alg);
+	if (!ret)
+		return 0;
+
+	cn10k_cpt_hw_ctx_clear(pdev, &ctx->er_ctx);
+err_free_hash:
+	kfree(ctx->opad);
+	kfree(ctx->ipad);
+	kfree(ctx->sdesc);
+	crypto_free_shash(ctx->hashalg);
+	return ret;
 }
 
 static int otx2_cpt_aead_cbc_aes_sha1_init(struct crypto_aead *tfm)

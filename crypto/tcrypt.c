@@ -1579,10 +1579,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 		ret = min(ret, tcrypt_test("xts(cast6)"));
 		break;
 
-	case 16:
-		ret = min(ret, tcrypt_test("ecb(arc4)"));
-		break;
-
 	case 18:
 		ret = min(ret, tcrypt_test("crc32c"));
 		break;
@@ -1993,11 +1989,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				  speed_template_32_64);
 		test_cipher_speed("xts(serpent)", DECRYPT, sec, NULL, 0,
 				  speed_template_32_64);
-		break;
-
-	case 208:
-		test_cipher_speed("ecb(arc4)", ENCRYPT, sec, NULL, 0,
-				  speed_template_8);
 		break;
 
 	case 209:
@@ -2486,11 +2477,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				   speed_template_32_48_64);
 		break;
 
-	case 505:
-		test_acipher_speed("ecb(arc4)", ENCRYPT, sec, NULL, 0,
-				   speed_template_8);
-		break;
-
 	case 506:
 		test_acipher_speed("ecb(cast5)", ENCRYPT, sec, NULL, 0,
 				   speed_template_8_16);
@@ -2707,11 +2693,6 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				       speed_template_32_48_64, num_mb);
 		test_mb_skcipher_speed("xts(twofish)", DECRYPT, sec, NULL, 0,
 				       speed_template_32_48_64, num_mb);
-		break;
-
-	case 605:
-		test_mb_skcipher_speed("ecb(arc4)", ENCRYPT, sec, NULL, 0,
-				       speed_template_8, num_mb);
 		break;
 
 	case 606:

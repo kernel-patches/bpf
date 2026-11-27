@@ -20,6 +20,7 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/vmalloc.h>
 #include <linux/zlib.h>
 
 #define DEFLATE_DEF_LEVEL		Z_DEFAULT_COMPRESSION
@@ -40,7 +41,7 @@ static void *deflate_alloc_stream(void)
 						     DEFLATE_DEF_MEMLEVEL));
 	struct deflate_stream *ctx;
 
-	ctx = kvmalloc_flex(*ctx, workspace, size);
+	ctx = vmalloc(struct_size(ctx, workspace, size));
 	if (!ctx)
 		return ERR_PTR(-ENOMEM);
 
@@ -51,7 +52,7 @@ static void *deflate_alloc_stream(void)
 
 static void deflate_free_stream(void *ctx)
 {
-	kvfree(ctx);
+	vfree(ctx);
 }
 
 static struct crypto_acomp_streams deflate_streams = {

@@ -464,8 +464,7 @@ static int starfive_aes_dma_xfer(struct starfive_cryp_dev *cryp,
 		goto dma_err;
 	}
 
-	out_desc->callback = starfive_aes_dma_done;
-	out_desc->callback_param = cryp;
+	dmaengine_desc_set_callback(out_desc, starfive_aes_dma_done, NULL, cryp);
 
 	reinit_completion(&cryp->dma_done);
 	dmaengine_submit(out_desc);

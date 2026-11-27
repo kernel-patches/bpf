@@ -236,6 +236,7 @@ static int cavium_rng_probe_vf(struct	pci_dev		*pdev,
 	ret = devm_hwrng_register(&pdev->dev, &rng->ops);
 	if (ret) {
 		dev_err(&pdev->dev, "Error registering device as HWRNG.\n");
+		iounmap(rng->pf_regbase);
 		return ret;
 	}
 

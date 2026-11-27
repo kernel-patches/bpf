@@ -29,6 +29,7 @@
 #include <linux/psp.h>
 #include <linux/amd-iommu.h>
 #include <linux/crash_dump.h>
+#include <linux/sizes.h>
 
 #include <asm/smp.h>
 #include <asm/cacheflush.h>
@@ -43,9 +44,9 @@
 #define SEV_FW_FILE		"amd/sev.fw"
 #define SEV_FW_NAME_SIZE	64
 
-/* Minimum firmware version required for the SEV-SNP support */
+/* Minimum firmware version required for SEV-SNP support */
 #define SNP_MIN_API_MAJOR	1
-#define SNP_MIN_API_MINOR	51
+#define SNP_MIN_API_MINOR	55
 
 /*
  * Maximum number of firmware-writable buffers that might be specified
@@ -250,6 +251,7 @@ static int sev_cmd_buffer_len(int cmd)
 	case SEV_CMD_SNP_PLATFORM_STATUS:	return sizeof(struct sev_data_snp_addr);
 	case SEV_CMD_SNP_GUEST_REQUEST:		return sizeof(struct sev_data_snp_guest_request);
 	case SEV_CMD_SNP_CONFIG:		return sizeof(struct sev_user_data_snp_config);
+	case SEV_CMD_SNP_DOWNLOAD_FIRMWARE_EX:	return sizeof(struct sev_data_download_firmware_ex);
 	case SEV_CMD_SNP_COMMIT:		return sizeof(struct sev_data_snp_commit);
 	case SEV_CMD_SNP_FEATURE_INFO:		return sizeof(struct sev_data_snp_feature_info);
 	case SEV_CMD_SNP_VLEK_LOAD:		return sizeof(struct sev_user_data_snp_vlek_load);
@@ -1265,15 +1267,20 @@ static int snp_get_platform_data(struct sev_device *sev, int *error)
 	struct page *page;
 	int rc;
 
-	/*
-	 * This function is expected to be called before SNP is
-	 * initialized.
-	 */
-	if (sev->snp_initialized)
-		return -EINVAL;
+	lockdep_assert_held(&sev_cmd_mutex);
 
-	buf.address = __psp_pa(&sev->snp_plat_status);
-	rc = sev_do_cmd(SEV_CMD_SNP_PLATFORM_STATUS, &buf, error);
+	page = __snp_alloc_firmware_pages(GFP_KERNEL, 0, true);
+	if (!page)
+		return -ENOMEM;
+
+	buf.address = __psp_pa(page_address(page));
+	rc = __sev_do_cmd_locked(SEV_CMD_SNP_PLATFORM_STATUS, &buf, error);
+	if (!rc)
+		memcpy(&sev->snp_plat_status, page_address(page),
+		       sizeof(sev->snp_plat_status));
+
+	__snp_free_firmware_pages(page, 0, true);
+
 	if (rc) {
 		dev_err(sev->dev, "SNP PLATFORM_STATUS command failed, ret = %d, error = %#x\n",
 			rc, *error);
@@ -1297,7 +1304,7 @@ static int snp_get_platform_data(struct sev_device *sev, int *error)
 	 * command to ensure structure is 8-byte aligned, and does not
 	 * cross a page boundary.
 	 */
-	page = alloc_page(GFP_KERNEL);
+	page = __snp_alloc_firmware_pages(GFP_KERNEL, 0, true);
 	if (!page)
 		return -ENOMEM;
 
@@ -1306,14 +1313,14 @@ static int snp_get_platform_data(struct sev_device *sev, int *error)
 	snp_feat_info.ecx_in = 0;
 	snp_feat_info.feature_info_paddr = __psp_pa(feat_info);
 
-	rc = sev_do_cmd(SEV_CMD_SNP_FEATURE_INFO, &snp_feat_info, error);
+	rc = __sev_do_cmd_locked(SEV_CMD_SNP_FEATURE_INFO, &snp_feat_info, error);
 	if (!rc)
 		sev->snp_feat_info_0 = *feat_info;
 	else
 		dev_err(sev->dev, "SNP FEATURE_INFO command failed, ret = %d, error = %#x\n",
 			rc, *error);
 
-	__free_page(page);
+	__snp_free_firmware_pages(page, 0, true);
 
 	return rc;
 }
@@ -1511,8 +1518,8 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 	struct psp_device *psp = psp_master;
 	struct sev_data_snp_init_ex data = {};
 	struct sev_device *sev;
-	void *arg = &data;
-	int cmd, rc = 0;
+	bool tio_supp;
+	int rc = 0;
 
 	if (!cc_platform_has(CC_ATTR_HOST_SEV_SNP))
 		return -ENODEV;
@@ -1523,7 +1530,7 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 		return 0;
 
 	if (!sev_version_greater_or_equal(SNP_MIN_API_MAJOR, SNP_MIN_API_MINOR)) {
-		dev_dbg(sev->dev, "SEV-SNP support requires firmware version >= %d:%d\n",
+		dev_err(sev->dev, "SEV-SNP support requires firmware version >= %d:%d\n",
 			SNP_MIN_API_MAJOR, SNP_MIN_API_MINOR);
 		return -EOPNOTSUPP;
 	}
@@ -1532,73 +1539,56 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 	if (rc)
 		return rc;
 
+	tio_supp = !!(sev->snp_feat_info_0.ebx & SNP_SEV_TIO_SUPPORTED);
+
 	/*
-	 * Starting in SNP firmware v1.52, the SNP_INIT_EX command takes a list
-	 * of system physical address ranges to convert into HV-fixed page
-	 * states during the RMP initialization.  For instance, the memory that
-	 * UEFI reserves should be included in the that list. This allows system
-	 * components that occasionally write to memory (e.g. logging to UEFI
-	 * reserved regions) to not fail due to RMP initialization and SNP
-	 * enablement.
-	 *
+	 * Firmware checks that the pages containing the ranges enumerated
+	 * in the RANGES structure are either in the default page state or in the
+	 * firmware page state.
 	 */
-	if (sev_version_greater_or_equal(SNP_MIN_API_MAJOR, 52)) {
-		bool tio_supp = !!(sev->snp_feat_info_0.ebx & SNP_SEV_TIO_SUPPORTED);
-
-		/*
-		 * Firmware checks that the pages containing the ranges enumerated
-		 * in the RANGES structure are either in the default page state or in the
-		 * firmware page state.
-		 */
-		snp_range_list = kzalloc(PAGE_SIZE, GFP_KERNEL);
-		if (!snp_range_list) {
-			dev_err(sev->dev,
-				"SEV: SNP_INIT_EX range list memory allocation failed\n");
-			return -ENOMEM;
-		}
-
-		/*
-		 * Retrieve all reserved memory regions from the e820 memory map
-		 * to be setup as HV-fixed pages.
-		 */
-		rc = walk_iomem_res_desc(IORES_DESC_NONE, IORESOURCE_MEM, 0, ~0,
-					 snp_range_list, snp_filter_reserved_mem_regions);
-		if (rc) {
-			dev_err(sev->dev,
-				"SEV: SNP_INIT_EX walk_iomem_res_desc failed rc = %d\n", rc);
-			return rc;
-		}
-
-		/*
-		 * Add HV_Fixed pages from other PSP sub-devices, such as SFS to the
-		 * HV_Fixed page list.
-		 */
-		snp_add_hv_fixed_pages(sev, snp_range_list);
-
-		if (max_snp_asid) {
-			data.ciphertext_hiding_en = 1;
-			data.max_snp_asid = max_snp_asid;
-		}
-
-		data.init_rmp = 1;
-		data.list_paddr_en = 1;
-		data.list_paddr = __psp_pa(snp_range_list);
-
-		data.tio_en = tio_supp && sev_tio_enabled && amd_iommu_sev_tio_supported();
-
-		/*
-		 * When psp_init_on_probe is disabled, the userspace calling
-		 * SEV ioctl can inadvertently shut down SNP and SEV-TIO causing
-		 * unexpected state loss.
-		 */
-		if (data.tio_en && !psp_init_on_probe)
-			dev_warn(sev->dev, "SEV-TIO as incompatible with psp_init_on_probe=0\n");
-
-		cmd = SEV_CMD_SNP_INIT_EX;
-	} else {
-		cmd = SEV_CMD_SNP_INIT;
-		arg = NULL;
+	snp_range_list = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!snp_range_list) {
+		dev_err(sev->dev,
+			"SEV: SNP_INIT_EX range list memory allocation failed\n");
+		return -ENOMEM;
 	}
+
+	/*
+	 * Retrieve all reserved memory regions from the e820 memory map
+	 * to be setup as HV-fixed pages.
+	 */
+	rc = walk_iomem_res_desc(IORES_DESC_NONE, IORESOURCE_MEM, 0, ~0,
+				 snp_range_list, snp_filter_reserved_mem_regions);
+	if (rc) {
+		dev_err(sev->dev,
+			"SEV: SNP_INIT_EX walk_iomem_res_desc failed rc = %d\n", rc);
+		return rc;
+	}
+
+	/*
+	 * Add HV_Fixed pages from other PSP sub-devices, such as SFS to the
+	 * HV_Fixed page list.
+	 */
+	snp_add_hv_fixed_pages(sev, snp_range_list);
+
+	if (max_snp_asid) {
+		data.ciphertext_hiding_en = 1;
+		data.max_snp_asid = max_snp_asid;
+	}
+
+	data.init_rmp = 1;
+	data.list_paddr_en = 1;
+	data.list_paddr = __psp_pa(snp_range_list);
+
+	data.tio_en = tio_supp && sev_tio_enabled && amd_iommu_sev_tio_supported();
+
+	/*
+	 * When psp_init_on_probe is disabled, the userspace calling
+	 * SEV ioctl can inadvertently shut down SNP and SEV-TIO causing
+	 * unexpected state loss.
+	 */
+	if (data.tio_en && !psp_init_on_probe)
+		dev_warn(sev->dev, "SEV-TIO as incompatible with psp_init_on_probe=0\n");
 
 	/*
 	 * The following sequence must be issued before launching the first SNP
@@ -1612,10 +1602,9 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 	 */
 	wbinvd_on_all_cpus();
 
-	rc = __sev_do_cmd_locked(cmd, arg, error);
+	rc = __sev_do_cmd_locked(SEV_CMD_SNP_INIT_EX, &data, error);
 	if (rc) {
-		dev_err(sev->dev, "SEV-SNP: %s failed rc %d, error %#x\n",
-			cmd == SEV_CMD_SNP_INIT_EX ? "SNP_INIT_EX" : "SNP_INIT",
+		dev_err(sev->dev, "SEV-SNP: SNP_INIT_EX failed rc %d, error %#x\n",
 			rc, *error);
 		return rc;
 	}
@@ -1883,6 +1872,35 @@ static int __sev_platform_shutdown_locked(int *error)
 	return ret;
 }
 
+static void __sev_release_firmware_buffers(bool panic)
+{
+	if (sev_es_tmr) {
+		/*
+		 * The TMR area was encrypted, flush it from the cache.
+		 *
+		 * If invoked during panic handling, local interrupts are
+		 * disabled and all CPUs are stopped, so wbinvd_on_all_cpus()
+		 * can't be used. In that case, wbinvd() is done on remote CPUs
+		 * via the NMI callback, and done for this CPU later during
+		 * SNP shutdown, so wbinvd_on_all_cpus() can be skipped.
+		 */
+		if (!panic)
+			wbinvd_on_all_cpus();
+
+		__snp_free_firmware_pages(virt_to_page(sev_es_tmr),
+					  get_order(sev_es_tmr_size),
+					  true);
+		sev_es_tmr = NULL;
+	}
+
+	if (sev_init_ex_buffer) {
+		__snp_free_firmware_pages(virt_to_page(sev_init_ex_buffer),
+					  get_order(NV_LENGTH),
+					  true);
+		sev_init_ex_buffer = NULL;
+	}
+}
+
 static int sev_get_platform_state(int *state, int *error)
 {
 	struct sev_user_data_status data;
@@ -2086,11 +2104,13 @@ void *psp_copy_user_blob(u64 uaddr, u32 len)
 }
 EXPORT_SYMBOL_GPL(psp_copy_user_blob);
 
-static int sev_get_api_version(void)
+static int __sev_get_api_version_locked(void)
 {
 	struct sev_device *sev = psp_master->sev_data;
 	struct sev_user_data_status status;
 	int error = 0, ret;
+
+	lockdep_assert_held(&sev_cmd_mutex);
 
 	/*
 	 * Cache SNP platform status and SNP feature information
@@ -2102,7 +2122,7 @@ static int sev_get_api_version(void)
 			return 1;
 	}
 
-	ret = sev_platform_status(&status, &error);
+	ret = __sev_do_cmd_locked(SEV_CMD_PLATFORM_STATUS, &status, &error);
 	if (ret) {
 		dev_err(sev->dev,
 			"SEV: failed to get status. Error: %#x\n", error);
@@ -2117,6 +2137,13 @@ static int sev_get_api_version(void)
 	sev->build = status.build;
 
 	return 0;
+}
+
+static int sev_get_api_version(void)
+{
+	guard(mutex)(&sev_cmd_mutex);
+
+	return __sev_get_api_version_locked();
 }
 
 static int sev_get_firmware(struct device *dev,
@@ -2208,6 +2235,357 @@ fw_err:
 	release_firmware(firmware);
 
 	return ret;
+}
+
+/* Largest image the firmware accepts, anything above is rejected */
+#define SEV_FW_IMAGE_MAX_SIZE	SZ_512K
+
+static enum fw_upload_err sev_fw_upload_prepare(struct fw_upload *fw_upload,
+						const u8 *data, u32 size)
+{
+	struct sev_device *sev = fw_upload->dd_handle;
+
+	if (size > SEV_FW_IMAGE_MAX_SIZE) {
+		dev_err_ratelimited(sev->dev,
+				    "DLFW_EX: image of %u bytes exceeds the %u byte maximum\n",
+				    size, SEV_FW_IMAGE_MAX_SIZE);
+		return FW_UPLOAD_ERR_INVALID_SIZE;
+	}
+
+	return FW_UPLOAD_ERR_NONE;
+}
+
+static int sev_download_firmware_ex(const u8 *data, u32 size, int *psp_ret)
+{
+	struct sev_data_download_firmware_ex sev_data = {0};
+	int ret, order;
+	struct page *p;
+	void *fw_blob;
+
+	order = get_order(size);
+	p = alloc_pages(GFP_KERNEL | __GFP_ZERO, order);
+	if (!p)
+		return -ENOMEM;
+
+	fw_blob = page_address(p);
+	memcpy(fw_blob, data, size);
+
+	sev_data.len = sizeof(sev_data);
+	sev_data.fw_paddr = __psp_pa(fw_blob);
+	sev_data.fw_len = size;
+	/*
+	 * Don't commit the new firmware, an explicit SNP_COMMIT is required
+	 * after update.
+	 */
+	sev_data.commit = 0;
+
+	ret = __sev_do_cmd_locked(SEV_CMD_SNP_DOWNLOAD_FIRMWARE_EX, &sev_data, psp_ret);
+
+	__free_pages(p, order);
+
+	return ret;
+}
+
+static enum fw_upload_err sev_fw_upload_handle_err(struct sev_device *sev,
+						   int cmd_ret, int psp_ret)
+{
+	enum fw_upload_err fwl_ret = FW_UPLOAD_ERR_FW_INVALID;
+	const char *msg;
+
+	if (!cmd_ret)
+		return FW_UPLOAD_ERR_NONE;
+
+	if (psp_dead) {
+		/*
+		 * The SEV command timed out and marked the ASP dead, there is
+		 * no status to decode.
+		 */
+		dev_err_ratelimited(sev->dev,
+				    "DLFW_EX: PSP not responding (failed %d, error %#x)\n",
+				    cmd_ret, psp_ret);
+		sev->fwl_rollback_required = false;
+
+		return FW_UPLOAD_ERR_TIMEOUT;
+	}
+
+	switch (psp_ret) {
+	case SEV_RET_INVALID_PARAM:
+		msg = "Provided image is not well formed";
+		break;
+	case SEV_RET_INVALID_LEN:
+		fwl_ret = FW_UPLOAD_ERR_INVALID_SIZE;
+		msg = "Provided image has an unusable length";
+		break;
+	case SEV_RET_SHUTDOWN_REQUIRED:
+		msg = "Provided image cannot be live-updated, shutdown required";
+		break;
+	case SEV_RET_BAD_VERSION:
+		msg = "Provided image < committed version";
+		break;
+	case SEV_RET_INVALID_PLATFORM_STATE:
+		msg = "Platform not in UNINIT state";
+		break;
+	case SEV_RET_INVALID_ADDRESS:
+		msg = "Unaligned address provided";
+		break;
+	case SEV_RET_UNSUPPORTED:
+		msg = "Feature not supported";
+		break;
+	case SEV_RET_INVALID_CONFIG:
+		msg = "Image rejected, unsupported configuration";
+		break;
+	case SEV_RET_BAD_SVN:
+		msg = "Image rejected, SVN < committed SVN";
+		break;
+	case SEV_RET_BAD_SIGNATURE:
+		msg = "Bad firmware signature";
+		break;
+	case SEV_RET_UPDATE_FAILED:
+		/* The previous firmware is still running, a retry is safe. */
+		fwl_ret = FW_UPLOAD_ERR_BUSY;
+		msg = "Upgrade failed, automatically reverted";
+		break;
+	case SEV_RET_RESTORE_REQUIRED:
+		/*
+		 * Firmware requested a roll-back. Declare the PSP dead so
+		 * nothing else tries to use it, and let the next upload through
+		 * so the admin can restore the previous image.
+		 */
+		sev->fwl_rollback_required = true;
+		psp_dead = true;
+		fwl_ret = FW_UPLOAD_ERR_RW_ERROR;
+		msg = "Live upgrade failed, please roll back";
+		break;
+	case SEV_RET_HWSEV_RET_UNSAFE:
+		/*
+		 * Following a return of HARDWARE_UNSAFE, operation of the SEV
+		 * firmware is indeterminate and the recommendation is to reboot
+		 * the platform. Declare the PSP dead so the driver stops
+		 * issuing commands to it while the reboot is pending.
+		 */
+		sev->fwl_rollback_required = false;
+		psp_dead = true;
+		fwl_ret = FW_UPLOAD_ERR_HW_ERROR;
+		msg = "SEV firmware no longer safe. Reboot recommended";
+		break;
+	case SEV_RET_NO_FW_CALL:
+		/* The command never reached the firmware. */
+		fwl_ret = FW_UPLOAD_ERR_BUSY;
+		msg = "Driver error";
+		break;
+	default:
+		fwl_ret = FW_UPLOAD_ERR_HW_ERROR;
+		msg = "Unknown SEV firmware error";
+		break;
+	}
+
+	dev_err_ratelimited(sev->dev, "DLFW_EX: %s (failed %d, error %#x)\n",
+			    msg, cmd_ret, psp_ret);
+
+	return fwl_ret;
+}
+
+static int sev_fw_upload_shutdown_platform(struct sev_device *sev)
+{
+	int rc, error = SEV_RET_NO_FW_CALL, sev_plat_state;
+
+	lockdep_assert_held(&sev_cmd_mutex);
+
+	rc = sev_get_platform_state(&sev_plat_state, &error);
+	if (rc) {
+		dev_err_ratelimited(sev->dev, "SEV get platform state failed %d, error %#x\n",
+				    rc, error);
+		return rc;
+	}
+
+	switch (sev_plat_state) {
+	case SEV_STATE_UNINIT:
+		break;
+	case SEV_STATE_WORKING:
+		/* Legacy guests are running, the update cannot proceed. */
+		return -EBUSY;
+	case SEV_STATE_INIT:
+		rc = __sev_platform_shutdown_locked(&error);
+		if (rc) {
+			dev_err_ratelimited(sev->dev, "SEV platform shutdown failed %d, error %#x\n",
+					    rc, error);
+			return rc;
+		}
+
+		sev->fwl_reinit_required = true;
+		break;
+	default:
+		dev_err_ratelimited(sev->dev, "Unknown SEV firmware state %d\n", sev_plat_state);
+		return -EINVAL;
+	}
+
+	/*
+	 * After DLFW_EX, INIT under the new image can fail with
+	 * SEV_RET_INVALID_PAGE_STATE if it is handed the TMR or INIT_EX NV
+	 * buffer that the previous image left in the firmware state.
+	 *
+	 * Reclaim and free them rather than keeping them for reuse. The
+	 * re-init allocates new buffers and moves them into the firmware
+	 * state itself, and a skipped or failed re-init leaves no stale
+	 * buffers behind for a later INIT or teardown to trip over. If the
+	 * new 2M TMR allocation fails, INIT is issued without SEV-ES and
+	 * only a warning is logged.
+	 */
+	__sev_release_firmware_buffers(false);
+
+	return 0;
+}
+
+static void sev_fw_upload_reinit_platform(struct sev_device *sev)
+{
+	int rc, error = SEV_RET_NO_FW_CALL;
+
+	lockdep_assert_held(&sev_cmd_mutex);
+
+	if (!sev->fwl_reinit_required)
+		return;
+
+	rc = __sev_platform_init_locked(&error);
+	if (rc) {
+		dev_err_ratelimited(sev->dev, "SEV platform re-init failed %d, error %#x\n",
+				    rc, error);
+		return;
+	}
+
+	sev->fwl_reinit_required = false;
+}
+
+static enum fw_upload_err sev_fw_upload_write(struct fw_upload *fw_upload,
+					      const u8 *data, u32 offset,
+					      u32 size, u32 *written)
+{
+	struct sev_device *sev = fw_upload->dd_handle;
+	int cmd_ret, psp_ret = SEV_RET_NO_FW_CALL;
+	u8 old_major, old_minor, old_build;
+	enum fw_upload_err fwl_ret;
+
+	guard(mutex)(&sev_cmd_mutex);
+
+	old_major = sev->api_major;
+	old_minor = sev->api_minor;
+	old_build = sev->build;
+
+	/*
+	 * SEV firmware will only successfully execute the DLFW_EX command if a
+	 * firmware rollback is required. Other commands may be processed, but
+	 * may not execute properly. Use the psp_dead boolean to restrict
+	 * execution to this path.
+	 */
+	if (psp_dead && !sev->fwl_rollback_required) {
+		dev_err_ratelimited(sev->dev, "DLFW_EX: PSP is not responding\n");
+		return FW_UPLOAD_ERR_HW_ERROR;
+	}
+
+	/*
+	 * If the last firmware update returned RESTORE_REQUIRED, retry DLFW_EX.
+	 * Being in this state means that the legacy firmware has previously
+	 * been shut down, so no need to do it again.
+	 */
+	if (sev->fwl_rollback_required) {
+		psp_dead = false;
+	} else {
+		cmd_ret = sev_fw_upload_shutdown_platform(sev);
+		if (cmd_ret)
+			return psp_dead ? FW_UPLOAD_ERR_HW_ERROR : FW_UPLOAD_ERR_BUSY;
+	}
+
+	cmd_ret = sev_download_firmware_ex(data, size, &psp_ret);
+	fwl_ret = sev_fw_upload_handle_err(sev, cmd_ret, psp_ret);
+	if (fwl_ret == FW_UPLOAD_ERR_NONE) {
+		*written = size;
+		sev->fwl_rollback_required = false;
+	}
+
+	/*
+	 * Firmware either just requested a rollback or a rollback attempt
+	 * failed. Keep the PSP dead for all other commands, only another
+	 * DLFW_EX attempt is allowed through.
+	 */
+	if (sev->fwl_rollback_required)
+		psp_dead = true;
+
+	if (fwl_ret == FW_UPLOAD_ERR_NONE) {
+		if (__sev_get_api_version_locked()) {
+			dev_warn_ratelimited(sev->dev,
+					     "Platform data refresh after DLFW_EX failed\n");
+			if (psp_dead)
+				fwl_ret = FW_UPLOAD_ERR_HW_ERROR;
+		} else if (sev->api_major != old_major ||
+			   sev->api_minor != old_minor ||
+			   sev->build != old_build) {
+			dev_info_ratelimited(sev->dev,
+					     "SEV firmware updated from %d.%d.%d to %d.%d.%d\n",
+					     old_major, old_minor, old_build,
+					     sev->api_major, sev->api_minor, sev->build);
+		} else {
+			dev_info_ratelimited(sev->dev,
+					     "SEV firmware version unchanged: %d.%d.%d\n",
+					     sev->api_major, sev->api_minor, sev->build);
+		}
+	}
+
+	if (!sev->fwl_rollback_required && !psp_dead)
+		sev_fw_upload_reinit_platform(sev);
+
+	return fwl_ret;
+}
+
+static enum fw_upload_err sev_fw_upload_poll_complete(struct fw_upload *fw_upload)
+{
+	return FW_UPLOAD_ERR_NONE;
+}
+
+static void sev_fw_upload_cancel(struct fw_upload *fw_upload)
+{
+	/* intentional no-op */
+}
+
+static const struct fw_upload_ops sev_fw_upload_ops = {
+	.prepare = sev_fw_upload_prepare,
+	.write = sev_fw_upload_write,
+	.poll_complete = sev_fw_upload_poll_complete,
+	.cancel = sev_fw_upload_cancel,
+};
+
+/* Serializes registration and unregistration of sev->fwl */
+static DEFINE_MUTEX(sev_fwl_lock);
+
+static void register_sev_fw_uploader(struct sev_device *sev)
+{
+	struct fw_upload *fwl;
+
+	guard(mutex)(&sev_fwl_lock);
+
+	/*
+	 * The interface only drives DLFW_EX, which is an SNP command, so do not
+	 * advertise it where SNP is unavailable or the interface already exists
+	 */
+	if (!cc_platform_has(CC_ATTR_HOST_SEV_SNP) || sev->fwl)
+		return;
+
+	fwl = firmware_upload_register(sev->dev, "sev", &sev_fw_upload_ops, sev);
+	if (IS_ERR(fwl)) {
+		dev_err(sev->dev, "SEV firmware upload registration failure: %ld\n", PTR_ERR(fwl));
+		return;
+	}
+
+	sev->fwl = fwl;
+}
+
+static void unregister_sev_fw_uploader(struct sev_device *sev)
+{
+	guard(mutex)(&sev_fwl_lock);
+
+	if (!sev->fwl)
+		return;
+
+	firmware_upload_unregister(sev->fwl);
+	sev->fwl = NULL;
 }
 
 static int __sev_snp_shutdown_locked(int *error, bool panic)
@@ -2883,8 +3261,11 @@ static int sev_misc_init(struct sev_device *sev)
 		misc->fops = &sev_fops;
 
 		ret = misc_register(misc);
-		if (ret)
+		if (ret) {
+			kfree(misc_dev);
+			misc_dev = NULL;
 			return ret;
+		}
 
 		kref_init(&misc_dev->refcount);
 	} else {
@@ -2963,31 +3344,7 @@ static void __sev_firmware_shutdown(struct sev_device *sev, bool panic)
 
 	__sev_platform_shutdown_locked(&error);
 
-	if (sev_es_tmr) {
-		/*
-		 * The TMR area was encrypted, flush it from the cache.
-		 *
-		 * If invoked during panic handling, local interrupts are
-		 * disabled and all CPUs are stopped, so wbinvd_on_all_cpus()
-		 * can't be used. In that case, wbinvd() is done on remote CPUs
-		 * via the NMI callback, and done for this CPU later during
-		 * SNP shutdown, so wbinvd_on_all_cpus() can be skipped.
-		 */
-		if (!panic)
-			wbinvd_on_all_cpus();
-
-		__snp_free_firmware_pages(virt_to_page(sev_es_tmr),
-					  get_order(sev_es_tmr_size),
-					  true);
-		sev_es_tmr = NULL;
-	}
-
-	if (sev_init_ex_buffer) {
-		__snp_free_firmware_pages(virt_to_page(sev_init_ex_buffer),
-					  get_order(NV_LENGTH),
-					  true);
-		sev_init_ex_buffer = NULL;
-	}
+	__sev_release_firmware_buffers(panic);
 
 	__sev_snp_shutdown_locked(&error, panic);
 }
@@ -3073,6 +3430,8 @@ void sev_dev_destroy(struct psp_device *psp)
 	if (!sev)
 		return;
 
+	unregister_sev_fw_uploader(sev);
+
 	sev_firmware_shutdown(sev);
 
 	if (sev->misc)
@@ -3136,6 +3495,8 @@ void sev_pci_init(void)
 			 api_major, api_minor, build,
 			 sev->api_major, sev->api_minor, sev->build);
 
+	register_sev_fw_uploader(sev);
+
 	return;
 
 err:
@@ -3150,6 +3511,8 @@ void sev_pci_exit(void)
 
 	if (!sev)
 		return;
+
+	unregister_sev_fw_uploader(sev);
 
 	sev_firmware_shutdown(sev);
 }

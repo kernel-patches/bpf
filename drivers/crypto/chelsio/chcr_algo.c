@@ -1359,7 +1359,7 @@ static int chcr_aes_encrypt(struct skcipher_request *req)
 	err = process_cipher(req, u_ctx->lldi.rxq_ids[reqctx->rxqidx],
 			     &skb, CHCR_ENCRYPT_OP);
 	if (err || !skb)
-		return  err;
+		goto error;
 	skb->dev = u_ctx->lldi.ports[0];
 	set_wr_txq(skb, CPL_PRIORITY_DATA, reqctx->txqidx);
 	chcr_send_wr(skb);
@@ -1397,16 +1397,21 @@ static int chcr_aes_decrypt(struct skcipher_request *req)
 
 	if (unlikely(cxgb4_is_crypto_q_full(u_ctx->lldi.ports[0],
 						reqctx->txqidx) &&
-		(!(req->base.flags & CRYPTO_TFM_REQ_MAY_BACKLOG))))
-			return -ENOSPC;
+		(!(req->base.flags & CRYPTO_TFM_REQ_MAY_BACKLOG)))) {
+		err = -ENOSPC;
+		goto error;
+	}
 	err = process_cipher(req, u_ctx->lldi.rxq_ids[reqctx->rxqidx],
 			     &skb, CHCR_DECRYPT_OP);
 	if (err || !skb)
-		return err;
+		goto error;
 	skb->dev = u_ctx->lldi.ports[0];
 	set_wr_txq(skb, CPL_PRIORITY_DATA, reqctx->txqidx);
 	chcr_send_wr(skb);
 	return -EINPROGRESS;
+error:
+	chcr_dec_wrcount(dev);
+	return err;
 }
 static int chcr_device_init(struct chcr_context *ctx)
 {
@@ -1439,6 +1444,7 @@ static int chcr_init_tfm(struct crypto_skcipher *tfm)
 	struct skcipher_alg *alg = crypto_skcipher_alg(tfm);
 	struct chcr_context *ctx = crypto_skcipher_ctx(tfm);
 	struct ablk_ctx *ablkctx = ABLK_CTX(ctx);
+	int ret;
 
 	ablkctx->sw_cipher = crypto_alloc_skcipher(alg->base.cra_name, 0,
 				CRYPTO_ALG_NEED_FALLBACK);
@@ -1450,7 +1456,11 @@ static int chcr_init_tfm(struct crypto_skcipher *tfm)
 	crypto_skcipher_set_reqsize(tfm, sizeof(struct chcr_skcipher_req_ctx) +
 					 crypto_skcipher_reqsize(ablkctx->sw_cipher));
 
-	return chcr_device_init(ctx);
+	ret = chcr_device_init(ctx);
+	if (ret)
+		crypto_free_skcipher(ablkctx->sw_cipher);
+
+	return ret;
 }
 
 static int chcr_rfc3686_init(struct crypto_skcipher *tfm)
@@ -1458,6 +1468,7 @@ static int chcr_rfc3686_init(struct crypto_skcipher *tfm)
 	struct skcipher_alg *alg = crypto_skcipher_alg(tfm);
 	struct chcr_context *ctx = crypto_skcipher_ctx(tfm);
 	struct ablk_ctx *ablkctx = ABLK_CTX(ctx);
+	int ret;
 
 	/*RFC3686 initialises IV counter value to 1, rfc3686(ctr(aes))
 	 * cannot be used as fallback in chcr_handle_cipher_response
@@ -1470,7 +1481,11 @@ static int chcr_rfc3686_init(struct crypto_skcipher *tfm)
 	}
 	crypto_skcipher_set_reqsize(tfm, sizeof(struct chcr_skcipher_req_ctx) +
 				    crypto_skcipher_reqsize(ablkctx->sw_cipher));
-	return chcr_device_init(ctx);
+	ret = chcr_device_init(ctx);
+	if (ret)
+		crypto_free_skcipher(ablkctx->sw_cipher);
+
+	return ret;
 }
 
 
@@ -3164,6 +3179,7 @@ static int chcr_aead_cra_init(struct crypto_aead *tfm)
 {
 	struct chcr_aead_ctx *aeadctx = AEAD_CTX(a_ctx(tfm));
 	struct aead_alg *alg = crypto_aead_alg(tfm);
+	int ret;
 
 	aeadctx->sw_cipher = crypto_alloc_aead(alg->base.cra_name, 0,
 					       CRYPTO_ALG_NEED_FALLBACK |
@@ -3174,7 +3190,11 @@ static int chcr_aead_cra_init(struct crypto_aead *tfm)
 		tfm, max(sizeof(struct chcr_aead_reqctx),
 			 sizeof(struct aead_request) +
 			 crypto_aead_reqsize(aeadctx->sw_cipher)));
-	return chcr_device_init(a_ctx(tfm));
+	ret = chcr_device_init(a_ctx(tfm));
+	if (ret)
+		crypto_free_aead(aeadctx->sw_cipher);
+
+	return ret;
 }
 
 static void chcr_aead_cra_exit(struct crypto_aead *tfm)
@@ -3636,6 +3656,7 @@ static int chcr_aead_op(struct aead_request *req,
 	    crypto_ipsec_check_assoclen(req->assoclen) != 0) {
 		pr_err("RFC4106: Invalid value of assoclen %d\n",
 		       req->assoclen);
+		chcr_dec_wrcount(cdev);
 		return -EINVAL;
 	}
 

@@ -44,7 +44,7 @@ static void *zstd_alloc_stream(void)
 	if (!wksp_size)
 		return ERR_PTR(-EINVAL);
 
-	ctx = kvmalloc_flex(*ctx, wksp, wksp_size);
+	ctx = vmalloc(struct_size(ctx, wksp, wksp_size));
 	if (!ctx)
 		return ERR_PTR(-ENOMEM);
 
@@ -56,7 +56,7 @@ static void *zstd_alloc_stream(void)
 
 static void zstd_free_stream(void *ctx)
 {
-	kvfree(ctx);
+	vfree(ctx);
 }
 
 static struct crypto_acomp_streams zstd_streams = {
@@ -86,8 +86,11 @@ static int zstd_compress_one(struct acomp_req *req, struct zstd_ctx *ctx,
 
 	out_len = zstd_compress_cctx(ctx->cctx, dst, req->dlen, src, req->slen,
 				     &ctx->params);
-	if (zstd_is_error(out_len))
+	if (zstd_is_error(out_len)) {
+		if (zstd_get_error_code(out_len) == ZSTD_error_dstSize_tooSmall)
+			return -ENOSPC;
 		return -EINVAL;
+	}
 
 	*dlen = out_len;
 

@@ -47,10 +47,8 @@ static int eip93_aead_send_req(struct crypto_async_request *async)
 	int err;
 
 	err = check_valid_request(rctx);
-	if (err) {
-		aead_request_complete(req, err);
+	if (err)
 		return err;
-	}
 
 	return eip93_send_req(async, req->iv, rctx);
 }

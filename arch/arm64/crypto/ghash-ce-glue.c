@@ -384,7 +384,8 @@ static struct aead_alg gcm_aes_algs[] = {{
 
 static int __init ghash_ce_mod_init(void)
 {
-	if (!cpu_have_named_feature(ASIMD) || !cpu_have_named_feature(PMULL))
+	/* ASIMD is implied by PMULL, but better be safe than sorry */
+	if (!cpu_have_named_feature(ASIMD))
 		return -ENODEV;
 
 	return crypto_register_aeads(gcm_aes_algs, ARRAY_SIZE(gcm_aes_algs));
@@ -395,10 +396,5 @@ static void __exit ghash_ce_mod_exit(void)
 	crypto_unregister_aeads(gcm_aes_algs, ARRAY_SIZE(gcm_aes_algs));
 }
 
-static const struct cpu_feature __maybe_unused ghash_cpu_feature[] = {
-	{ cpu_feature(PMULL) }, { }
-};
-MODULE_DEVICE_TABLE(cpu, ghash_cpu_feature);
-
-module_init(ghash_ce_mod_init);
+module_cpu_feature_match(PMULL, ghash_ce_mod_init);
 module_exit(ghash_ce_mod_exit);
