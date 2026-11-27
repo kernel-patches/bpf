@@ -446,7 +446,7 @@ struct bcmgenet_rx_stats64 {
 #define DMA_RATE_ADJ_MASK		0xFF
 
 /* Tx/Rx Dma Descriptor common bits*/
-#define DMA_BUFLENGTH_MASK		0x0fff
+#define DMA_BUFLENGTH_MASK		0x0fff	/* RX status word only */
 #define DMA_BUFLENGTH_SHIFT		16
 #define DMA_OWN				0x8000
 #define DMA_EOP				0x4000
@@ -598,6 +598,8 @@ struct bcmgenet_rx_ring {
 	unsigned int	cb_ptr;		/* Rx ring initial CB ptr */
 	unsigned int	end_ptr;	/* Rx ring end CB ptr */
 	unsigned int	old_discards;
+	struct sk_buff	*frag_head;	/* frame being reassembled */
+	bool		frag_drop;	/* discarding until the next SOP */
 	struct bcmgenet_net_dim dim;
 	u32		rx_max_coalesced_frames;
 	u32		rx_coalesce_usecs;
