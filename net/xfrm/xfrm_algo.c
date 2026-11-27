@@ -513,6 +513,32 @@ static struct xfrm_algo_desc ealg_list[] = {
 	}
 },
 {
+	.name = "cbc(aria)",
+
+	.uinfo = {
+		.encr = {
+			.geniv = "echainiv",
+			.blockbits = 128,
+			.defkeybits = 128,
+		}
+	},
+
+	.pfkey_supported = 0,
+},
+{
+	.name = "rfc3686(ctr(aria))",
+
+	.uinfo = {
+		.encr = {
+			.geniv = "seqiv",
+			.blockbits = 128,
+			.defkeybits = 160, /* 128-bit key + 32-bit nonce */
+		}
+	},
+
+	.pfkey_supported = 0,
+},
+{
 	.name = "cbc(twofish)",
 	.compat = "twofish",
 
