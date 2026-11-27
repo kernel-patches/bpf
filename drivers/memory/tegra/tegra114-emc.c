@@ -142,6 +142,7 @@
 
 #define EMC_AUTO_CAL_CONFIG			0x2a4
 #define EMC_AUTO_CAL_CONFIG_AUTO_CAL_START	BIT(31)
+#define EMC_AUTO_CAL_CONFIG_SLAVE_MODE		BIT(27)
 #define EMC_AUTO_CAL_INTERVAL			0x2a8
 #define EMC_AUTO_CAL_STATUS			0x2ac
 #define EMC_AUTO_CAL_STATUS_ACTIVE		BIT(31)
@@ -393,6 +394,7 @@ struct tegra_emc {
 	struct device *dev;
 	struct tegra_mc *mc;
 	void __iomem *regs;
+	void __iomem *ch_regs[2];
 	unsigned int irq;
 	struct clk *clk;
 
@@ -609,10 +611,17 @@ static int tegra114_emc_prepare_timing_change(struct tegra_emc *emc,
 		emc_ccfifo_writel(emc, timing->emc_auto_cal_config3,
 				  EMC_AUTO_CAL_CONFIG3);
 
-	if (timing->emc_auto_cal_config != last->emc_auto_cal_config) {
-		val = timing->emc_auto_cal_config;
-		val &= EMC_AUTO_CAL_CONFIG_AUTO_CAL_START;
-		emc_ccfifo_writel(emc, val, EMC_AUTO_CAL_CONFIG);
+	/*
+	 * Channel 0 runs the pad calibration and channel 1 takes over its
+	 * results, so the two channels need different values. Without the
+	 * channel registers in the DT, keep what the bootloader set up.
+	 */
+	if (emc->ch_regs[0]) {
+		writel(timing->emc_auto_cal_config,
+		       emc->ch_regs[0] + EMC_AUTO_CAL_CONFIG);
+		writel(timing->emc_auto_cal_config |
+		       EMC_AUTO_CAL_CONFIG_SLAVE_MODE,
+		       emc->ch_regs[1] + EMC_AUTO_CAL_CONFIG);
 	}
 
 	/* DDR3: predict MRS long wait count */
@@ -712,7 +721,6 @@ static void tegra114_emc_complete_timing_change(struct tegra_emc *emc,
 						unsigned long rate)
 {
 	struct emc_timing *timing = tegra114_emc_find_timing(emc, rate);
-	struct emc_timing *last = &emc->last_timing;
 
 	if (!timing)
 		return;
@@ -720,10 +728,9 @@ static void tegra114_emc_complete_timing_change(struct tegra_emc *emc,
 	/* Wait until the state machine has settled */
 	emc_seq_wait_clkchange(emc);
 
-	/* Restore AUTO_CAL */
-	if (timing->emc_ctt_term_ctrl != last->emc_ctt_term_ctrl)
-		writel(timing->emc_auto_cal_interval,
-		       emc->regs + EMC_AUTO_CAL_INTERVAL);
+	/* Restore AUTO_CAL, it was disabled for the clock change */
+	writel(timing->emc_auto_cal_interval,
+	       emc->regs + EMC_AUTO_CAL_INTERVAL);
 
 	/* Restore dynamic self-refresh */
 	if (timing->emc_cfg & EMC_CFG_PWR_MASK)
@@ -1168,7 +1175,7 @@ static int emc_icc_set(struct icc_node *src, struct icc_node *dst)
 	unsigned long long peak_bw = icc_units_to_bps(dst->peak_bw);
 	unsigned long long avg_bw = icc_units_to_bps(dst->avg_bw);
 	unsigned long long rate = max(avg_bw, peak_bw);
-	unsigned int dram_data_bus_width_bytes = 4;
+	unsigned int dram_data_bus_width_bytes = 8;
 	const unsigned int ddr = 2;
 	int err;
 
@@ -1259,6 +1266,16 @@ static int tegra114_emc_probe(struct platform_device *pdev)
 	emc->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(emc->regs))
 		return PTR_ERR(emc->regs);
+
+	/* Older device trees only describe the broadcast registers */
+	if (platform_get_resource(pdev, IORESOURCE_MEM, 2)) {
+		for (unsigned int i = 0; i < ARRAY_SIZE(emc->ch_regs); i++) {
+			emc->ch_regs[i] =
+				devm_platform_ioremap_resource(pdev, i + 1);
+			if (IS_ERR(emc->ch_regs[i]))
+				return PTR_ERR(emc->ch_regs[i]);
+		}
+	}
 
 	emc->mc = devm_tegra_memory_controller_get(dev);
 	if (IS_ERR(emc->mc))
