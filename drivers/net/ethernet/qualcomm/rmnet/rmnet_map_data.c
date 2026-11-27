@@ -597,11 +597,11 @@ unsigned int rmnet_map_tx_aggregate(struct sk_buff *skb, struct rmnet_port *port
 	memcpy(&last, &port->agg_last, sizeof(struct timespec64));
 	ktime_get_real_ts64(&port->agg_last);
 
+new_packet:
 	if (!port->skbagg_head) {
 		/* Check to see if we should agg first. If the traffic is very
 		 * sparse, don't aggregate.
 		 */
-new_packet:
 		diff = timespec64_sub(port->agg_last, last);
 		size = port->egress_agg_params.bytes;
 
