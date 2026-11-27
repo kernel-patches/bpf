@@ -181,29 +181,23 @@ EXPORT_SYMBOL_GPL(font_glyph_rotate_270);
  * @height: The number of scanlines in the glyph
  * @charcount: The number of glyphs in the font
  * @steps: Number of rotation steps of 90°
- * @buf: Preallocated output buffer; can be NULL
- * @bufsize: The size of @buf in bytes; can be NULL
+ * @buf: Preallocated font data; can be NULL
  *
  * The parameters @width and @height refer to the visible number of pixels
  * and scanlines in a single glyph. The number of glyphs is given in @charcount.
  * Rotation happens in steps of 90°. The @steps parameter can have any value,
  * but only 0 to 3 produce distinct results. With 4 or higher, a full rotation
  * has been performed. You can pass any value for @steps and the helper will
- * perform the appropriate rotation. Note that the returned buffer is not
- * compatible with font_data_t. It only contains glyph data in the same format
- * as returned by font_data_buf(). Callers are responsible to free the returned
- * buffer with kfree(). Font rotation typically happens when displays get
- * re-oriented. To avoid unnecessary re-allocation of the memory buffer, the
- * caller can pass in an earlier result buffer in @buf for reuse. The old and
- * new buffer sizes are given and retrieved by the caller in @bufsize. The
- * allocation semantics are compatible with krealloc().
+ * perform the appropriate rotation. Font rotation typically happens when
+ * displays get re-oriented. To avoid unnecessary re-allocation of the memory
+ * buffer, the caller can pass in an earlier result in @buf for reuse. The
+ * returned font data should be released with font_data_put().
  *
  * Returns:
- * A buffer with rotated glyphs on success, or an error pointer otherwise
+ * Font data with rotated glyphs on success, or an error pointer otherwise
  */
-unsigned char *font_data_rotate(font_data_t *fd, unsigned int width, unsigned int height,
-				unsigned int charcount, unsigned int steps,
-				unsigned char *buf, size_t *bufsize)
+font_data_t *font_data_rotate(font_data_t *fd, unsigned int width, unsigned int height,
+			      unsigned int charcount, unsigned int steps, font_data_t *buf)
 {
 	const unsigned char *src = font_data_buf(fd);
 	unsigned int s_cellsize = font_glyph_size(width, height);
@@ -227,18 +221,15 @@ unsigned char *font_data_rotate(font_data_t *fd, unsigned int width, unsigned in
 	if (check_mul_overflow(charcount, d_cellsize, &size))
 		return ERR_PTR(-EINVAL);
 
-	if (!buf || !bufsize || size > *bufsize) {
-		dst = kmalloc_array(charcount, d_cellsize, GFP_KERNEL);
-		if (!dst)
-			return ERR_PTR(-ENOMEM);
-
-		kfree(buf);
-		buf = dst;
-		if (bufsize)
-			*bufsize = size;
+	if (!buf || size > font_data_size(buf)) {
+		buf = __font_data_alloc(size, GFP_KERNEL);
+		if (IS_ERR(buf))
+			return buf;
 	} else {
-		dst = buf;
+		font_data_get(buf);
 	}
+
+	dst = __font_data_wrbuf(buf);
 
 	switch (steps) {
 	case 0:

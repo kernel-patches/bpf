@@ -19,7 +19,11 @@ config FB_LOGO_EXTRA
 	default y if SPU_BASE
 
 config LOGO_LINUX_MONO
-	bool "Standard black and white Linux logo"
+	bool "Black and white Linux logo"
+	help
+	  Include a monochrome (black and white) Linux logo.
+	  This logo can be shown on all kinds of displays.
+	  Say Y to show a logo on monochrome displays.
 
 config LOGO_LINUX_MONO_FILE
 	string "Monochrome logo .pbm file"
@@ -36,7 +40,13 @@ config LOGO_LINUX_MONO_FILE
 	    magick source_image -compress none destination.pbm
 
 config LOGO_LINUX_VGA16
-	bool "Standard 16-color Linux logo"
+	bool "16-color Linux logo"
+	help
+	  Include a 16-color Linux logo.
+	  This logo can be shown on displays that support showing (at least)
+	  the standard VGA 16 color palette.
+	  Say Y to show a logo on color displays that are limited to less than
+	  256 colors.
 
 config LOGO_LINUX_VGA16_FILE
 	string "16-color logo .ppm file"
@@ -55,8 +65,13 @@ config LOGO_LINUX_VGA16_FILE
 	      -remap drivers/video/logo/clut_vga16.ppm destination.ppm
 
 config LOGO_LINUX_CLUT224
-	bool "Standard 224-color Linux logo"
+	bool "224-color Linux logo"
 	default y
+	help
+	  Include a 224-color Linux logo.
+	  This logo can be shown on displays that support showing a palette of
+	  256 or more colors.
+	  Say Y to show a logo on colorful displays.
 
 config LOGO_LINUX_CLUT224_FILE
 	string "224-color logo .ppm file"

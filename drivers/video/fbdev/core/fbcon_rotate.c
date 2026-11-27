@@ -18,7 +18,7 @@
 int fbcon_rotate_font(struct fb_info *info, struct vc_data *vc)
 {
 	struct fbcon_par *par = info->fbcon_par;
-	unsigned char *buf;
+	font_data_t *buf;
 	int ret;
 
 	if (par->p->fontdata == par->rotated.fontdata &&
@@ -40,21 +40,22 @@ int fbcon_rotate_font(struct fb_info *info, struct vc_data *vc)
 
 	buf = font_data_rotate(par->rotated.fontdata, vc->vc_font.width,
 			       vc->vc_font.height, vc->vc_font.charcount,
-			       par->rotated.buf_rotate, par->rotated.buf,
-			       &par->rotated.bufsize);
+			       par->rotated.buf_rotate, par->rotated.buf);
 	if (IS_ERR(buf)) {
 		ret = PTR_ERR(buf);
-		goto err_kfree;
+		goto err_font_data_put;
 	}
 
+	if (par->rotated.buf)
+		font_data_put(par->rotated.buf);
 	par->rotated.buf = buf;
 
 	return 0;
 
-err_kfree:
-	kfree(par->rotated.buf);
-	par->rotated.buf = NULL; /* clear here to avoid output */
-	par->rotated.bufsize = 0;
-
+err_font_data_put:
+	if (par->rotated.buf) {
+		font_data_put(par->rotated.buf);
+		par->rotated.buf = NULL; /* clear here to avoid output */
+	}
 	return ret;
 }
