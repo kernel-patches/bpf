@@ -153,9 +153,9 @@ struct vf_mac_filter {
 
 /* Attempt to maximize the headroom available for incoming frames.  We
  * use a 2K buffer for receives and need 1536/1534 to store the data for
- * the frame.  This leaves us with 512 bytes of room.  From that we need
- * to deduct the space needed for the shared info and the padding needed
- * to IP align the frame.
+ * the frame, plus IGB_TS_HDR_LEN for the timestamp the hardware can place
+ * in front of it.  From the rest we need to deduct the space needed for
+ * the shared info and the padding needed to IP align the frame.
  *
  * Note: For cache line sizes 256 or larger this value is going to end
  *	 up negative.  In these cases we should fall back to the 3K
@@ -190,7 +190,7 @@ static inline int igb_skb_pad(void)
 	if (IGB_2K_TOO_SMALL_WITH_PADDING)
 		rx_buf_len = IGB_RXBUFFER_3072 + SKB_DATA_ALIGN(NET_IP_ALIGN);
 	else
-		rx_buf_len = IGB_RXBUFFER_1536;
+		rx_buf_len = IGB_RXBUFFER_1536 + IGB_TS_HDR_LEN;
 
 	/* if needed make room for NET_IP_ALIGN */
 	rx_buf_len -= NET_IP_ALIGN;
@@ -419,6 +419,19 @@ static inline unsigned int igb_rx_bufsz(struct igb_ring *ring)
 		return IGB_MAX_FRAME_BUILD_SKB;
 #endif
 	return IGB_RXBUFFER_2048;
+}
+
+/* Number of bytes the hardware can write to an Rx buffer. On 2K build_skb
+ * rings the frame is limited to IGB_MAX_FRAME_BUILD_SKB, and the timestamp
+ * header comes in front of it.
+ */
+static inline unsigned int igb_rx_dma_len(struct igb_ring *ring)
+{
+#if (PAGE_SIZE < 8192)
+	if (ring_uses_build_skb(ring) && !ring_uses_large_buffer(ring))
+		return IGB_MAX_FRAME_BUILD_SKB + IGB_TS_HDR_LEN;
+#endif
+	return igb_rx_bufsz(ring);
 }
 
 static inline unsigned int igb_rx_pg_order(struct igb_ring *ring)

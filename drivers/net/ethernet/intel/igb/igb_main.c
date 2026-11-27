@@ -5223,7 +5223,7 @@ void igb_clean_rx_ring(struct igb_ring *rx_ring)
 		dma_sync_single_range_for_cpu(rx_ring->dev,
 					      buffer_info->dma,
 					      buffer_info->page_offset,
-					      igb_rx_bufsz(rx_ring),
+					      igb_rx_dma_len(rx_ring),
 					      DMA_FROM_DEVICE);
 
 		/* free resources associated with mapping */
@@ -9361,7 +9361,7 @@ void igb_alloc_rx_buffers(struct igb_ring *rx_ring, u16 cleaned_count)
 	bi = &rx_ring->rx_buffer_info[i];
 	i -= rx_ring->count;
 
-	bufsz = igb_rx_bufsz(rx_ring);
+	bufsz = igb_rx_dma_len(rx_ring);
 
 	do {
 		if (!igb_alloc_mapped_page(rx_ring, bi))
