@@ -246,7 +246,7 @@ static int rsnd_dmaen_attach(struct rsnd_dai_stream *io,
 	 * see
 	 *	rsnd_preallocate_pages()
 	 */
-	io->dmac_dev = chan->device->dev;
+	io->dmac_dev = dmaengine_get_dma_device(chan);
 
 	dma_release_channel(chan);
 
@@ -791,6 +791,7 @@ static void rsnd_dma_of_path(struct rsnd_mod *this,
 	struct rsnd_mod *mod_start, *mod_end;
 	struct rsnd_priv *priv = rsnd_mod_to_priv(this);
 	struct device *dev = rsnd_priv_to_dev(priv);
+	struct device_node *ssiu_np;
 	int nr, i, idx;
 
 	/*
@@ -803,13 +804,15 @@ static void rsnd_dma_of_path(struct rsnd_mod *this,
 	 *	rsnd_ssiu_dma_req()
 	 *	rsnd_ssi_dma_req()
 	 */
-	if (rsnd_ssiu_of_node(priv)) {
+	ssiu_np = rsnd_ssiu_of_node(priv);
+	if (ssiu_np) {
 		struct rsnd_mod *ssiu = rsnd_io_to_mod_ssiu(io);
 
 		/* use SSIU */
 		ssi = ssiu;
 		if (this == rsnd_io_to_mod_ssi(io))
 			this = ssiu;
+		of_node_put(ssiu_np);
 	} else {
 		/* keep compatible, use SSI */
 		ssi = rsnd_io_to_mod_ssi(io);

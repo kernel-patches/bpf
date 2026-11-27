@@ -613,9 +613,6 @@ int rsnd_dai_connect(struct rsnd_mod *mod,
  *	R-Car Gen1/Gen2
  */
 int rsnd_gen_probe(struct rsnd_priv *priv);
-void __iomem *rsnd_gen_reg_get(struct rsnd_priv *priv,
-			       struct rsnd_mod *mod,
-			       enum rsnd_reg reg);
 phys_addr_t rsnd_gen_get_phy_addr(struct rsnd_priv *priv, int reg_id);
 #ifdef CONFIG_DEBUG_FS
 void __iomem *rsnd_gen_get_base_addr(struct rsnd_priv *priv, int reg_id);
@@ -849,8 +846,6 @@ unsigned int rsnd_ssi_clk_query(struct rsnd_dai *rdai,
 /*
  *	R-Car SSIU
  */
-int rsnd_ssiu_attach(struct rsnd_dai_stream *io,
-		     struct rsnd_mod *mod);
 int rsnd_ssiu_probe(struct rsnd_priv *priv);
 void rsnd_ssiu_remove(struct rsnd_priv *priv);
 void rsnd_ssiu_suspend(struct rsnd_priv *priv);

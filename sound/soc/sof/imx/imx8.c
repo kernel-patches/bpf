@@ -26,17 +26,16 @@
 
 /* imx8ulp macros */
 #define FSL_SIP_HIFI_XRDC       0xc200000e
-#define SYSCTRL0                0x8
-#define EXECUTE_BIT             BIT(13)
-#define RESET_BIT               BIT(16)
-#define HIFI4_CLK_BIT           BIT(17)
-#define PB_CLK_BIT              BIT(18)
-#define PLAT_CLK_BIT            BIT(19)
-#define DEBUG_LOGIC_BIT         BIT(25)
 
 struct imx8m_chip_data {
 	void __iomem *dap;
 	struct reset_control *run_stall;
+};
+
+struct imx8ulp_chip_data {
+	struct reset_control *run_stall;
+	struct reset_control *soft_rst;
+	struct reset_control *dbg_rst;
 };
 
 static int imx8_shutdown(struct snd_sof_dev *sdev)
@@ -202,42 +201,31 @@ static int imx8m_probe(struct snd_sof_dev *sdev)
 
 static int imx8ulp_run(struct snd_sof_dev *sdev)
 {
-	struct regmap *regmap = get_chip_pdata(sdev);
+	struct imx8ulp_chip_data *chip = get_chip_pdata(sdev);
 
-	/* Controls the HiFi4 DSP Reset: 1 in reset, 0 out of reset */
-	regmap_update_bits(regmap, SYSCTRL0, RESET_BIT, 0);
+	reset_control_deassert(chip->soft_rst);
 
-	/* Reset HiFi4 DSP Debug logic: 1 debug reset, 0  out of reset*/
-	regmap_update_bits(regmap, SYSCTRL0, DEBUG_LOGIC_BIT, 0);
+	/* Release HiFi4 DSP Debug logic */
+	reset_control_deassert(chip->dbg_rst);
 
-	/* Stall HIFI4 DSP Execution: 1 stall, 0 run */
-	regmap_update_bits(regmap, SYSCTRL0, EXECUTE_BIT, 0);
+	/* Run HIFI4 DSP Execution */
+	reset_control_deassert(chip->run_stall);
 
 	return 0;
 }
 
 static int imx8ulp_reset(struct snd_sof_dev *sdev)
 {
+	struct imx8ulp_chip_data *chip = get_chip_pdata(sdev);
 	struct arm_smccc_res smc_res;
-	struct regmap *regmap;
 
-	regmap = get_chip_pdata(sdev);
-
-	/* HiFi4 Platform Clock Enable: 1 enabled, 0 disabled */
-	regmap_update_bits(regmap, SYSCTRL0, PLAT_CLK_BIT, PLAT_CLK_BIT);
-
-	/* HiFi4 PBCLK clock enable: 1 enabled, 0 disabled */
-	regmap_update_bits(regmap, SYSCTRL0, PB_CLK_BIT, PB_CLK_BIT);
-
-	/* HiFi4 Clock Enable: 1 enabled, 0 disabled */
-	regmap_update_bits(regmap, SYSCTRL0, HIFI4_CLK_BIT, HIFI4_CLK_BIT);
-
-	regmap_update_bits(regmap, SYSCTRL0, RESET_BIT, RESET_BIT);
+	reset_control_assert(chip->soft_rst);
 
 	usleep_range(1, 2);
 
-	/* Stall HIFI4 DSP Execution: 1 stall, 0 not stall */
-	regmap_update_bits(regmap, SYSCTRL0, EXECUTE_BIT, EXECUTE_BIT);
+	/* Stall HIFI4 DSP Execution: */
+	reset_control_assert(chip->run_stall);
+
 	usleep_range(1, 2);
 
 	arm_smccc_smc(FSL_SIP_HIFI_XRDC, 0, 0, 0, 0, 0, 0, 0, &smc_res);
@@ -248,16 +236,30 @@ static int imx8ulp_reset(struct snd_sof_dev *sdev)
 static int imx8ulp_probe(struct snd_sof_dev *sdev)
 {
 	struct imx_common_data *common;
-	struct regmap *regmap;
+	struct imx8ulp_chip_data *chip;
+
+	chip = devm_kzalloc(sdev->dev, sizeof(*chip), GFP_KERNEL);
+	if (!chip)
+		return -ENOMEM;
 
 	common = sdev->pdata->hw_pdata;
 
-	regmap = syscon_regmap_lookup_by_phandle(sdev->dev->of_node, "fsl,dsp-ctrl");
-	if (IS_ERR(regmap))
-		return dev_err_probe(sdev->dev, PTR_ERR(regmap),
-				     "failed to fetch dsp ctrl regmap\n");
+	chip->run_stall = devm_reset_control_get_exclusive(sdev->dev, "runstall");
+	if (IS_ERR(chip->run_stall))
+		return dev_err_probe(sdev->dev, PTR_ERR(chip->run_stall),
+				     "failed to get dsp runstall reset control\n");
 
-	common->chip_pdata = regmap;
+	chip->soft_rst = devm_reset_control_get_optional_exclusive(sdev->dev, "softreset");
+	if (IS_ERR(chip->soft_rst))
+		return dev_err_probe(sdev->dev, PTR_ERR(chip->soft_rst),
+				     "failed to get dsp softreset reset control\n");
+
+	chip->dbg_rst = devm_reset_control_get_optional_exclusive(sdev->dev, "dbgreset");
+	if (IS_ERR(chip->dbg_rst))
+		return dev_err_probe(sdev->dev, PTR_ERR(chip->dbg_rst),
+				     "failed to get dsp dbgreset reset control\n");
+
+	common->chip_pdata = chip;
 
 	return 0;
 }

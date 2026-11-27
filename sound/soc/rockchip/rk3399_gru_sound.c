@@ -539,12 +539,16 @@ static int rockchip_sound_of_parse_dais(struct device *dev,
 		if (!np_codec)
 			break;
 
-		if (!of_device_is_available(np_codec))
+		if (!of_device_is_available(np_codec)) {
+			of_node_put(np_codec);
 			continue;
+		}
 
 		index = rockchip_sound_codec_node_match(np_codec);
-		if (index < 0)
+		if (index < 0) {
+			of_node_put(np_codec);
 			continue;
+		}
 
 		switch (index) {
 		case DAILINK_CDNDP:

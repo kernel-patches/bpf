@@ -1194,19 +1194,13 @@ static void rt5665_jack_detect_handler(struct work_struct *work)
 		container_of(work, struct rt5665_priv, jack_detect_work.work);
 	int val, btn_type;
 
-	while (!rt5665->component) {
-		pr_debug("%s codec = null\n", __func__);
-		usleep_range(10000, 15000);
-	}
-
-	while (!snd_soc_card_is_instantiated(rt5665->component->card)) {
-		pr_debug("%s\n", __func__);
-		usleep_range(10000, 15000);
-	}
-
-	while (!rt5665->calibration_done) {
-		pr_debug("%s calibration not ready\n", __func__);
-		usleep_range(10000, 15000);
+	if (!rt5665->component ||
+	    !snd_soc_card_is_instantiated(rt5665->component->card) ||
+	    !rt5665->calibration_done) {
+		/* card not instantiated or calibration pending, try later */
+		mod_delayed_work(system_power_efficient_wq,
+				 &rt5665->jack_detect_work, msecs_to_jiffies(15));
+		return;
 	}
 
 	guard(mutex)(&rt5665->calibrate_mutex);
@@ -4652,9 +4646,12 @@ static void rt5665_calibrate_handler(struct work_struct *work)
 	struct rt5665_priv *rt5665 = container_of(work, struct rt5665_priv,
 		calibrate_work.work);
 
-	while (!snd_soc_card_is_instantiated(rt5665->component->card)) {
-		pr_debug("%s\n", __func__);
-		usleep_range(10000, 15000);
+	if (!rt5665->component ||
+	    !snd_soc_card_is_instantiated(rt5665->component->card)) {
+		/* card not instantiated yet, try later */
+		mod_delayed_work(system_power_efficient_wq,
+				 &rt5665->calibrate_work, msecs_to_jiffies(15));
+		return;
 	}
 
 	rt5665_calibrate(rt5665);
@@ -4836,7 +4833,18 @@ static void rt5665_i2c_shutdown(struct i2c_client *client)
 {
 	struct rt5665_priv *rt5665 = i2c_get_clientdata(client);
 
+	if (client->irq)
+		disable_irq(client->irq);
+	cancel_delayed_work_sync(&rt5665->jack_detect_work);
+	cancel_delayed_work_sync(&rt5665->jd_check_work);
+	cancel_delayed_work_sync(&rt5665->calibrate_work);
+
 	regmap_write(rt5665->regmap, RT5665_RESET, 0);
+}
+
+static void rt5665_i2c_remove(struct i2c_client *client)
+{
+	rt5665_i2c_shutdown(client);
 }
 
 #ifdef CONFIG_OF
@@ -4864,6 +4872,7 @@ static struct i2c_driver rt5665_i2c_driver = {
 		.acpi_match_table = ACPI_PTR(rt5665_acpi_match),
 	},
 	.probe = rt5665_i2c_probe,
+	.remove = rt5665_i2c_remove,
 	.shutdown = rt5665_i2c_shutdown,
 	.id_table = rt5665_i2c_id,
 };

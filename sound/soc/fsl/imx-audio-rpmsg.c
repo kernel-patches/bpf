@@ -92,7 +92,7 @@ static int imx_audio_rpmsg_probe(struct rpmsg_device *rpdev)
 							 NULL, 0);
 	if (IS_ERR(data->rpmsg_pdev)) {
 		dev_err(&rpdev->dev, "failed to register rpmsg platform.\n");
-		ret = PTR_ERR(data->rpmsg_pdev);
+		return PTR_ERR(data->rpmsg_pdev);
 	}
 
 	data->card_pdev = platform_device_register_data(&rpdev->dev,
@@ -103,9 +103,12 @@ static int imx_audio_rpmsg_probe(struct rpmsg_device *rpdev)
 	if (IS_ERR(data->card_pdev)) {
 		dev_err(&rpdev->dev, "failed to register rpmsg card.\n");
 		ret = PTR_ERR(data->card_pdev);
+		platform_device_unregister(data->rpmsg_pdev);
+		data->rpmsg_pdev = NULL;
+		return ret;
 	}
 
-	return ret;
+	return 0;
 }
 
 static void imx_audio_rpmsg_remove(struct rpmsg_device *rpdev)

@@ -1140,6 +1140,8 @@ static void rsnd_parse_connect_graph(struct rsnd_priv *priv,
 		return;
 
 	remote_node = of_graph_get_remote_port_parent(endpoint);
+	if (!remote_node)
+		return;
 
 	/* HDMI0 */
 	if (strstr(remote_node->full_name, "hdmi@fead0000")) {

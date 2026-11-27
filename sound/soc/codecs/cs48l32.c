@@ -1352,7 +1352,7 @@ static irqreturn_t cs48l32_irq(int irq, void *data)
 	ret = regmap_read(regmap, CS48L32_IRQ1_STATUS, &eint_pending);
 	if (ret) {
 		dev_warn(cs48l32_codec->core.dev, "Read IRQ1_STATUS failed: %d\n", ret);
-		return IRQ_NONE;
+		goto out;
 	}
 	if ((eint_pending & CS48L32_IRQ1_STS_MASK) == 0)
 		goto out;
@@ -1360,7 +1360,7 @@ static irqreturn_t cs48l32_irq(int irq, void *data)
 	ret = regmap_multi_reg_read(regmap, eint1_regs, reg_vals, ARRAY_SIZE(reg_vals));
 	if (ret) {
 		dev_warn(cs48l32_codec->core.dev, "Read IRQ regs failed: %d\n", ret);
-		return IRQ_NONE;
+		goto out;
 	}
 
 	for (i = 0; i < ARRAY_SIZE(reg_vals); i += 2) {

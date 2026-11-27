@@ -322,9 +322,7 @@ static int avs_rt5682_probe(struct platform_device *pdev)
 }
 
 static const struct platform_device_id avs_rt5682_driver_ids[] = {
-	{
-		.name = "avs_rt5682",
-	},
+	{ .name = "avs_rt5682" },
 	{ }
 };
 MODULE_DEVICE_TABLE(platform, avs_rt5682_driver_ids);

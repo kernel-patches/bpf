@@ -49,25 +49,15 @@ int cs35l56_set_asp_defaults(struct cs35l56_base *cs35l56_base)
 EXPORT_SYMBOL_NS_GPL(cs35l56_set_asp_defaults, "SND_SOC_CS35L56_SHARED");
 
 static const struct reg_sequence cs35l56_patch[] = {
-	/*
-	 * Firmware can change these to non-defaults to satisfy SDCA.
-	 * Ensure that they are at known defaults.
-	 */
-	{ CS35L56_SWIRE_DP3_CH1_INPUT,		0x00000018 },
-	{ CS35L56_SWIRE_DP3_CH2_INPUT,		0x00000019 },
-	{ CS35L56_SWIRE_DP3_CH3_INPUT,		0x00000029 },
-	{ CS35L56_SWIRE_DP3_CH4_INPUT,		0x00000028 },
 	{ CS35L56_IRQ1_MASK_18,			0x1f7df0ff },
-};
-
-static const struct reg_sequence cs35l56_patch_fw[] = {
 	/* These are not reset by a soft-reset, so patch to defaults. */
 	{ CS35L56_MAIN_RENDER_USER_MUTE,	0x00000000 },
 	{ CS35L56_MAIN_RENDER_USER_VOLUME,	0x00000000 },
 	{ CS35L56_MAIN_POSTURE_NUMBER,		0x00000000 },
 };
 
-static const struct reg_sequence cs35l63_patch_fw[] = {
+static const struct reg_sequence cs35l63_patch[] = {
+	{ CS35L56_IRQ1_MASK_18,			0x1f7df0ff },
 	/* These are not reset by a soft-reset, so patch to defaults. */
 	{ CS35L63_MAIN_RENDER_USER_MUTE,	0x00000000 },
 	{ CS35L63_MAIN_RENDER_USER_VOLUME,	0x00000000 },
@@ -76,39 +66,23 @@ static const struct reg_sequence cs35l63_patch_fw[] = {
 
 int cs35l56_set_patch(struct cs35l56_base *cs35l56_base)
 {
-	int ret;
-
-	ret = regmap_register_patch(cs35l56_base->regmap, cs35l56_patch,
-				     ARRAY_SIZE(cs35l56_patch));
-	if (ret)
-		return ret;
-
-
 	switch (cs35l56_base->type) {
 	case 0x54:
 	case 0x56:
 	case 0x57:
-		ret = regmap_register_patch(cs35l56_base->regmap, cs35l56_patch_fw,
-					    ARRAY_SIZE(cs35l56_patch_fw));
-		break;
+		return regmap_register_patch(cs35l56_base->regmap, cs35l56_patch,
+					     ARRAY_SIZE(cs35l56_patch));
 	case 0x63:
 	case 0x62:
-		ret = regmap_register_patch(cs35l56_base->regmap, cs35l63_patch_fw,
-					    ARRAY_SIZE(cs35l63_patch_fw));
-		break;
+		return regmap_register_patch(cs35l56_base->regmap, cs35l63_patch,
+					     ARRAY_SIZE(cs35l63_patch));
 	default:
-		break;
+		return 0;
 	}
-
-	return ret;
 }
 EXPORT_SYMBOL_NS_GPL(cs35l56_set_patch, "SND_SOC_CS35L56_SHARED");
 
 static const struct reg_default cs35l56_reg_defaults[] = {
-	{ CS35L56_SWIRE_DP3_CH1_INPUT,		0x00000018 },
-	{ CS35L56_SWIRE_DP3_CH2_INPUT,		0x00000019 },
-	{ CS35L56_SWIRE_DP3_CH3_INPUT,		0x00000029 },
-	{ CS35L56_SWIRE_DP3_CH4_INPUT,		0x00000028 },
 	{ CS35L56_IRQ1_MASK_1,			0x83ffffff },
 	{ CS35L56_IRQ1_MASK_2,			0xffff7fff },
 	{ CS35L56_IRQ1_MASK_4,			0xe0ffffff },
@@ -121,10 +95,6 @@ static const struct reg_default cs35l56_reg_defaults[] = {
 };
 
 static const struct reg_default cs35l63_reg_defaults[] = {
-	{ CS35L56_SWIRE_DP3_CH1_INPUT,		0x00000018 },
-	{ CS35L56_SWIRE_DP3_CH2_INPUT,		0x00000019 },
-	{ CS35L56_SWIRE_DP3_CH3_INPUT,		0x00000029 },
-	{ CS35L56_SWIRE_DP3_CH4_INPUT,		0x00000028 },
 	{ CS35L56_IRQ1_MASK_1,			0x8003ffff },
 	{ CS35L56_IRQ1_MASK_2,			0xffff7fff },
 	{ CS35L56_IRQ1_MASK_4,			0xe0ffffff },
@@ -262,6 +232,10 @@ static bool cs35l56_common_volatile_reg(unsigned int reg)
 	case CS35L56_DACPCM2_INPUT:		   /* owned by firmware */
 	case CS35L56_DSP1RX1_INPUT:		   /* owned by firmware */
 	case CS35L56_DSP1RX2_INPUT:		   /* owned by firmware */
+	case CS35L56_SWIRE_DP3_CH1_INPUT:	   /* owned by firmware */
+	case CS35L56_SWIRE_DP3_CH2_INPUT:	   /* owned by firmware */
+	case CS35L56_SWIRE_DP3_CH3_INPUT:	   /* owned by firmware */
+	case CS35L56_SWIRE_DP3_CH4_INPUT:	   /* owned by firmware */
 	case CS35L56_IRQ1_STATUS:
 	case CS35L56_IRQ1_EINT_1 ... CS35L56_IRQ1_EINT_8:
 	case CS35L56_IRQ1_EINT_18:

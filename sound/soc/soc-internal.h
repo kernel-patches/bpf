@@ -23,6 +23,30 @@ char *snd_soc_fmt_multiple_name(struct device *dev, struct snd_soc_dai_driver *d
 int snd_soc_add_controls(struct snd_card *card, struct device *dev,
 			 const struct snd_kcontrol_new *controls, int num_controls,
 			 const char *prefix, void *data);
+void snd_soc_flush_all_delayed_work(struct snd_soc_card *card);
+struct snd_soc_component *snd_soc_find_component(const struct snd_soc_dai_link_component *dlc);
+#ifdef CONFIG_PM_SLEEP
+void snd_soc_playback_digital_mute(struct snd_soc_card *card, int mute);
+void snd_soc_dapm_suspend_resume(struct snd_soc_card *card, int event);
+#endif
+
+/*
+ * In soc-card
+ */
+void snd_soc_card_unbind(struct snd_soc_card *card, bool reuse);
+void snd_soc_card_rebind(void);
+int snd_soc_card_bind_call(struct snd_soc_card *card);
+
+/*
+ * In soc-ops
+ */
+struct snd_soc_control_field {
+	unsigned int reg;
+	unsigned int mask;
+};
+
+int snd_soc_control_fields(const struct snd_kcontrol *kctl,
+			   struct snd_soc_control_field *fields);
 
 /*
  * In soc-dai
@@ -45,6 +69,10 @@ bool snd_soc_component_matches_dlc(struct snd_soc_component *component,
 void snd_soc_component_remove(struct snd_soc_component *component, int probed);
 int snd_soc_component_probe(struct snd_soc_component *component, struct snd_soc_card *card);
 struct list_head *snd_soc_component_get_list_head(void);
+void snd_soc_component_connect_dai(struct snd_soc_component *component, struct snd_soc_dai *dai);
+void snd_soc_component_active_update(struct snd_soc_component *component, int action);
+void snd_soc_component_device_link_del(struct snd_soc_component *component);
+int snd_soc_component_device_link_add(struct snd_soc_component *component);
 
 #define for_each_component(component)					\
 	list_for_each_entry(component, snd_soc_component_get_list_head(), list)

@@ -796,6 +796,13 @@ F:	Documentation/devicetree/bindings/sound/airoha,an7581-afe.yaml
 F:	Documentation/devicetree/bindings/sound/airoha,an7581-wm8960.yaml
 F:	sound/soc/mediatek/an7581/*
 
+AIROHA PCM CONTROLLER DRIVER
+M:	Christian Marangi <ansuelsmth@gmail.com>
+L:	linux-sound@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/sound/airoha,an7581-pcm.yaml
+F:	sound/soc/airoha/*
+
 AIROHA SPI SNFI DRIVER
 M:	Lorenzo Bianconi <lorenzo@kernel.org>
 M:	Ray Liu <ray.liu@airoha.com>
@@ -20389,6 +20396,13 @@ T:	git git://git.armlinux.org.uk/~rmk/linux-arm.git drm-tda998x-fixes
 F:	drivers/gpu/drm/bridge/tda998x_drv.c
 F:	include/dt-bindings/display/tda998x.h
 K:	"nxp,tda998x"
+
+NXP TFA9865 AMPLIFIER DRIVER
+M:	Venkat Yadlapati <venkat.yadlapati@yahoo.com>
+L:	linux-sound@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/sound/nxp,tfa9865.yaml
+F:	sound/soc/codecs/tfa9865.c
 
 NXP TFA9879 DRIVER
 M:	Peter Rosin <peda@lysator.liu.se>

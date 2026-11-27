@@ -10,7 +10,6 @@
 #include <linux/of_clk.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
-#include <linux/pm_clock.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
@@ -259,6 +258,46 @@ static const struct va_macro_data sm8550_va_data = {
 	.has_swr_master = true,
 	.has_npl_clk = false,
 };
+
+static void va_macro_disable_clocks(struct va_macro *va)
+{
+	clk_disable_unprepare(va->npl);
+	clk_disable_unprepare(va->mclk);
+	clk_disable_unprepare(va->dcodec);
+	clk_disable_unprepare(va->macro);
+}
+
+static int va_macro_enable_clocks(struct va_macro *va)
+{
+	int ret;
+
+	ret = clk_prepare_enable(va->macro);
+	if (ret)
+		return ret;
+
+	ret = clk_prepare_enable(va->dcodec);
+	if (ret)
+		goto err_dcodec;
+
+	ret = clk_prepare_enable(va->mclk);
+	if (ret)
+		goto err_mclk;
+
+	ret = clk_prepare_enable(va->npl);
+	if (ret)
+		goto err_npl;
+
+	return 0;
+
+err_npl:
+	clk_disable_unprepare(va->mclk);
+err_mclk:
+	clk_disable_unprepare(va->dcodec);
+err_dcodec:
+	clk_disable_unprepare(va->macro);
+
+	return ret;
+}
 
 static bool va_is_volatile_register(struct device *dev, unsigned int reg)
 {
@@ -1352,7 +1391,7 @@ static int fsgen_gate_enable(struct clk_hw *hw)
 {
 	struct va_macro *va = to_va_macro(hw);
 	struct regmap *regmap = va->regmap;
-	int ret, rpm_ret;
+	int ret;
 
 	ret = pm_runtime_resume_and_get(va->dev);
 	if (ret < 0)
@@ -1360,11 +1399,7 @@ static int fsgen_gate_enable(struct clk_hw *hw)
 
 	ret = va_macro_mclk_enable(va, true);
 	if (ret) {
-		rpm_ret = pm_runtime_put_autosuspend(va->dev);
-		if (rpm_ret < 0)
-			dev_warn(va->dev,
-				 "runtime PM put failed in fsgen enable unwind: %d\n",
-				 rpm_ret);
+		pm_runtime_put_autosuspend(va->dev);
 		return ret;
 	}
 	if (va->has_swr_master)
@@ -1378,7 +1413,6 @@ static void fsgen_gate_disable(struct clk_hw *hw)
 {
 	struct va_macro *va = to_va_macro(hw);
 	struct regmap *regmap = va->regmap;
-	int ret;
 
 	if (va->has_swr_master)
 		regmap_update_bits(regmap, CDC_VA_CLK_RST_CTRL_SWR_CONTROL,
@@ -1386,9 +1420,7 @@ static void fsgen_gate_disable(struct clk_hw *hw)
 
 	va_macro_mclk_enable(va, false);
 
-	ret = pm_runtime_put_autosuspend(va->dev);
-	if (ret < 0)
-		dev_warn(va->dev, "runtime PM put failed in fsgen disable: %d\n", ret);
+	pm_runtime_put_autosuspend(va->dev);
 }
 
 static int fsgen_gate_is_enabled(struct clk_hw *hw)
@@ -1621,14 +1653,6 @@ static int va_macro_probe(struct platform_device *pdev)
 			goto err;
 	}
 
-	ret = devm_pm_clk_create(dev);
-	if (ret)
-		goto err;
-
-	ret = of_pm_clk_add_clks(dev);
-	if (ret < 0)
-		goto err;
-
 	pm_runtime_set_autosuspend_delay(dev, 100);
 	pm_runtime_use_autosuspend(dev);
 	ret = devm_pm_runtime_enable(dev);
@@ -1693,9 +1717,7 @@ static int va_macro_probe(struct platform_device *pdev)
 		goto err_rpm_put;
 	}
 
-	rpm_ret = pm_runtime_put_autosuspend(dev);
-	if (rpm_ret < 0)
-		dev_warn(dev, "runtime PM put failed after probe: %d\n", rpm_ret);
+	pm_runtime_put_autosuspend(dev);
 
 	return 0;
 
@@ -1719,16 +1741,9 @@ static void va_macro_remove(struct platform_device *pdev)
 static int va_macro_runtime_suspend(struct device *dev)
 {
 	struct va_macro *va = dev_get_drvdata(dev);
-	int ret;
 
 	regcache_cache_only(va->regmap, true);
-
-	ret = pm_clk_suspend(dev);
-	if (ret) {
-		regcache_cache_only(va->regmap, false);
-		return ret;
-	}
-
+	va_macro_disable_clocks(va);
 	regcache_mark_dirty(va->regmap);
 
 	return 0;
@@ -1737,9 +1752,9 @@ static int va_macro_runtime_suspend(struct device *dev)
 static int va_macro_runtime_resume(struct device *dev)
 {
 	struct va_macro *va = dev_get_drvdata(dev);
-	int ret, sret;
+	int ret;
 
-	ret = pm_clk_resume(dev);
+	ret = va_macro_enable_clocks(va);
 	if (ret) {
 		regcache_cache_only(va->regmap, true);
 		regcache_mark_dirty(va->regmap);
@@ -1752,21 +1767,15 @@ static int va_macro_runtime_resume(struct device *dev)
 	if (ret) {
 		regcache_cache_only(va->regmap, true);
 		regcache_mark_dirty(va->regmap);
-		sret = pm_clk_suspend(dev);
-		if (sret)
-			dev_err(va->dev,
-				"failed to suspend clocks after regcache sync failure: %d\n",
-				sret);
+		va_macro_disable_clocks(va);
 		return ret;
 	}
 
 	return 0;
 }
 
-
-static const struct dev_pm_ops va_macro_pm_ops = {
-	RUNTIME_PM_OPS(va_macro_runtime_suspend, va_macro_runtime_resume, NULL)
-};
+static DEFINE_RUNTIME_DEV_PM_OPS(va_macro_pm_ops, va_macro_runtime_suspend,
+				 va_macro_runtime_resume, NULL);
 
 static const struct of_device_id va_macro_dt_match[] = {
 	{ .compatible = "qcom,sc7280-lpass-va-macro", .data = &sc7280_va_data },

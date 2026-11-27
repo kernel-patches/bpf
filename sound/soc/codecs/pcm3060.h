@@ -34,7 +34,6 @@ struct pcm3060_priv {
 };
 
 int pcm3060_probe(struct device *dev);
-int pcm3060_remove(struct device *dev);
 
 /* registers */
 

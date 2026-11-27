@@ -1170,6 +1170,9 @@ static int routing_hw_params(struct snd_soc_component *component,
 	case SNDRV_PCM_FORMAT_S24_LE:
 			session->bits_per_sample = 24;
 		break;
+	case SNDRV_PCM_FORMAT_S32_LE:
+		session->bits_per_sample = 32;
+		break;
 	default:
 		break;
 	}
@@ -1220,7 +1223,7 @@ static int q6pcm_routing_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 
-	routing_data = kzalloc_obj(*routing_data);
+	routing_data = devm_kzalloc_obj(dev, *routing_data);
 	if (!routing_data)
 		return -ENOMEM;
 
@@ -1235,7 +1238,6 @@ static int q6pcm_routing_probe(struct platform_device *pdev)
 
 static void q6pcm_routing_remove(struct platform_device *pdev)
 {
-	kfree(routing_data);
 	routing_data = NULL;
 }
 

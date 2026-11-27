@@ -1004,15 +1004,15 @@ static int aw_dev_update_reg_container(struct aw_device *aw_dev,
 	u16 read_vol;
 	u16 reg_val;
 	u8 reg_addr;
-	int i, ret;
+	int i, ret = 0;
+
+	if (len & 0x3) {
+		dev_err(aw_dev->dev, "data len:%u unsupported\n", len);
+		return -EINVAL;
+	}
 
 	reg_data = (int16_t *)data;
 	data_len = len >> 1;
-
-	if (data_len & 0x1) {
-		dev_err(aw_dev->dev, "data len:%d unsupported",	data_len);
-		return -EINVAL;
-	}
 
 	for (i = 0; i < data_len; i += 2) {
 		reg_addr = reg_data[i];

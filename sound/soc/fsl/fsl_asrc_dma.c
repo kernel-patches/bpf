@@ -76,8 +76,7 @@ static int fsl_asrc_dma_prepare_and_submit(struct snd_pcm_substream *substream,
 		return -ENOMEM;
 	}
 
-	pair->desc[!dir]->callback = fsl_asrc_dma_complete;
-	pair->desc[!dir]->callback_param = substream;
+	dmaengine_desc_set_callback(pair->desc[!dir], fsl_asrc_dma_complete, NULL, substream);
 
 	dmaengine_submit(pair->desc[!dir]);
 
@@ -267,7 +266,7 @@ static int fsl_asrc_dma_hw_params(struct snd_soc_component *component,
 
 		/* Get DMA request of Front-End */
 		tmp_chan = asrc->get_dma_channel(pair, dir);
-		if (!tmp_chan) {
+		if (IS_ERR(tmp_chan)) {
 			dma_release_channel(pair->dma_chan[!dir]);
 			pair->dma_chan[!dir] = NULL;
 			return -EINVAL;
@@ -278,7 +277,7 @@ static int fsl_asrc_dma_hw_params(struct snd_soc_component *component,
 		pair->dma_data.priority = tmp_data->priority;
 		dma_release_channel(tmp_chan);
 
-		of_dma_node = pair->dma_chan[!dir]->device->dev->of_node;
+		of_dma_node = dmaengine_get_provider_device(pair->dma_chan[!dir])->of_node;
 		pair->dma_chan[dir] =
 			__dma_request_channel(&mask, filter, &pair->dma_data,
 					      of_dma_node);
@@ -536,7 +535,7 @@ static int fsl_asrc_dma_pcm_new(struct snd_soc_component *component,
 
 	ret = snd_pcm_set_fixed_buffer_all(pcm,
 					   SNDRV_DMA_TYPE_DEV,
-					   chan->device->dev,
+					   dmaengine_get_dma_device(chan),
 					   FSL_ASRC_DMABUF_SIZE);
 
 	dma_release_channel(chan);

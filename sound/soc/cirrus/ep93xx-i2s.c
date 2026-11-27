@@ -462,8 +462,8 @@ static int ep93xx_i2s_probe(struct platform_device *pdev)
 
 	if (IS_ENABLED(CONFIG_SND_EP93XX_SOC_I2S_WATCHDOG)) {
 		int irq = platform_get_irq(pdev, 0);
-		if (irq <= 0)
-			return irq < 0 ? irq : -ENODEV;
+		if (irq < 0)
+			return irq;
 
 		err = devm_request_irq(&pdev->dev, irq, ep93xx_i2s_interrupt, 0,
 				       pdev->name, info);
@@ -471,54 +471,30 @@ static int ep93xx_i2s_probe(struct platform_device *pdev)
 			return err;
 	}
 
-	info->mclk = clk_get(&pdev->dev, "mclk");
-	if (IS_ERR(info->mclk)) {
-		err = PTR_ERR(info->mclk);
-		goto fail;
-	}
+	info->mclk = devm_clk_get(&pdev->dev, "mclk");
+	if (IS_ERR(info->mclk))
+		return PTR_ERR(info->mclk);
 
-	info->sclk = clk_get(&pdev->dev, "sclk");
-	if (IS_ERR(info->sclk)) {
-		err = PTR_ERR(info->sclk);
-		goto fail_put_mclk;
-	}
+	info->sclk = devm_clk_get(&pdev->dev, "sclk");
+	if (IS_ERR(info->sclk))
+		return PTR_ERR(info->sclk);
 
-	info->lrclk = clk_get(&pdev->dev, "lrclk");
-	if (IS_ERR(info->lrclk)) {
-		err = PTR_ERR(info->lrclk);
-		goto fail_put_sclk;
-	}
+	info->lrclk = devm_clk_get(&pdev->dev, "lrclk");
+	if (IS_ERR(info->lrclk))
+		return PTR_ERR(info->lrclk);
 
 	dev_set_drvdata(&pdev->dev, info);
 
 	err = devm_snd_soc_register_component(&pdev->dev, &ep93xx_i2s_component,
 					 &ep93xx_i2s_dai, 1);
 	if (err)
-		goto fail_put_lrclk;
+		return err;
 
 	err = devm_ep93xx_pcm_platform_register(&pdev->dev);
 	if (err)
-		goto fail_put_lrclk;
+		return err;
 
 	return 0;
-
-fail_put_lrclk:
-	clk_put(info->lrclk);
-fail_put_sclk:
-	clk_put(info->sclk);
-fail_put_mclk:
-	clk_put(info->mclk);
-fail:
-	return err;
-}
-
-static void ep93xx_i2s_remove(struct platform_device *pdev)
-{
-	struct ep93xx_i2s_info *info = dev_get_drvdata(&pdev->dev);
-
-	clk_put(info->lrclk);
-	clk_put(info->sclk);
-	clk_put(info->mclk);
 }
 
 static const struct of_device_id ep93xx_i2s_of_ids[] = {
@@ -529,7 +505,6 @@ MODULE_DEVICE_TABLE(of, ep93xx_i2s_of_ids);
 
 static struct platform_driver ep93xx_i2s_driver = {
 	.probe	= ep93xx_i2s_probe,
-	.remove = ep93xx_i2s_remove,
 	.driver	= {
 		.name	= "ep93xx-i2s",
 		.of_match_table = ep93xx_i2s_of_ids,
