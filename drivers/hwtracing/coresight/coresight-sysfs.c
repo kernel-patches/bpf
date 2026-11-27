@@ -17,8 +17,12 @@ ssize_t coresight_simple_show_pair(struct device *_dev,
 	struct coresight_device *csdev = container_of(_dev, struct coresight_device, dev);
 	struct cs_pair_attribute *cs_attr = container_of(attr, struct cs_pair_attribute, attr);
 	u64 val;
+	int ret;
 
-	pm_runtime_get_sync(_dev->parent);
+	ret = pm_runtime_resume_and_get(_dev->parent);
+	if (ret < 0)
+		return ret;
+
 	val = csdev_access_relaxed_read_pair(&csdev->access, cs_attr->lo_off, cs_attr->hi_off);
 	pm_runtime_put_sync(_dev->parent);
 	return sysfs_emit(buf, "0x%llx\n", val);
@@ -31,8 +35,11 @@ ssize_t coresight_simple_show32(struct device *_dev,
 	struct coresight_device *csdev = container_of(_dev, struct coresight_device, dev);
 	struct cs_off_attribute *cs_attr = container_of(attr, struct cs_off_attribute, attr);
 	u64 val;
+	int ret;
 
-	pm_runtime_get_sync(_dev->parent);
+	ret = pm_runtime_resume_and_get(_dev->parent);
+	if (ret < 0)
+		return ret;
 	val = csdev_access_relaxed_read32(&csdev->access, cs_attr->off);
 	pm_runtime_put_sync(_dev->parent);
 	return sysfs_emit(buf, "0x%llx\n", val);
@@ -230,7 +237,7 @@ err_source:
 	coresight_disable_path(path);
 
 err_path:
-	coresight_release_path(path);
+	coresight_release_path_locked(path);
 	goto out;
 }
 EXPORT_SYMBOL_GPL(coresight_enable_sysfs);
@@ -256,7 +263,7 @@ void coresight_disable_sysfs(struct coresight_device *csdev)
 		goto out;
 
 	coresight_disable_path(path);
-	coresight_release_path(path);
+	coresight_release_path_locked(path);
 
 out:
 	mutex_unlock(&coresight_mutex);
