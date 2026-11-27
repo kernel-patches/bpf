@@ -73,7 +73,7 @@ $defs:
                 cci_i2c1, cci_timer, char_exec, cri_trng, dac_calib,
                 dbg_out_clk, ddr_bist, ddr_pxi, dmic, emac_dll, emac_mcg,
                 emac_phy, emac0_ptp_aux, emac0_ptp_pps, emac1_ptp_aux,
-                emac1_ptp_pps, ext_mclk, gcc_gp, gsm0_tx, i2s0, i2s1,
+                emac1_ptp_pps, ext_mclk, gcc_gp, gp_mn, gsm0_tx, i2s0, i2s1,
                 i2s2, i2s3, jitter_bist, m_voc, mdp_vsync_e, mdp_vsync_out0,
                 mdp_vsync_out1, mdp_vsync_p, mdp_vsync_s, mpm_pwr, mss_lte,
                 nav_gpio, pa_indicator_or, pbs_in, pbs_out, pcie0_clk_req_n,

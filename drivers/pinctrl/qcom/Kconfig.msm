@@ -39,6 +39,16 @@ config PINCTRL_GLYMUR
 	  Say Y here to compile statically, or M here to compile it as a module.
 	  If unsure, say N.
 
+config PINCTRL_HALLIDAY
+	tristate "Qualcomm Halliday pin controller driver"
+	depends on ARM64 || COMPILE_TEST
+	default ARCH_QCOM
+	help
+	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
+	  Qualcomm Technologies Inc TLMM block found on the Qualcomm
+	  Technologies Inc Halliday platform
+	  (SXR2250P / Snapdragon XR2+ Gen 2).
+
 config PINCTRL_HAWI
 	tristate "Qualcomm Hawi pin controller driver"
 	depends on ARM64 || COMPILE_TEST
@@ -60,8 +70,7 @@ config PINCTRL_IPQ4019
 
 config PINCTRL_IPQ5018
 	tristate "Qualcomm IPQ5018 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for
 	  the Qualcomm Technologies Inc. TLMM block found on the
@@ -100,9 +109,9 @@ config PINCTRL_IPQ5424
 	default ARCH_QCOM
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for
-          the Qualcomm Technologies Inc. TLMM block found on the
-          Qualcomm Technologies Inc. IPQ5424 platform. Select this for
-          IPQ5424.
+	  the Qualcomm Technologies Inc. TLMM block found on the
+	  Qualcomm Technologies Inc. IPQ5424 platform. Select this for
+	  IPQ5424.
 
 config PINCTRL_IPQ8074
 	tristate "Qualcomm IPQ8074 pin controller driver"
@@ -130,9 +139,9 @@ config PINCTRL_IPQ9574
 	default ARCH_QCOM
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for
-          the Qualcomm Technologies Inc. TLMM block found on the
-          Qualcomm Technologies Inc. IPQ9574 platform. Select this for
-          IPQ9574.
+	  the Qualcomm Technologies Inc. TLMM block found on the
+	  Qualcomm Technologies Inc. IPQ9574 platform. Select this for
+	  IPQ9574.
 
 config PINCTRL_IPQ9650
 	tristate "Qualcomm IPQ9650 pin controller driver"
@@ -140,9 +149,9 @@ config PINCTRL_IPQ9650
 	default ARCH_QCOM
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for
-          the Qualcomm Technologies Inc. TLMM block found on the
-          Qualcomm Technologies Inc. IPQ9650 platform. Select this for
-          IPQ9650.
+	  the Qualcomm Technologies Inc. TLMM block found on the
+	  Qualcomm Technologies Inc. IPQ9650 platform. Select this for
+	  IPQ9650.
 
 config PINCTRL_KAANAPALI
 	tristate "Qualcomm Kaanapali pin controller driver"
@@ -239,6 +248,8 @@ config PINCTRL_MSM8916
 
 config PINCTRL_MSM8917
 	tristate "Qualcomm 8917/8937 pin controller driver"
+	depends on ARM64 || COMPILE_TEST
+	default ARCH_QCOM
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm TLMM block found on the Qualcomm MSM8917, MSM8937 platform.
@@ -253,8 +264,7 @@ config PINCTRL_MSM8952
 
 config PINCTRL_MSM8953
 	tristate "Qualcomm 8953 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm TLMM block found on the Qualcomm MSM8953 platform.
@@ -263,8 +273,7 @@ config PINCTRL_MSM8953
 
 config PINCTRL_MSM8976
 	tristate "Qualcomm 8976 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm TLMM block found on the Qualcomm MSM8976 platform.
@@ -273,8 +282,7 @@ config PINCTRL_MSM8976
 
 config PINCTRL_MSM8994
 	tristate "Qualcomm 8994 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm TLMM block found in the Qualcomm 8994 platform. The
@@ -290,8 +298,7 @@ config PINCTRL_MSM8996
 
 config PINCTRL_MSM8998
 	tristate "Qualcomm MSM8998 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default ARCH_QCOM if ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm TLMM block found in the Qualcomm MSM8998 platform.
@@ -314,8 +321,7 @@ config PINCTRL_QCM2290
 
 config PINCTRL_QCS404
 	tristate "Qualcomm QCS404 pin controller driver"
-	depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
+	default y if ARCH_QCOM && ARM64
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  TLMM block found in the Qualcomm QCS404 platform.
@@ -364,6 +370,7 @@ config PINCTRL_SA8775P
 config PINCTRL_SAR2130P
 	tristate "Qualcomm SAR2130P pin controller driver"
 	depends on ARM64 || COMPILE_TEST
+	default ARCH_QCOM
 	help
 	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
 	  Qualcomm Technologies Inc TLMM block found on the Qualcomm
@@ -444,22 +451,21 @@ config PINCTRL_SDX55
 	 Technologies Inc SDX55 platform.
 
 config PINCTRL_SDX65
-        tristate "Qualcomm SDX65 pin controller driver"
-        depends on ARM || COMPILE_TEST
+	tristate "Qualcomm SDX65 pin controller driver"
+	depends on ARM || COMPILE_TEST
 	default ARCH_QCOM
-        help
-         This is the pinctrl, pinmux, pinconf and gpiolib driver for the
-         Qualcomm Technologies Inc TLMM block found on the Qualcomm
-         Technologies Inc SDX65 platform.
+	help
+	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
+	  Qualcomm Technologies Inc TLMM block found on the Qualcomm
+	  Technologies Inc SDX65 platform.
 
 config PINCTRL_SDX75
-        tristate "Qualcomm SDX75 pin controller driver"
-        depends on ARM64 || COMPILE_TEST
-	default ARCH_QCOM
-        help
-         This is the pinctrl, pinmux, pinconf and gpiolib driver for the
-         Qualcomm Technologies Inc TLMM block found on the Qualcomm
-         Technologies Inc SDX75 platform.
+	tristate "Qualcomm SDX75 pin controller driver"
+	default ARCH_QCOM if ARM64
+	help
+	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
+	  Qualcomm Technologies Inc TLMM block found on the Qualcomm
+	  Technologies Inc SDX75 platform.
 
 config PINCTRL_SHIKRA
 	tristate "Qualcomm Shikra pin controller driver"

@@ -542,6 +542,7 @@ enum nord_functions {
 	msm_mux_gcc_gp6_clk,
 	msm_mux_gcc_gp7_clk,
 	msm_mux_gcc_gp8_clk,
+	msm_mux_gp_mn,
 	msm_mux_jitter_bist,
 	msm_mux_lbist_pass,
 	msm_mux_mbist_pass,
@@ -1028,6 +1029,10 @@ static const char *const gcc_gp8_clk_groups[] = {
 	"gpio14",
 };
 
+static const char *const gp_mn_groups[] = {
+	"gpio35",
+};
+
 static const char *const jitter_bist_groups[] = {
 	"gpio123",
 	"gpio138",
@@ -1410,6 +1415,7 @@ static const struct pinfunction nord_functions[] = {
 	MSM_PIN_FUNCTION(gcc_gp6_clk),
 	MSM_PIN_FUNCTION(gcc_gp7_clk),
 	MSM_PIN_FUNCTION(gcc_gp8_clk),
+	MSM_PIN_FUNCTION(gp_mn),
 	MSM_PIN_FUNCTION(jitter_bist),
 	MSM_PIN_FUNCTION(lbist_pass),
 	MSM_PIN_FUNCTION(mbist_pass),
@@ -1521,7 +1527,7 @@ static const struct msm_pingroup nord_groups[] = {
 	[32] = PINGROUP(32, ccu_timer, tsc_timer, _, _, _, _, _, _, _, _, _),
 	[33] = PINGROUP(33, ccu_timer, tsc_timer, _, _, _, _, _, _, _, _, _),
 	[34] = PINGROUP(34, ccu_timer, tsc_timer, _, _, _, _, _, _, _, _, _),
-	[35] = PINGROUP(35, dp_rx0_mute, _, _, _, _, _, _, _, _, _, _),
+	[35] = PINGROUP(35, dp_rx0_mute, gp_mn, _, _, _, _, _, _, _, _, _),
 	[36] = PINGROUP(36, dp_rx1_mute, ddr_bist_start, _, _, _, _, _, _, _, _, _),
 	[37] = PINGROUP(37, emac1_ptp, ddr_bist_complete, _, _, _, _, _, _, _, _, _),
 	[38] = PINGROUP(38, emac1_ptp, ddr_bist_stop, _, _, _, _, _, _, _, _, _),
