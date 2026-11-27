@@ -14,6 +14,7 @@
 #include <linux/power_supply.h>
 
 #define BQ25630_DRV_NAME "bq25630-charger"
+#define BQ25630_IRQ_CYCLE 256 /* µs */
 
 /* Registers. */
 #define BQ25630_REG_CHARGE_CURRENT_LIMIT	0x02
@@ -196,6 +197,16 @@ enum bq25630_regfield {
 	/* VBUS fault. */
 	BQ25630_REGF_VBUS_FAULT_STAT,
 
+	/* Force liquid detection. */
+	BQ25630_REGF_FORCE_LQD_DET,
+	/* Automatic liquid detection. */
+	BQ25630_REGF_AUTO_LQD_DET,
+	/* Enable liquid detection. */
+	BQ25630_REGF_EN_LQD_DET,
+
+	/* Liquid detection status. */
+	BQ25630_REGF_LQD_STAT,
+
 	/* Sentinel value. */
 	BQ25630_REGF_MAX
 };
@@ -248,6 +259,16 @@ static const struct reg_field bq25630_regfields[] = {
 		REG_FIELD(BQ25630_REG_FAULT_STATUS, 6, 6),
 	[BQ25630_REGF_VBUS_FAULT_STAT] =
 		REG_FIELD(BQ25630_REG_FAULT_STATUS, 7, 7),
+
+	[BQ25630_REGF_FORCE_LQD_DET] =
+		REG_FIELD(BQ25630_REG_LIQUID_CONTROL_0, 3, 3),
+	[BQ25630_REGF_AUTO_LQD_DET] =
+		REG_FIELD(BQ25630_REG_LIQUID_CONTROL_0, 6, 6),
+	[BQ25630_REGF_EN_LQD_DET] =
+		REG_FIELD(BQ25630_REG_LIQUID_CONTROL_0, 7, 7),
+
+	[BQ25630_REGF_LQD_STAT] =
+		REG_FIELD(BQ25630_REG_USB_C_INFORMATION_0, 6, 6),
 };
 
 /* 8-bit value regmap. */
@@ -449,6 +470,115 @@ static int bq25630_write_limit(struct bq25630_data *data,
 	return 0;
 }
 
+static int bq25630_read_liquid_detection(struct bq25630_data *data, int *val)
+{
+	unsigned int regval;
+	int ret;
+
+	ret = regmap_field_read(data->regfields[BQ25630_REGF_EN_LQD_DET],
+				&regval);
+	if (ret) {
+		dev_err(data->dev,
+			"Could not read liquid detection setting (%d)\n", ret);
+		return ret;
+	}
+
+	if (!regval) {
+		*val = POWER_SUPPLY_LIQUID_DETECTION_CONTROL_OFF;
+		return 0;
+	}
+
+	ret = regmap_field_read(data->regfields[BQ25630_REGF_AUTO_LQD_DET],
+				&regval);
+	if (ret) {
+		dev_err(data->dev,
+			"Could not read liquid detection type (%d)\n", ret);
+		return ret;
+	}
+
+	if (regval) {
+		*val = POWER_SUPPLY_LIQUID_DETECTION_CONTROL_AUTO;
+		return 0;
+	}
+
+	/* Can only happen after unsuccessful writes... */
+	*val = POWER_SUPPLY_LIQUID_DETECTION_CONTROL_UNKNOWN;
+	return 0;
+}
+
+static int bq25630_write_liquid_detection(struct bq25630_data *data,
+					  const int val)
+{
+	unsigned int regval;
+	bool automatic;
+	bool enable;
+	int ret;
+
+	switch (val) {
+	case POWER_SUPPLY_LIQUID_DETECTION_CONTROL_OFF:
+		automatic = false;
+		enable = false;
+		break;
+	case POWER_SUPPLY_LIQUID_DETECTION_CONTROL_AUTO:
+		automatic = true;
+		enable = true;
+		break;
+	case POWER_SUPPLY_LIQUID_DETECTION_CONTROL_ONCE:
+		automatic = false;
+		enable = true;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	ret = regmap_field_write(data->regfields[BQ25630_REGF_AUTO_LQD_DET],
+				 automatic);
+	if (ret) {
+		dev_err(data->dev,
+			"Could not write liquid detection type (%d)\n", ret);
+		return ret;
+	}
+
+	ret = regmap_field_write(data->regfields[BQ25630_REGF_EN_LQD_DET],
+				 enable);
+	if (ret) {
+		dev_err(data->dev,
+			"Could not write liquid detection setting (%d)\n", ret);
+		return ret;
+	}
+
+	if (val != POWER_SUPPLY_LIQUID_DETECTION_CONTROL_ONCE)
+		return 0;
+
+	ret = regmap_field_write(data->regfields[BQ25630_REGF_FORCE_LQD_DET],
+				 1);
+	if (ret) {
+		dev_err(data->dev,
+			"Could not write liquid detection check (%d)\n", ret);
+		return ret;
+	}
+
+	/*
+	 * Datasheet says the register resets when liquid check completes. Poll
+	 * it for the default check cycle of 500 ms (field LQD_WAIT in
+	 * BQ25630_REG_LIQUID_CONTROL_0).
+	 */
+	ret = regmap_field_read_poll_timeout(
+		data->regfields[BQ25630_REGF_FORCE_LQD_DET], regval,
+		regval == 0, BQ25630_IRQ_CYCLE, 500000);
+	if (ret)
+		dev_err(data->dev,
+			"Could not read liquid detection check (%d)\n", ret);
+
+	/* Turn it off after checking once. */
+	ret = regmap_field_write(data->regfields[BQ25630_REGF_EN_LQD_DET], 0);
+	if (ret)
+		dev_err(data->dev,
+			"Could not write liquid detection setting (%d)\n", ret);
+
+	return ret;
+}
+
 static int bq25630_read_charge_type(struct bq25630_data *data, int *val)
 {
 	unsigned int regval;
@@ -490,6 +620,19 @@ static int bq25630_read_health(struct bq25630_data *data, int *val)
 	unsigned int regval;
 	int ret;
 	u8 temp;
+
+	ret = regmap_field_read(data->regfields[BQ25630_REGF_LQD_STAT],
+				&regval);
+	if (ret) {
+		dev_err(data->dev,
+			"Could not read liquid detection status (%d)\n", ret);
+		return ret;
+	}
+
+	if (regval) {
+		*val = POWER_SUPPLY_HEALTH_LIQUID_DETECTED;
+		return 0;
+	}
 
 	ret = regmap_read(data->regmap8, BQ25630_REG_FAULT_STATUS, &regval);
 	if (ret) {
@@ -725,8 +868,8 @@ static int bq25630_reset(struct bq25630_data *data)
 	 * this register field to 0. Try reading it for some interrupt cycles.
 	 */
 	ret = regmap_field_read_poll_timeout(
-		data->regfields[BQ25630_REGF_REG_RST], regval, regval == 0, 256,
-		100000);
+		data->regfields[BQ25630_REGF_REG_RST], regval, regval == 0,
+		BQ25630_IRQ_CYCLE, 100000);
 	if (ret) {
 		dev_err(data->dev, "Could not read reset register field (%d)\n",
 			ret);
@@ -919,6 +1062,9 @@ static int bq25630_charger_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_LOAD_SWITCH:
 		ret = bq25630_read_batfet_ctrl(data, &val->intval);
 		break;
+	case POWER_SUPPLY_PROP_LIQUID_DETECTION_CONTROL:
+		ret = bq25630_read_liquid_detection(data, &val->intval);
+		break;
 	case POWER_SUPPLY_PROP_MODEL_NAME:
 		val->strval = "BQ25630";
 		break;
@@ -990,6 +1136,9 @@ static int bq25630_charger_set_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_LOAD_SWITCH:
 		ret = bq25630_write_batfet_ctrl(data, val->intval);
 		break;
+	case POWER_SUPPLY_PROP_LIQUID_DETECTION_CONTROL:
+		ret = bq25630_write_liquid_detection(data, val->intval);
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -1010,6 +1159,7 @@ static int bq25630_charger_property_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_PRECHARGE_CURRENT:
 	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
 	case POWER_SUPPLY_PROP_LOAD_SWITCH:
+	case POWER_SUPPLY_PROP_LIQUID_DETECTION_CONTROL:
 		return true;
 	default:
 		return false;
@@ -1033,6 +1183,7 @@ static const enum power_supply_property bq25630_charger_properties[] = {
 	POWER_SUPPLY_PROP_PRECHARGE_CURRENT,
 	POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT,
 	POWER_SUPPLY_PROP_LOAD_SWITCH,
+	POWER_SUPPLY_PROP_LIQUID_DETECTION_CONTROL,
 	POWER_SUPPLY_PROP_MODEL_NAME,
 	POWER_SUPPLY_PROP_MANUFACTURER,
 };
@@ -1082,7 +1233,13 @@ static int bq25630_probe(struct i2c_client *client)
 				     "Could not initialize regmap8\n");
 
 	ret = bq25630_alloc_regfield_range(data, BQ25630_REGF_WATCHDOG,
-					   BQ25630_REGF_TS_STAT,
+					   BQ25630_REGF_VBUS_STAT,
+					   data->regmap8);
+	if (ret)
+		return ret;
+
+	ret = bq25630_alloc_regfield_range(data, BQ25630_REGF_FORCE_LQD_DET,
+					   BQ25630_REGF_LQD_STAT,
 					   data->regmap8);
 	if (ret)
 		return ret;

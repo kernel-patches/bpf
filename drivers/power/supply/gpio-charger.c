@@ -22,6 +22,13 @@ struct gpio_mapping {
 	u32 gpiodata;
 } __packed;
 
+/* This list ensures, that the array is big enough for all optional features. */
+static enum power_supply_property gpio_charger_properties[] __maybe_unused = {
+	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_STATUS,
+	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
+};
+
 struct gpio_charger {
 	struct device *dev;
 	unsigned int irq;
@@ -30,6 +37,7 @@ struct gpio_charger {
 
 	struct power_supply *charger;
 	struct power_supply_desc charger_desc;
+	enum power_supply_property properties[ARRAY_SIZE(gpio_charger_properties)];
 	struct gpio_desc *gpiod;
 	struct gpio_desc *charge_status;
 
@@ -263,17 +271,6 @@ static int init_charge_current_limit(struct device *dev,
 	return 0;
 }
 
-/*
- * The entries will be overwritten by driver's probe routine depending
- * on the available features. This list ensures, that the array is big
- * enough for all optional features.
- */
-static enum power_supply_property gpio_charger_properties[] = {
-	POWER_SUPPLY_PROP_ONLINE,
-	POWER_SUPPLY_PROP_STATUS,
-	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
-};
-
 static int gpio_charger_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -308,7 +305,7 @@ static int gpio_charger_probe(struct platform_device *pdev)
 	}
 
 	if (gpio_charger->gpiod) {
-		gpio_charger_properties[num_props] = POWER_SUPPLY_PROP_ONLINE;
+		gpio_charger->properties[num_props] = POWER_SUPPLY_PROP_ONLINE;
 		num_props++;
 	}
 
@@ -317,7 +314,7 @@ static int gpio_charger_probe(struct platform_device *pdev)
 		return PTR_ERR(charge_status);
 	if (charge_status) {
 		gpio_charger->charge_status = charge_status;
-		gpio_charger_properties[num_props] = POWER_SUPPLY_PROP_STATUS;
+		gpio_charger->properties[num_props] = POWER_SUPPLY_PROP_STATUS;
 		num_props++;
 	}
 
@@ -325,13 +322,13 @@ static int gpio_charger_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 	if (gpio_charger->current_limit_map) {
-		gpio_charger_properties[num_props] =
+		gpio_charger->properties[num_props] =
 			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX;
 		num_props++;
 	}
 
 	charger_desc = &gpio_charger->charger_desc;
-	charger_desc->properties = gpio_charger_properties;
+	charger_desc->properties = gpio_charger->properties;
 	charger_desc->num_properties = num_props;
 	charger_desc->get_property = gpio_charger_get_property;
 	charger_desc->set_property = gpio_charger_set_property;

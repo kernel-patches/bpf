@@ -25911,6 +25911,13 @@ S:	Supported
 F:	Documentation/devicetree/bindings/net/wireless/silabs,wfx.yaml
 F:	drivers/net/wireless/silabs/
 
+SILICON MITUS SM5714 FUEL GAUGE DRIVER
+M:	Nizat Mikayilli <nacht@dxdmail.cc>
+L:	linux-pm@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/power/supply/siliconmitus,sm5714-fuel-gauge.yaml
+F:	drivers/power/supply/sm5714-battery.c
+
 SILICON MOTION SM712 FRAME BUFFER DRIVER
 M:	Sudip Mukherjee <sudipm.mukherjee@gmail.com>
 M:	Teddy Wang <teddy.wang@siliconmotion.com>
@@ -28149,6 +28156,14 @@ L:	linux-pm@vger.kernel.org
 L:	linux-omap@vger.kernel.org
 S:	Maintained
 F:	drivers/thermal/ti-soc-thermal/
+
+TI BQ25630 BATTERY CHARGER DRIVER
+M:	Waqar Hameed <waqar.hameed@axis.com>
+L:	linux-pm@vger.kernel.org
+L:	kernel@axis.com
+S:	Supported
+F:	Documentation/devicetree/bindings/power/supply/ti,bq25630.yaml
+F:	drivers/power/supply/bq25630_charger.c
 
 TI BQ27XXX POWER SUPPLY DRIVER
 F:	drivers/power/supply/bq27xxx_battery.c
