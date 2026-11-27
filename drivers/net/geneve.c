@@ -1231,7 +1231,7 @@ static void geneve_build_header(struct genevehdr *geneveh,
 				__be16 inner_proto)
 {
 	geneveh->ver = GENEVE_VER;
-	geneveh->opt_len = info->options_len / 4;
+	geneveh->opt_len = 0;
 	geneveh->oam = test_bit(IP_TUNNEL_OAM_BIT, info->key.tun_flags);
 	geneveh->critical = test_bit(IP_TUNNEL_CRIT_OPT_BIT,
 				     info->key.tun_flags);
@@ -1240,8 +1240,15 @@ static void geneve_build_header(struct genevehdr *geneveh,
 	geneveh->proto_type = inner_proto;
 	geneveh->rsvd2 = 0;
 
-	if (test_bit(IP_TUNNEL_GENEVE_OPT_BIT, info->key.tun_flags))
+	/* Only announce and copy options that are actually geneve
+	 * options.  Metadata of another tunnel type (vxlan, erspan)
+	 * must not go on the wire: there is nothing to copy it from,
+	 * and the option space would carry stale headroom bytes.
+	 */
+	if (test_bit(IP_TUNNEL_GENEVE_OPT_BIT, info->key.tun_flags)) {
+		geneveh->opt_len = info->options_len / 4;
 		ip_tunnel_info_opts_get(geneveh->options, info);
+	}
 }
 
 static int geneve_build_gro_hint_opt(const struct geneve_dev *geneve,
@@ -1336,7 +1343,10 @@ static int geneve_build_skb(struct dst_entry *dst, struct sk_buff *skb,
 	skb_reset_mac_header(skb);
 	skb_scrub_packet(skb, xnet);
 
-	opt_size =  info->options_len + cb->gro_hint_len;
+	if (test_bit(IP_TUNNEL_GENEVE_OPT_BIT, info->key.tun_flags))
+		opt_size = info->options_len + cb->gro_hint_len;
+	else
+		opt_size = cb->gro_hint_len;
 	min_headroom = LL_RESERVED_SPACE(dst->dev) + dst->header_len +
 		       GENEVE_BASE_HLEN + opt_size + ip_hdr_len;
 	err = skb_cow_head(skb, min_headroom);
@@ -1353,7 +1363,8 @@ static int geneve_build_skb(struct dst_entry *dst, struct sk_buff *skb,
 	geneve_build_header(gnvh, info, inner_proto);
 
 	if (cb->gro_hint_len)
-		geneve_put_gro_hint_opt(gnvh, info->options_len, &cb->gro_hint);
+		geneve_put_gro_hint_opt(gnvh, opt_size - cb->gro_hint_len,
+					&cb->gro_hint);
 
 	udp_tunnel_set_inner_protocol(skb, double_encap, inner_proto);
 	return 0;
