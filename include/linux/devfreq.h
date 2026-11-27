@@ -90,8 +90,11 @@ struct devfreq_dev_status {
  *			use this directly. Instead, governors are recommended
  *			to use devfreq_update_stats() along with
  *			devfreq.last_status.
- * @get_cur_freq:	The device should provide the current frequency
- *			at which it is operating.
+ * @get_cur_freq:	The device should provide the frequency, in Hz, at
+ *			which it is currently operating, and return 0, or a
+ *			negative errno on failure. The frequency should be one
+ *			of @freq_table, as it is used for the transition
+ *			statistics.
  * @exit:		An optional callback that is called when devfreq
  *			is removing the devfreq object due to error or
  *			from devfreq_remove_device() call. If the user
