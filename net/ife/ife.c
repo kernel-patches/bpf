@@ -79,6 +79,14 @@ void *ife_decode(struct sk_buff *skb, u16 *metalen)
 	if (unlikely(ifehdrln < 2))
 		return NULL;
 
+	/* The caller strips one more ETH_HLEN via eth_type_trans() and
+	 * then resets the network header, whose offset is a u16.  A
+	 * larger pull would silently truncate the offset and leave the
+	 * stack with a negative network offset.
+	 */
+	if (unlikely(skb->data - skb->head + total_pull + ETH_HLEN > U16_MAX))
+		return NULL;
+
 	if (unlikely(!pskb_may_pull(skb, total_pull + ETH_HLEN)))
 		return NULL;
 
