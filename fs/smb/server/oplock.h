@@ -123,6 +123,16 @@ void create_posix_rsp_buf(char *cc, struct ksmbd_file *fp);
 void create_aapl_rsp_buf(char *cc, __u64 vol_caps, __u64 req_bitmap,
 			 bool readdir_attr_v2);
 struct create_context *smb2_find_context_vals(void *open_req, const char *tag, int tag_len);
+
+/*
+ * The data of a context smb2_find_context_vals() returned. It starts at
+ * DataOffset, and its DataLength bytes lie inside the context.
+ */
+static inline void *smb2_context_data(struct create_context *cc)
+{
+	return (char *)cc + le16_to_cpu(cc->DataOffset);
+}
+
 struct oplock_info *lookup_lease_in_table(struct ksmbd_conn *conn,
 					  char *lease_key);
 int find_same_lease_key(struct ksmbd_conn *conn, struct ksmbd_inode *ci,

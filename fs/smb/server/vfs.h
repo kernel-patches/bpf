@@ -164,12 +164,11 @@ int ksmbd_vfs_remove_sd_xattrs(const struct mnt_idmap *idmap, const struct path 
 int ksmbd_vfs_set_sd_xattr(struct ksmbd_conn *conn,
 			   const struct mnt_idmap *idmap,
 			   const struct path *path,
-			   struct smb_ntsd *pntsd, int len,
-			   bool get_write);
-int ksmbd_vfs_get_sd_xattr(struct ksmbd_conn *conn,
-			   const struct mnt_idmap *idmap,
-			   struct dentry *dentry,
-			   struct smb_ntsd **pntsd);
+			   const void *pntsd, int len);
+int __must_check ksmbd_vfs_get_sd_xattr(struct ksmbd_conn *conn,
+					const struct mnt_idmap *idmap,
+					struct dentry *dentry,
+					struct ksmbd_sd **sd);
 int ksmbd_vfs_set_dos_attrib_xattr(const struct mnt_idmap *idmap,
 				   const struct path *path,
 				   struct xattr_dos_attrib *da,

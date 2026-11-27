@@ -299,21 +299,30 @@ int ksmbd_decode_ntlmssp_neg_blob(struct negotiate_message *negblob,
 /**
  * ksmbd_build_ntlmssp_challenge_blob() - helper function to construct
  * challenge blob
- * @chgblob: challenge blob source pointer to initialize
- * @conn:	connection
+ * @chgblob: destination for the challenge blob
+ * @conn: connection
+ * @buflen: destination capacity in bytes
  *
+ * Return: The challenge blob length on success, or a negative errno.
  */
-unsigned int
+int
 ksmbd_build_ntlmssp_challenge_blob(struct challenge_message *chgblob,
-				   struct ksmbd_conn *conn)
+				   struct ksmbd_conn *conn, size_t buflen)
 {
+	const unsigned int first_av = NTLMSSP_AV_NB_COMPUTER_NAME;
+	const unsigned int last_av = NTLMSSP_AV_DNS_DOMAIN_NAME;
 	struct target_info *tinfo;
 	wchar_t *name;
 	__u8 *target_name;
-	unsigned int flags, blob_off, blob_len, type, target_info_len = 0;
+	unsigned int flags, type;
+	size_t blob_off, blob_len, av_pair_len, target_info_len;
 	int len, uni_len, conv_len;
 	int cflags = conn->ntlmssp.client_flags;
 
+	if (buflen < sizeof(*chgblob))
+		return -ENOSPC;
+
+	memset(chgblob, 0, sizeof(*chgblob));
 	memcpy(chgblob->Signature, NTLMSSP_SIGNATURE, 8);
 	chgblob->MessageType = NtLmChallenge;
 
@@ -359,6 +368,13 @@ ksmbd_build_ntlmssp_challenge_blob(struct challenge_message *chgblob,
 
 	blob_off = sizeof(struct challenge_message);
 	blob_len = blob_off + uni_len;
+	av_pair_len = sizeof(*tinfo) + uni_len;
+	target_info_len = (last_av - first_av + 1) * av_pair_len +
+			  sizeof(*tinfo);
+	if (blob_len + target_info_len > buflen) {
+		kfree(name);
+		return -ENOSPC;
+	}
 
 	chgblob->TargetName.Length = cpu_to_le16(uni_len);
 	chgblob->TargetName.MaximumLength = cpu_to_le16(uni_len);
@@ -376,27 +392,23 @@ ksmbd_build_ntlmssp_challenge_blob(struct challenge_message *chgblob,
 	memcpy(target_name, name, uni_len);
 	tinfo = (struct target_info *)(target_name + uni_len);
 
-	chgblob->TargetInfoArray.Length = 0;
 	/* Add target info list for NetBIOS/DNS settings */
-	for (type = NTLMSSP_AV_NB_COMPUTER_NAME;
-	     type <= NTLMSSP_AV_DNS_DOMAIN_NAME; type++) {
+	for (type = first_av; type <= last_av; type++) {
 		tinfo->Type = cpu_to_le16(type);
 		tinfo->Length = cpu_to_le16(uni_len);
 		memcpy(tinfo->Content, name, uni_len);
-		tinfo = (struct target_info *)((char *)tinfo + 4 + uni_len);
-		target_info_len += 4 + uni_len;
+		tinfo = (struct target_info *)((char *)tinfo + av_pair_len);
 	}
 
 	/* Add terminator subblock */
 	tinfo->Type = 0;
 	tinfo->Length = 0;
-	target_info_len += 4;
 
 	chgblob->TargetInfoArray.Length = cpu_to_le16(target_info_len);
 	chgblob->TargetInfoArray.MaximumLength = cpu_to_le16(target_info_len);
 	blob_len += target_info_len;
 	kfree(name);
-	ksmbd_debug(AUTH, "NTLMSSP SecurityBufferLength %d\n", blob_len);
+	ksmbd_debug(AUTH, "NTLMSSP SecurityBufferLength %zu\n", blob_len);
 	return blob_len;
 }
 
@@ -504,18 +516,28 @@ void ksmbd_sign_smb2_pdu(struct ksmbd_conn *conn, char *key, struct kvec *iov,
 /**
  * ksmbd_sign_smb3_pdu() - function to generate packet signing
  * @conn:	connection
+ * @signing_algorithm:	signing algorithm the key was generated for
  * @key:	signing key
  * @iov:        buffer iov array
  * @n_vec:	number of iovecs
  * @sig:	signature value generated for client request packet
  *
  */
-void ksmbd_sign_smb3_pdu(struct ksmbd_conn *conn, char *key, struct kvec *iov,
-			 int n_vec, char *sig)
+void ksmbd_sign_smb3_pdu(struct ksmbd_conn *conn, __le16 signing_algorithm,
+			 char *key, struct kvec *iov, int n_vec, char *sig)
 {
 	struct aes_cmac_key cmac_key __cleanup(aes_cmac_zeroize_key);
 	struct aes_cmac_ctx cmac_ctx;
 	int i;
+
+	if (signing_algorithm == SIGNING_ALG_HMAC_SHA256_LE) {
+		u8 mac[SMB2_HMACSHA256_SIZE];
+
+		ksmbd_sign_smb2_pdu(conn, key, iov, n_vec, mac);
+		memcpy(sig, mac, SMB2_SIGNATURE_SIZE);
+		memzero_explicit(mac, sizeof(mac));
+		return;
+	}
 
 	/* This cannot fail, since we always pass a valid key length. */
 	static_assert(SMB2_CMACAES_SIZE == AES_KEYSIZE_128);
@@ -648,7 +670,7 @@ static void generate_smb3encryptionkey(struct ksmbd_conn *conn,
 		     sess->smb3decryptionkey, SMB3_ENC_DEC_KEY_SIZE);
 
 	ksmbd_debug(AUTH, "generated SMB3 encryption/decryption keys\n");
-	ksmbd_debug(AUTH, "Cipher type   %d\n", conn->cipher_type);
+	ksmbd_debug(AUTH, "Cipher type   %d\n", le16_to_cpu(conn->cipher_type));
 	ksmbd_debug(AUTH, "Session Id    %llu\n", sess->id);
 }
 
