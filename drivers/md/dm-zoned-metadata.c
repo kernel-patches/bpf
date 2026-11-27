@@ -1256,7 +1256,7 @@ static int dmz_load_sb(struct dmz_metadata *zmd)
 		ret = dmz_lookup_secondary_sb(zmd);
 
 	if (ret) {
-		dmz_dev_err(zmd->sb[1].dev, "Read secondary super block failed");
+		dmz_dev_err(zmd->sb[0].dev, "Read secondary super block failed");
 		return ret;
 	}
 

@@ -594,6 +594,8 @@ int verity_fec_ctr(struct dm_verity *v)
 	struct dm_target *ti = v->ti;
 	u64 hash_blocks;
 	int ret;
+	char cache_name[64];
+	static atomic_t seqno = ATOMIC_INIT(0);
 
 	if (!verity_fec_is_enabled(v)) {
 		verity_fec_dtr(v);
@@ -706,7 +708,9 @@ int verity_fec_ctr(struct dm_verity *v)
 		return ret;
 	}
 
-	f->cache = kmem_cache_create("dm_verity_fec_buffers",
+	snprintf(cache_name, sizeof(cache_name), "dm_verity_fec_buffers-%d",
+		 atomic_inc_return(&seqno));
+	f->cache = kmem_cache_create(cache_name,
 				     f->rs_k << DM_VERITY_FEC_BUF_RS_BITS,
 				     0, 0, NULL);
 	if (!f->cache) {

@@ -150,6 +150,7 @@ static void unstripe_status(struct dm_target *ti, status_type_t type,
 
 	switch (type) {
 	case STATUSTYPE_INFO:
+		*result = '\0';
 		break;
 
 	case STATUSTYPE_TABLE:

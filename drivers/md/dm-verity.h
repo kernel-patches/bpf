@@ -11,7 +11,6 @@
 #ifndef DM_VERITY_H
 #define DM_VERITY_H
 
-#include <linux/dm-io.h>
 #include <linux/dm-bufio.h>
 #include <linux/device-mapper.h>
 #include <linux/interrupt.h>
@@ -80,7 +79,6 @@ struct dm_verity {
 
 	char *signature_key_desc; /* signature keyring reference */
 
-	struct dm_io_client *io;
 	mempool_t recheck_pool;
 };
 
