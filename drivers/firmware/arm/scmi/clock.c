@@ -362,10 +362,14 @@ static int scmi_clock_attributes_get(const struct scmi_protocol_handle *ph,
 	u32 attributes;
 	struct scmi_xfer *t;
 	struct scmi_msg_resp_clock_attributes *attr;
+	size_t rx_size = sizeof(*attr);
 	struct scmi_clock_info *clk = CLOCK_INFO(cinfo, clk_id);
 
+	if (PROTOCOL_REV_MAJOR(ph->version) < 0x2)
+		rx_size -= sizeof(attr->clock_enable_latency);
+
 	ret = ph->xops->xfer_get_init(ph, CLOCK_ATTRIBUTES,
-				      sizeof(clk_id), sizeof(*attr), &t);
+				      sizeof(clk_id), rx_size, &t);
 	if (ret)
 		return ret;
 
@@ -1002,12 +1006,16 @@ scmi_clock_config_get(const struct scmi_protocol_handle *ph, u32 clk_id,
 	int ret;
 	struct scmi_xfer *t;
 	struct scmi_msg_resp_clock_attributes *resp;
+	size_t rx_size = sizeof(*resp);
 
 	if (!enabled)
 		return -EINVAL;
 
+	if (PROTOCOL_REV_MAJOR(ph->version) < 0x2)
+		rx_size -= sizeof(resp->clock_enable_latency);
+
 	ret = ph->xops->xfer_get_init(ph, CLOCK_ATTRIBUTES,
-				      sizeof(clk_id), sizeof(*resp), &t);
+				      sizeof(clk_id), rx_size, &t);
 	if (ret)
 		return ret;
 

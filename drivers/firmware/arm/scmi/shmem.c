@@ -234,16 +234,11 @@ static void __iomem *shmem_setup_iomap(struct scmi_chan_info *cinfo,
 		dev_err(dev, "failed to ioremap SCMI %s shared memory\n", desc);
 		return IOMEM_ERR_PTR(-EADDRNOTAVAIL);
 	}
+	*ops = &shmem_io_ops_default;
 
-	of_property_read_u32(shmem, "reg-io-width", &reg_io_width);
-	switch (reg_io_width) {
-	case 4:
+	if (!of_property_read_u32(shmem, "reg-io-width", &reg_io_width) &&
+	    reg_io_width == 4)
 		*ops = &shmem_io_ops32;
-		break;
-	default:
-		*ops = &shmem_io_ops_default;
-		break;
-	}
 
 	return addr;
 }

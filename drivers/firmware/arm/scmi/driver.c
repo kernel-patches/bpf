@@ -1356,6 +1356,16 @@ static int scmi_wait_for_reply(struct device *dev, const struct scmi_desc *desc,
 		}
 	}
 
+	/* Check for truncated messages..it will be logged by the caller */
+	if (!ret && !xfer->hdr.status && xfer->expected_rx_len &&
+	    xfer->expected_rx_len != xfer->rx.len) {
+		dev_dbg(dev,
+			"Truncated reply - HDR:%08X  expected:%zu  received:%zu\n",
+			pack_scmi_header(&xfer->hdr), xfer->expected_rx_len,
+			xfer->rx.len);
+		xfer->hdr.status = SCMI_ERR_COMMS;
+	}
+
 	return ret;
 }
 
@@ -1508,7 +1518,7 @@ static void reset_rx_to_maxsz(const struct scmi_protocol_handle *ph,
 	const struct scmi_protocol_instance *pi = ph_to_pi(ph);
 	struct scmi_info *info = handle_to_scmi_info(pi->handle);
 
-	xfer->rx.len = info->desc->max_msg_size;
+	xfer->rx.len = xfer->expected_rx_len ?: info->desc->max_msg_size;
 }
 
 /**
@@ -1616,6 +1626,8 @@ static int xfer_get_init(const struct scmi_protocol_handle *ph,
 
 	xfer->tx.len = tx_size;
 	xfer->rx.len = rx_size ? : info->desc->max_msg_size;
+	/* When a specific rx_size was specified, check for truncation */
+	xfer->expected_rx_len = rx_size ? : 0;
 	xfer->hdr.type = MSG_TYPE_COMMAND;
 	xfer->hdr.id = msg_id;
 	xfer->hdr.poll_completion = false;
@@ -1852,7 +1864,7 @@ static int __scmi_iterator_run(void *iter, unsigned int *start, unsigned int *en
 	const struct scmi_protocol_handle *ph;
 	struct scmi_iterator_state *st;
 	struct scmi_iterator *i;
-	unsigned int n;
+	unsigned int n, i_start, i_max, i_returned;
 
 	if (!iter)
 		return -EINVAL;
@@ -1862,10 +1874,15 @@ static int __scmi_iterator_run(void *iter, unsigned int *start, unsigned int *en
 	ph = i->ph;
 	st = &i->state;
 
+	/* Initialize iteration counters used to check consistency */
+	i_max = 0;
+	i_returned = 0;
+	i_start = start ? *start : 0;
+
 	/* Reinitialize state for next run */
 	st->num_returned = 0;
 	st->num_remaining = 0;
-	st->desc_index = start ? *start : 0;
+	st->desc_index = i_start;
 
 	do {
 		iops->prepare_message(i->msg, st->desc_index, i->priv);
@@ -1873,10 +1890,43 @@ static int __scmi_iterator_run(void *iter, unsigned int *start, unsigned int *en
 		if (ret)
 			return ret;
 
+		if (i->t->rx.len < SCMI_MULTIPART_REPLY_MIN_SZ) {
+			dev_err(ph->dev, "Invalid multi-part reply.\n");
+			return -EINVAL;
+		}
+
 		st->rx_len = i->t->rx.len;
 		ret = iops->update_state(st, i->resp, i->priv);
 		if (ret)
 			return ret;
+
+		/*
+		 * Initialize max items expectation for this run based on
+		 * values returned on first message exchange: during the
+		 * following iterations consistency will be validated against
+		 * these parameters, so as to spot FW anomalies like sudden
+		 * termination or unplausible conditions.
+		 */
+		if (!i_max)
+			i_max = i_start + st->num_returned + st->num_remaining;
+
+		if ((!st->num_returned && st->num_remaining) ||
+		    (i_max != i_start + i_returned + st->num_returned + st->num_remaining)) {
+			dev_err(ph->dev,
+				"Inconsistent multi-part reply. max:%u  i_max:%u  i_start:%u  i_returned:%u  returned:%u  remaining:%u  desc_index:%u\n",
+				st->max_resources, i_max, i_start, i_returned,
+				st->num_returned, st->num_remaining,
+				st->desc_index);
+			return -EINVAL;
+		}
+
+		dev_dbg(ph->dev,
+			"Multi-part - max:%u  i_max:%u  i_start:%u  i_returned:%u  returned:%u  remaining:%u  desc_index:%u\n",
+			st->max_resources, i_max, i_start, i_returned,
+			st->num_returned, st->num_remaining, st->desc_index);
+
+		/* Account for last batch received */
+		i_returned += st->num_returned;
 
 		if (st->num_returned > st->max_resources - st->desc_index) {
 			dev_err(ph->dev,
@@ -2256,24 +2306,21 @@ best_effort:
  *
  * Context: Assumes to be called with @protocols_mtx already acquired.
  * Return: A reference to a freshly allocated and initialized protocol instance
- *	   or ERR_PTR on failure. On failure the @proto reference is at first
- *	   put using @scmi_protocol_put() before releasing all the devres group.
+ *	   or ERR_PTR on failure.
  */
 static struct scmi_protocol_instance *
 scmi_alloc_init_protocol_instance(struct scmi_info *info,
 				  const struct scmi_protocol *proto)
 {
+	const struct scmi_handle *handle = &info->handle;
+	struct scmi_protocol_instance *pi;
 	int ret = -ENOMEM;
 	void *gid;
-	struct scmi_protocol_instance *pi;
-	const struct scmi_handle *handle = &info->handle;
 
 	/* Protocol specific devres group */
 	gid = devres_open_group(handle->dev, NULL, GFP_KERNEL);
-	if (!gid) {
-		scmi_protocol_put(proto);
-		goto out;
-	}
+	if (!gid)
+		return ERR_PTR(ret);
 
 	pi = devm_kzalloc_obj(handle->dev, *pi);
 	if (!pi)
@@ -2303,7 +2350,7 @@ scmi_alloc_init_protocol_instance(struct scmi_info *info,
 	ret = idr_alloc(&info->protocols, pi, proto->id, proto->id + 1,
 			GFP_KERNEL);
 	if (ret != proto->id)
-		goto clean;
+		goto deinit;
 
 	/*
 	 * Warn but ignore events registration errors since we do not want
@@ -2324,11 +2371,11 @@ scmi_alloc_init_protocol_instance(struct scmi_info *info,
 
 	return pi;
 
+deinit:
+	if (pi->proto->instance_deinit)
+		pi->proto->instance_deinit(&pi->ph);
 clean:
-	/* Take care to put the protocol module's owner before releasing all */
-	scmi_protocol_put(proto);
 	devres_release_group(handle->dev, gid);
-out:
 	return ERR_PTR(ret);
 }
 
@@ -2348,25 +2395,25 @@ out:
 static struct scmi_protocol_instance * __must_check
 scmi_get_protocol_instance(const struct scmi_handle *handle, u8 protocol_id)
 {
-	struct scmi_protocol_instance *pi;
 	struct scmi_info *info = handle_to_scmi_info(handle);
+	struct scmi_protocol_instance *pi;
+	const struct scmi_protocol *proto;
 
-	mutex_lock(&info->protocols_mtx);
+	guard(mutex)(&info->protocols_mtx);
 	pi = idr_find(&info->protocols, protocol_id);
-
 	if (pi) {
 		refcount_inc(&pi->users);
-	} else {
-		const struct scmi_protocol *proto;
-
-		/* Fails if protocol not registered on bus */
-		proto = scmi_protocol_get(protocol_id, &info->version);
-		if (proto)
-			pi = scmi_alloc_init_protocol_instance(info, proto);
-		else
-			pi = ERR_PTR(-EPROBE_DEFER);
+		return pi;
 	}
-	mutex_unlock(&info->protocols_mtx);
+
+	/* Fails if protocol not registered on bus */
+	proto = scmi_protocol_get(protocol_id, &info->version);
+	if (!proto)
+		return ERR_PTR(-EPROBE_DEFER);
+
+	pi = scmi_alloc_init_protocol_instance(info, proto);
+	if (IS_ERR(pi))
+		scmi_protocol_put(proto);
 
 	return pi;
 }
@@ -2399,12 +2446,13 @@ void scmi_protocol_release(const struct scmi_handle *handle, u8 protocol_id)
 	struct scmi_info *info = handle_to_scmi_info(handle);
 	struct scmi_protocol_instance *pi;
 
-	mutex_lock(&info->protocols_mtx);
+	guard(mutex)(&info->protocols_mtx);
 	pi = idr_find(&info->protocols, protocol_id);
 	if (WARN_ON(!pi))
-		goto out;
+		return;
 
 	if (refcount_dec_and_test(&pi->users)) {
+		const struct scmi_protocol *proto = pi->proto;
 		void *gid = pi->gid;
 
 		if (pi->proto->events)
@@ -2415,15 +2463,11 @@ void scmi_protocol_release(const struct scmi_handle *handle, u8 protocol_id)
 
 		idr_remove(&info->protocols, protocol_id);
 
-		scmi_protocol_put(pi->proto);
-
 		devres_release_group(handle->dev, gid);
+		scmi_protocol_put(proto);
 		dev_dbg(handle->dev, "De-Initialized protocol: 0x%X\n",
 			protocol_id);
 	}
-
-out:
-	mutex_unlock(&info->protocols_mtx);
 }
 
 void scmi_setup_protocol_implemented(const struct scmi_protocol_handle *ph,
@@ -2931,6 +2975,9 @@ static int scmi_channels_setup(struct scmi_info *info)
 			int prot_id = scmi_dsd_info_list[idx].protocol_id;
 
 			if (prot_id == SCMI_PROTOCOL_BASE)
+				continue;
+			if (info->desc->ops->protocol_available &&
+			    !info->desc->ops->protocol_available(fwnode, prot_id))
 				continue;
 
 			ret = scmi_txrx_setup(info, fwnode, prot_id);
@@ -3454,6 +3501,9 @@ static int scmi_probe(struct platform_device *pdev)
 			int prot_id = scmi_dsd_info_list[idx].protocol_id;
 
 			if (prot_id == SCMI_PROTOCOL_BASE)
+				continue;
+			if (info->desc->ops->protocol_available &&
+			    !info->desc->ops->protocol_available(dev_fwnode(dev), prot_id))
 				continue;
 
 			scmi_device_check_create(dev_fwnode(dev), prot_id,

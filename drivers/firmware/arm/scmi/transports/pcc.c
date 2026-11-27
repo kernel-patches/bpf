@@ -17,6 +17,7 @@
  */
 
 #include <linux/acpi.h>
+#include <linux/bitmap.h>
 #include <linux/cleanup.h>
 #include <linux/device.h>
 #include <linux/err.h>
@@ -117,6 +118,7 @@ struct pcc_transport_map {
 	struct fwnode_handle *fwnode;
 	struct device *dev;
 	struct list_head node;
+	DECLARE_BITMAP(protocols, U8_MAX + 1);
 	DECLARE_HASHTABLE(table, ilog2(MAX_PCC_SUBSPACES / 8));
 };
 
@@ -445,6 +447,7 @@ static int acpi_scmi_parse_properties(struct pcc_transport_map *map,
 		if (ret)
 			return ret;
 		transport_found = true;
+		set_bit(SCMI_PROTOCOL_BASE, map->protocols);
 	}
 
 	if (!transport_found)
@@ -468,6 +471,7 @@ static int acpi_scmi_parse_properties(struct pcc_transport_map *map,
 		ret = acpi_scmi_dsd_parse_protocol_package(map, v, prot_id);
 		if (ret)
 			return ret;
+		set_bit(prot_id, map->protocols);
 	}
 
 	return 0;
@@ -670,6 +674,19 @@ pcc_chan_available(struct fwnode_handle *fwnode, int prot_id, int idx)
 	return pcc_get_ss_id(fwnode, prot_id, !idx, NULL) >= 0;
 }
 
+static bool pcc_protocol_available(struct fwnode_handle *fwnode, int prot_id)
+{
+	struct pcc_transport_map *map;
+
+	if (prot_id < 0 || prot_id > U8_MAX)
+		return false;
+
+	guard(mutex)(&pcc_transport_maps_lock);
+	map = pcc_transport_map_find(fwnode);
+
+	return map && test_bit(prot_id, map->protocols);
+}
+
 static void tx_prepare(struct mbox_client *cl, void *m)
 {
 	struct scmi_pcc *smbox = client_to_scmi_pcc(cl);
@@ -832,6 +849,7 @@ static void pcc_fetch_notification(struct scmi_chan_info *cinfo, size_t max_len,
 }
 
 static const struct scmi_transport_ops scmi_pcc_ops = {
+	.protocol_available = pcc_protocol_available,
 	.chan_available = pcc_chan_available,
 	.chan_setup = pcc_chan_setup,
 	.chan_free = pcc_chan_free,
