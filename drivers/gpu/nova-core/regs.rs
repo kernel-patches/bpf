@@ -147,6 +147,11 @@ register! {
         31:0    value => u32;
     }
 
+    /// `MAILBOX0` as LibOS, the kernel that GSP-RM runs on, writes it.
+    pub(crate) NV_PFALCON_FALCON_MAILBOX0_LIBOS(u32) => NV_PFALCON_FALCON_MAILBOX0 {
+        31:31   processor_suspended => bool;
+    }
+
     pub(crate) NV_PFALCON_FALCON_MAILBOX1(u32) @ 0x00000044 {
         31:0    value => u32;
     }
@@ -179,6 +184,11 @@ register! {
 
     pub(crate) NV_PFALCON_FALCON_BOOTVEC(u32) @ 0x00000104 {
         31:0    value => u32;
+    }
+
+    pub(crate) NV_PFALCON_FALCON_HWCFG(u32) @ 0x00000108 {
+        /// Number of 256-byte blocks in this falcon's IMEM.
+        8:0     imem_size;
     }
 
     pub(crate) NV_PFALCON_FALCON_DMACTL(u32) @ 0x0000010c {
@@ -236,7 +246,7 @@ register! {
         /// Auto-increment on write.
         24:24     aincw => bool;
         /// IMEM block and word offset.
-        15:0      offs;
+        23:0      offs;
     }
 
     /// IMEM data register. Reading/writing this register accesses IMEM at the address
@@ -316,9 +326,11 @@ impl NV_PFALCON_FALCON_DMACTL {
 }
 
 impl NV_PFALCON_FALCON_DMATRFCMD {
-    /// Programs the `imem` and `sec` fields for the given FalconMem
+    /// Programs the `imem`, `sec` and `set_dmtag` fields for the given FalconMem
     pub(crate) fn with_falcon_mem(self, mem: FalconMem) -> Self {
-        let this = self.with_imem(mem != FalconMem::Dmem);
+        let this = self
+            .with_imem(!matches!(mem, FalconMem::Dmem { .. }))
+            .with_set_dmtag(matches!(mem, FalconMem::Dmem { tag: true }));
 
         match mem {
             FalconMem::ImemSecure => this.with_const_sec::<1>(),
@@ -402,19 +414,19 @@ register! {
 register! {
     base: NovaRegisters;
 
-    pub(crate) NV_PFSP_QUEUE_HEAD(u32)[8] @ 0x008f2c00 {
+    pub(crate) NV_PFSP_QUEUE_HEAD(u32)[8, stride = 8] @ 0x008f2c00 {
         31:0    address => u32;
     }
 
-    pub(crate) NV_PFSP_QUEUE_TAIL(u32)[8] @ 0x008f2c04 {
+    pub(crate) NV_PFSP_QUEUE_TAIL(u32)[8, stride = 8] @ 0x008f2c04 {
         31:0    address => u32;
     }
 
-    pub(crate) NV_PFSP_MSGQ_HEAD(u32)[8] @ 0x008f2c80 {
+    pub(crate) NV_PFSP_MSGQ_HEAD(u32)[8, stride = 8] @ 0x008f2c80 {
         31:0    val => u32;
     }
 
-    pub(crate) NV_PFSP_MSGQ_TAIL(u32)[8] @ 0x008f2c84 {
+    pub(crate) NV_PFSP_MSGQ_TAIL(u32)[8, stride = 8] @ 0x008f2c84 {
         31:0    val => u32;
     }
 }

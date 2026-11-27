@@ -24,6 +24,7 @@ use crate::{
 
 pub(crate) mod booter;
 pub(crate) mod fwsec;
+pub(crate) mod gen_bootloader;
 pub(crate) mod gsp;
 pub(crate) mod gsp_fmc;
 pub(crate) mod radix3;

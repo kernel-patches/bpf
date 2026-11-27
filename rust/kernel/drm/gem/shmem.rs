@@ -138,9 +138,7 @@ impl<T: DriverObject> Object<T> {
         vmap: Some(bindings::drm_gem_shmem_object_vmap),
         vunmap: Some(bindings::drm_gem_shmem_object_vunmap),
         mmap: Some(bindings::drm_gem_shmem_object_mmap),
-        #[allow(unused_unsafe, reason = "Safe since Rust 1.82.0")]
-        // SAFETY: `drm_gem_shmem_vm_ops` is a valid, static const on the C side.
-        vm_ops: unsafe { &raw const bindings::drm_gem_shmem_vm_ops },
+        vm_ops: &raw const bindings::drm_gem_shmem_vm_ops,
         ..pin_init::zeroed()
     };
 
@@ -552,15 +550,18 @@ impl<T: DriverObject> Drop for SGTableMap<T> {
 }
 
 impl<T: DriverObject> SGTableMap<T> {
-    fn new(obj: &Object<T>) -> impl Init<Self, Error> {
-        // INVARIANT:
-        // - We call drm_gem_shmem_get_pages_sgt below and check whether or not it succeeds,
-        //   fulfilling the invariant of SGTableMap that the object's `sgt` field is initialized.
-        // SAFETY:
-        // - `obj` is fully initialized, making this function safe to call.
-        from_err_ptr(unsafe { bindings::drm_gem_shmem_get_pages_sgt(obj.as_raw_shmem()) })?;
+    fn new(obj: &Object<T>) -> impl Init<Self, Error> + '_ {
+        pin_init::init_scope(move || {
+            // SAFETY:
+            // - `obj` is fully initialized, making this function safe to call.
+            from_err_ptr(unsafe { bindings::drm_gem_shmem_get_pages_sgt(obj.as_raw_shmem()) })?;
 
-        Ok(Self { obj: obj.into() })
+            // INVARIANT:
+            // - We call drm_gem_shmem_get_pages_sgt above and check whether or not it succeeds,
+            //   fulfilling the invariant of SGTableMap that the object's `sgt` field is
+            //   initialized.
+            Ok(try_init!(Self { obj: obj.into() }))
+        })
     }
 }
 
@@ -586,8 +587,6 @@ mod tests {
 
     // The bare minimum needed to create a fake drm driver for kunit
 
-    #[pin_data]
-    struct KunitData {}
     struct KunitDriver;
     struct KunitFile;
     #[pin_data]
@@ -601,11 +600,14 @@ mod tests {
         desc: c"Kunit",
     };
 
-    impl drm::file::DriverFile for KunitFile {
+    impl drm::file::DriverFile<'_> for KunitFile {
         type Driver = KunitDriver;
 
-        fn open(_dev: &drm::Device<KunitDriver>) -> Result<Pin<KBox<Self>>> {
-            Ok(KBox::new(Self, GFP_KERNEL)?.into())
+        fn open(
+            _device: &drm::Device<KunitDriver, drm::Registered>,
+            _reg_data: &(),
+        ) -> impl PinInit<Self, Error> {
+            Ok(Self)
         }
     }
 
@@ -624,9 +626,8 @@ mod tests {
 
     #[vtable]
     impl drm::Driver for KunitDriver {
-        type Data = KunitData;
         type RegistrationData<'a> = ();
-        type File = KunitFile;
+        type File<'a> = KunitFile;
         type Object = Object<KunitObject>;
         type ParentDevice<Ctx: device::DeviceContext> = faux::Device<Ctx>;
 
@@ -636,10 +637,9 @@ mod tests {
 
     fn create_drm_dev() -> Result<(faux::Registration, UnregisteredDevice<KunitDriver>)> {
         // Create a faux DRM device so we can test gem object creation.
-        let data = try_pin_init!(KunitData {});
         let reg = faux::Registration::new(c"Kunit", None)?;
         let fdev = reg.as_ref();
-        let drm = UnregisteredDevice::new(fdev, data)?;
+        let drm = UnregisteredDevice::new(fdev)?;
 
         Ok((reg, drm))
     }

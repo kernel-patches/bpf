@@ -314,8 +314,8 @@ def generate_crates(
         }
         return register_crate(crate_with_generated)
 
-    bindings = append_crate_with_generated("bindings", [core, ffi, pin_init])
-    uapi = append_crate_with_generated("uapi", [core, ffi, pin_init])
+    bindings = append_crate_with_generated("bindings", [core, ffi, pin_init, zerocopy, zerocopy_derive])
+    uapi = append_crate_with_generated("uapi", [core, ffi, pin_init, zerocopy, zerocopy_derive])
     kernel = append_crate_with_generated(
         "kernel", [core, macros, build_error, pin_init, ffi, bindings, uapi, zerocopy, zerocopy_derive]
     )

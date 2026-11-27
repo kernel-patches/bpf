@@ -33,9 +33,11 @@ static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
 #[pin_data]
 pub(crate) struct NovaCore<'bound> {
     #[allow(clippy::type_complexity)]
-    _reg: auxiliary::Registration<'bound, ForLt!(NovaCoreApi<'_>)>,
+    #[uses('gpu: invariant)]
+    _reg: auxiliary::Registration<'gpu, ForLt!(NovaCoreApi<'_>)>,
     #[pin]
-    pub(crate) gpu: Gpu<'bound>,
+    #[uses('bar1)]
+    pub(crate) gpu: Gpu<'bar>,
     bar: pci::Bar<'bound, BAR0_SIZE>,
     bar1: pci::Bar<'bound>,
 }
@@ -91,6 +93,7 @@ kernel::pci_device_table!(
     ]
 );
 
+#[vtable]
 impl pci::Driver for NovaCoreDriver {
     type IdInfo = ();
     type Data<'bound> = NovaCore<'bound>;
@@ -129,44 +132,25 @@ impl pci::Driver for NovaCoreDriver {
                 crate::irq::doorbell_test::run_selftest(pdev, bar, spec.chipset)?;
             },
 
-            // TODO: Use self-referential pin-init syntax once available.
-            gpu <- Gpu::new(
-                pdev,
-                // SAFETY: `bar` is initialized above, pinned, and outlives `gpu`.
-                unsafe { &*core::ptr::from_ref(bar) },
-                // SAFETY: `bar1` is initialized above, pinned, and outlives `gpu`.
-                unsafe { &*core::ptr::from_ref(bar1) },
-            ).pin_chain(|_gpu| {
+            gpu <- Gpu::new(pdev, bar, bar1).pin_chain(|_gpu| {
                 #[cfg(CONFIG_NOVA_CORE_SELFTESTS)]
                 _gpu.run_selftests(pdev);
                 Ok(())
             }),
 
-            _reg: {
-                // TODO: Use `&gpu` self-referential pin-init syntax once available.
-                //
-                // SAFETY: `gpu` is initialized before this expression is evaluated
-                // (`try_pin_init!()` initializes fields in initializer order), lives at
-                // a pinned stable address, and is dropped after `_reg` (struct field
-                // drop order).
-                let gpu = unsafe {
-                    Pin::new_unchecked(&*core::ptr::from_ref(gpu.as_ref().get_ref()))
-                };
-
-                // SAFETY: `NovaCore` is dropped when the device is unbound;
-                // i.e. `mem::forget()` is never called on it.
-                unsafe {
-                    auxiliary::Registration::new_with_lt(
-                        pdev.as_ref(),
-                        c"nova-drm",
-                        // TODO[XARR]: Use XArray or perhaps IDA for proper ID
-                        // allocation/recycling. For now, use a simple atomic counter that
-                        // never recycles IDs.
-                        AUXILIARY_ID_COUNTER.fetch_add(1, Relaxed),
-                        crate::MODULE_NAME,
-                        NovaCoreApi { gpu, pdev },
-                    )?
-                }
+            // SAFETY: `NovaCore` is dropped when the device is unbound; i.e. `mem::forget()` is
+            // never called on it.
+            _reg: unsafe {
+                auxiliary::Registration::new_with_lt(
+                    pdev.as_ref(),
+                    c"nova-drm",
+                    // TODO[XARR]: Use XArray or perhaps IDA for proper ID
+                    // allocation/recycling. For now, use a simple atomic counter that
+                    // never recycles IDs.
+                    AUXILIARY_ID_COUNTER.fetch_add(1, Relaxed),
+                    crate::MODULE_NAME,
+                    NovaCoreApi::new(pdev, gpu),
+                )?
             },
         })
     }
