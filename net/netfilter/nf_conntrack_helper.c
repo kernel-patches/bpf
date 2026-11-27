@@ -209,6 +209,8 @@ int __nf_ct_try_assign_helper(struct nf_conn *ct, struct nf_conn *tmpl,
 	help = nfct_help(tmpl);
 	if (help)
 		helper = rcu_dereference(help->helper);
+	if (helper && helper->l4proto != nf_ct_protonum(ct))
+		helper = NULL;
 
 	help = nfct_help(ct);
 
