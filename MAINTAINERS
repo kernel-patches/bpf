@@ -4016,6 +4016,7 @@ F:	Documentation/devicetree/bindings/clock/zte,zx297520v3-topcrm.yaml
 F:	arch/arm/boot/dts/zte/
 F:	arch/arm/mach-zte/
 F:	drivers/clk/zte/
+F:	drivers/mfd/zte-zx297520v3-crm.c
 F:	include/dt-bindings/clock/zte,zx297520v3-clk.h
 F:	include/dt-bindings/phy/zte,zx297520v3-topcrm.h
 F:	include/dt-bindings/reset/zte,zx297520v3-reset.h
@@ -18107,15 +18108,6 @@ S:	Maintained
 F:	Documentation/driver-api/men-chameleon-bus.rst
 F:	drivers/mcb/
 F:	include/linux/mcb.h
-
-MEN F21BMC (Board Management Controller)
-M:	Andreas Werner <andreas.werner@men.de>
-S:	Supported
-F:	Documentation/hwmon/menf21bmc.rst
-F:	drivers/hwmon/menf21bmc_hwmon.c
-F:	drivers/leds/leds-menf21bmc.c
-F:	drivers/mfd/menf21bmc.c
-F:	drivers/watchdog/menf21bmc_wdt.c
 
 MEN Z069 WATCHDOG DRIVER
 M:	Johannes Thumshirn <jth@kernel.org>

@@ -429,7 +429,7 @@ static int titsc_probe(struct platform_device *pdev)
 {
 	struct titsc *ts_dev;
 	struct input_dev *input_dev;
-	struct ti_tscadc_dev *tscadc_dev = ti_tscadc_dev_get(pdev);
+	struct ti_tscadc_dev *tscadc_dev = dev_get_drvdata(pdev->dev.parent);
 	int err;
 
 	ts_dev = devm_kzalloc(&pdev->dev, sizeof(*ts_dev), GFP_KERNEL);
