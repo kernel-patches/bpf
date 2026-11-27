@@ -826,8 +826,7 @@ static int bcm_ptp_hwtstamp_set(struct mii_timestamper *mii_ts,
 
 	mode = TX_MODE_SEL(PORT, SYNC, REPLACE_TS) |
 	       TX_MODE_SEL(PORT, DELAY_REQ, REPLACE_TS) |
-	       TX_MODE_SEL(PORT, PDELAY_REQ, REPLACE_TS) |
-	       TX_MODE_SEL(PORT, PDELAY_RESP, REPLACE_TS);
+	       TX_MODE_SEL(PORT, PDELAY_REQ, REPLACE_TS);
 
 	bcm_phy_write_exp(priv->phydev, TX_EVENT_MODE, mode);
 
