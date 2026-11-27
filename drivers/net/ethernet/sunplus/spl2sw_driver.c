@@ -476,6 +476,8 @@ static int spl2sw_probe(struct platform_device *pdev)
 		spl2sw_mac_rx_mode_set(mac);
 	}
 
+	of_node_put(eth_ports_np);
+
 	/* Find first valid net device. */
 	for (i = 0; i < MAX_NETDEV_NUM; i++) {
 		if (comm->ndev[i])
