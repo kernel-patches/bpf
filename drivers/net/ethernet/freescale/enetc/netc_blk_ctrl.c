@@ -32,12 +32,11 @@
 #define  IO_VAR(port, var)		(((var) & 0xf) << ((port) << 2))
 
 #define IMX95_CFG_LINK_MII_PROT		0x4
-#define CFG_LINK_MII_PORT_0		GENMASK(3, 0)
-#define CFG_LINK_MII_PORT_1		GENMASK(7, 4)
 #define  MII_PROT_MII			0x0
 #define  MII_PROT_RMII			0x1
 #define  MII_PROT_RGMII			0x2
 #define  MII_PROT_SERIAL		0x3
+#define  MII_PROT_MASK(port)		(GENMASK(3, 0) << ((port) << 2))
 #define  MII_PROT(port, prot)		(((prot) & 0xf) << ((port) << 2))
 
 #define IMX95_CFG_LINK_PCS_PROT(a)	(0x8 + (a) * 4)
@@ -78,6 +77,9 @@
 #define IMX95_ENETC0_BUS_DEVFN		0x0
 #define IMX95_ENETC1_BUS_DEVFN		0x40
 #define IMX95_ENETC2_BUS_DEVFN		0x80
+#define IMX95_ENETC0_LINK		0
+#define IMX95_ENETC1_LINK		1
+#define IMX95_ENETC2_LINK		2
 
 #define IMX94_ENETC0_BUS_DEVFN		0x100
 #define IMX94_ENETC1_BUS_DEVFN		0x140
@@ -95,8 +97,15 @@
 /* Flags for different platforms */
 #define NETC_HAS_NETCMIX		BIT(0)
 
+struct netc_link {
+	u32 bus_devfn;
+	u8 link_id;
+};
+
 struct netc_devinfo {
 	u32 flags;
+	const struct netc_link *links;
+	unsigned int num_links;
 	int (*netcmix_init)(struct platform_device *pdev);
 	int (*ierb_init)(struct platform_device *pdev);
 };
@@ -156,18 +165,44 @@ static int netc_get_link_mii_protocol(phy_interface_t interface)
 	}
 }
 
-static int imx95_netcmix_init(struct platform_device *pdev)
+static int netc_of_get_link_mii_protocol(struct device_node *np)
 {
-	struct netc_blk_ctrl *priv = platform_get_drvdata(pdev);
-	struct device_node *np = pdev->dev.of_node;
 	phy_interface_t interface;
-	int bus_devfn, mii_proto;
-	u32 val;
-	int err;
 
-	/* Default setting of MII protocol */
-	val = MII_PROT(0, MII_PROT_RGMII) | MII_PROT(1, MII_PROT_RGMII) |
-	      MII_PROT(2, MII_PROT_SERIAL);
+	/* The node may be disabled and does not have a 'phy-mode'
+	 * or 'phy-connection-type' property.
+	 */
+	if (of_get_phy_mode(np, &interface))
+		return -ENODEV;
+
+	return netc_get_link_mii_protocol(interface);
+}
+
+static int netc_of_get_link_id(struct netc_blk_ctrl *priv,
+			       struct device_node *np)
+{
+	const struct netc_devinfo *devinfo = priv->devinfo;
+	unsigned int i;
+	int bus_devfn;
+
+	bus_devfn = netc_of_pci_get_bus_devfn(np);
+	if (bus_devfn < 0)
+		return bus_devfn;
+
+	for (i = 0; i < devinfo->num_links; i++) {
+		if (devinfo->links[i].bus_devfn == bus_devfn)
+			return devinfo->links[i].link_id;
+	}
+
+	return -EINVAL;
+}
+
+static int imx95_netcmix_get_mii_prot(struct netc_blk_ctrl *priv, u32 *val,
+				      u32 fixed_links_mask)
+{
+	struct device_node *np = priv->pdev->dev.of_node;
+	int link_id, mii_proto;
+	u32 reg = *val;
 
 	/* Update the link MII protocol through parsing phy-mode */
 	for_each_available_child_of_node_scoped(np, child) {
@@ -175,35 +210,42 @@ static int imx95_netcmix_init(struct platform_device *pdev)
 			if (!of_device_is_compatible(gchild, "pci1131,e101"))
 				continue;
 
-			bus_devfn = netc_of_pci_get_bus_devfn(gchild);
-			if (bus_devfn < 0)
-				return -EINVAL;
+			link_id = netc_of_get_link_id(priv, gchild);
+			if (link_id < 0)
+				return link_id;
 
-			if (bus_devfn == IMX95_ENETC2_BUS_DEVFN)
+			if (fixed_links_mask & BIT(link_id))
 				continue;
 
-			err = of_get_phy_mode(gchild, &interface);
-			if (err)
+			mii_proto = netc_of_get_link_mii_protocol(gchild);
+			if (mii_proto == -ENODEV)
 				continue;
-
-			mii_proto = netc_get_link_mii_protocol(interface);
 			if (mii_proto < 0)
-				return -EINVAL;
+				return mii_proto;
 
-			switch (bus_devfn) {
-			case IMX95_ENETC0_BUS_DEVFN:
-				val = u32_replace_bits(val, mii_proto,
-						       CFG_LINK_MII_PORT_0);
-				break;
-			case IMX95_ENETC1_BUS_DEVFN:
-				val = u32_replace_bits(val, mii_proto,
-						       CFG_LINK_MII_PORT_1);
-				break;
-			default:
-				return -EINVAL;
-			}
+			reg &= ~MII_PROT_MASK(link_id);
+			reg |= MII_PROT(link_id, mii_proto);
 		}
 	}
+
+	*val = reg;
+
+	return 0;
+}
+
+static int imx95_netcmix_init(struct platform_device *pdev)
+{
+	struct netc_blk_ctrl *priv = platform_get_drvdata(pdev);
+	u32 val;
+	int err;
+
+	/* Default setting of MII protocol */
+	val = MII_PROT(0, MII_PROT_RGMII) | MII_PROT(1, MII_PROT_RGMII) |
+	      MII_PROT(2, MII_PROT_SERIAL);
+
+	err = imx95_netcmix_get_mii_prot(priv, &val, BIT(IMX95_ENETC2_LINK));
+	if (err)
+		return err;
 
 	/* Configure Link I/O variant */
 	netc_reg_write(priv->netcmix, IMX95_CFG_LINK_IO_VAR,
@@ -216,37 +258,15 @@ static int imx95_netcmix_init(struct platform_device *pdev)
 	return 0;
 }
 
-static int imx94_enetc_get_link_id(struct device_node *np)
-{
-	int bus_devfn = netc_of_pci_get_bus_devfn(np);
-
-	/* Parse ENETC link number */
-	switch (bus_devfn) {
-	case IMX94_ENETC0_BUS_DEVFN:
-		return IMX94_ENETC0_LINK;
-	case IMX94_ENETC1_BUS_DEVFN:
-		return IMX94_ENETC1_LINK;
-	case IMX94_ENETC2_BUS_DEVFN:
-		return IMX94_ENETC2_LINK;
-	default:
-		return -EINVAL;
-	}
-}
-
 static int imx94_link_config(struct netc_blk_ctrl *priv,
 			     struct device_node *np, int link_id)
 {
-	phy_interface_t interface;
 	int mii_proto;
 	u32 val;
 
-	/* The node may be disabled and does not have a 'phy-mode'
-	 * or 'phy-connection-type' property.
-	 */
-	if (of_get_phy_mode(np, &interface))
+	mii_proto = netc_of_get_link_mii_protocol(np);
+	if (mii_proto == -ENODEV)
 		return 0;
-
-	mii_proto = netc_get_link_mii_protocol(interface);
 	if (mii_proto < 0)
 		return mii_proto;
 
@@ -264,7 +284,7 @@ static int imx94_enetc_link_config(struct netc_blk_ctrl *priv,
 				   struct device_node *np,
 				   bool *enetc0_en)
 {
-	int link_id = imx94_enetc_get_link_id(np);
+	int link_id = netc_of_get_link_id(priv, np);
 
 	if (link_id < 0)
 		return link_id;
@@ -870,14 +890,30 @@ static int netc_prb_check_error(struct netc_blk_ctrl *priv)
 	return 0;
 }
 
+static const struct netc_link imx95_links[] = {
+	{ IMX95_ENETC0_BUS_DEVFN, IMX95_ENETC0_LINK },
+	{ IMX95_ENETC1_BUS_DEVFN, IMX95_ENETC1_LINK },
+	{ IMX95_ENETC2_BUS_DEVFN, IMX95_ENETC2_LINK },
+};
+
+static const struct netc_link imx94_links[] = {
+	{ IMX94_ENETC0_BUS_DEVFN, IMX94_ENETC0_LINK },
+	{ IMX94_ENETC1_BUS_DEVFN, IMX94_ENETC1_LINK },
+	{ IMX94_ENETC2_BUS_DEVFN, IMX94_ENETC2_LINK },
+};
+
 static const struct netc_devinfo imx95_devinfo = {
 	.flags = NETC_HAS_NETCMIX,
+	.links = imx95_links,
+	.num_links = ARRAY_SIZE(imx95_links),
 	.netcmix_init = imx95_netcmix_init,
 	.ierb_init = imx95_ierb_init,
 };
 
 static const struct netc_devinfo imx94_devinfo = {
 	.flags = NETC_HAS_NETCMIX,
+	.links = imx94_links,
+	.num_links = ARRAY_SIZE(imx94_links),
 	.netcmix_init = imx94_netcmix_init,
 	.ierb_init = imx94_ierb_init,
 };
