@@ -83,6 +83,42 @@ static struct xfrm_algo_desc aead_list[] = {
 	}
 },
 {
+	.name = "rfc4106(gcm(aria))",
+
+	.uinfo = {
+		.aead = {
+			.geniv = "seqiv",
+			.icv_truncbits = 64,
+		}
+	},
+
+	.pfkey_supported = 0,
+},
+{
+	.name = "rfc4106(gcm(aria))",
+
+	.uinfo = {
+		.aead = {
+			.geniv = "seqiv",
+			.icv_truncbits = 96,
+		}
+	},
+
+	.pfkey_supported = 0,
+},
+{
+	.name = "rfc4106(gcm(aria))",
+
+	.uinfo = {
+		.aead = {
+			.geniv = "seqiv",
+			.icv_truncbits = 128,
+		}
+	},
+
+	.pfkey_supported = 0,
+},
+{
 	.name = "rfc4309(ccm(aes))",
 
 	.uinfo = {
