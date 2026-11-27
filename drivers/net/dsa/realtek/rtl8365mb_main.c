@@ -882,6 +882,7 @@ struct rtl8365mb_port {
  * @sds_supported: SerDes tuning parameters match the chip option, so the
  *                 SerDes interface modes can be advertised
  * @sds_in_use: the SerDes external interface has been configured
+ * @sds_core_reset_work: switch core soft reset after the conduit comes up
  *
  * Private data for this driver.
  */
@@ -895,6 +896,7 @@ struct rtl8365mb {
 	struct phylink_pcs pcs;
 	bool sds_supported;
 	bool sds_in_use;
+	struct delayed_work sds_core_reset_work;
 };
 
 #define pcs_to_rtl8365mb(_pcs) container_of((_pcs), struct rtl8365mb, pcs)
@@ -3117,11 +3119,48 @@ static int rtl8365mb_reset_chip(struct realtek_priv *priv)
 					20000, 1e6);
 }
 
+/* On an RTL8367S connected to an IPQ5018 over HSGMII, the port MAC behind the
+ * SerDes occasionally ends up, after the link comes up, in a state where the
+ * frames received from the CPU are counted (ifInUcastPkts rises, no FCS
+ * errors) but never forwarded to any user port, while the switch to CPU
+ * direction keeps working. The port debug information register
+ * (PORT_DEBUG_INFO_CTRL3, 0x091A) then reads 0x0000 instead of 0x0035. This
+ * state can also turn, by itself, into one where those frames are forwarded
+ * but corrupted, or show up like that from the start, without any trace in
+ * the port debug information. Neither a SerDes data path reset nor re-running
+ * the SerDes configuration recovers from any of this, but a switch core soft
+ * reset does, and it keeps the configuration done by this driver, including
+ * the VLAN setup.
+ */
+static void rtl8365mb_sds_core_reset_work(struct work_struct *work)
+{
+	struct rtl8365mb *mb = container_of(to_delayed_work(work),
+					    struct rtl8365mb,
+					    sds_core_reset_work);
+	struct realtek_priv *priv = mb->priv;
+	u32 val;
+	int ret;
+
+	ret = regmap_update_bits(priv->map, RTL8365MB_CHIP_RESET_REG,
+				 RTL8365MB_CHIP_RESET_SW_MASK,
+				 RTL8365MB_CHIP_RESET_SW_MASK);
+	if (!ret)
+		ret = regmap_read_poll_timeout(priv->map,
+					       RTL8365MB_CHIP_RESET_REG, val,
+					       !(val & RTL8365MB_CHIP_RESET_SW_MASK),
+					       1000, 100000);
+	if (ret)
+		dev_err(priv->dev, "failed to soft reset switch core: %pe\n",
+			ERR_PTR(ret));
+}
+
 /* The SerDes is configured from phylink long before the conduit Ethernet
  * controller starts transmitting on the link, so its receiver initially locks
  * on an idle line. On an RTL8367S connected to an IPQ5018 over HSGMII this
  * regularly left the switch receiving every frame from the CPU with an FCS
- * error. Reset the SerDes data path again once the conduit is up.
+ * error. Reset the SerDes data path again once the conduit is up, and soft
+ * reset the switch core a few seconds later, see
+ * rtl8365mb_sds_core_reset_work().
  */
 static void rtl8365mb_conduit_state_change(struct dsa_switch *ds,
 					   const struct net_device *conduit,
@@ -3131,13 +3170,20 @@ static void rtl8365mb_conduit_state_change(struct dsa_switch *ds,
 	struct rtl8365mb *mb = priv->chip_data;
 	int ret;
 
-	if (!operational || !mb->sds_in_use)
+	if (!operational) {
+		cancel_delayed_work(&mb->sds_core_reset_work);
+		return;
+	}
+
+	if (!mb->sds_in_use)
 		return;
 
 	ret = rtl8365mb_sds_reset_datapath(priv);
 	if (ret)
 		dev_err(priv->dev, "failed to reset SerDes data path: %pe\n",
 			ERR_PTR(ret));
+
+	schedule_delayed_work(&mb->sds_core_reset_work, 3 * HZ);
 }
 
 static int rtl8365mb_setup(struct dsa_switch *ds)
@@ -3155,6 +3201,8 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 
 	mb->pcs.ops = &rtl8365mb_pcs_ops;
 	mb->sds_in_use = false;
+	INIT_DELAYED_WORK(&mb->sds_core_reset_work,
+			  rtl8365mb_sds_core_reset_work);
 
 	/* The SerDes has no link interrupt wired up, so phylink must poll the
 	 * PCS for link changes when it tracks the link through pcs_get_state()
@@ -3373,7 +3421,9 @@ out_error:
 static void rtl8365mb_teardown(struct dsa_switch *ds)
 {
 	struct realtek_priv *priv = ds->priv;
+	struct rtl8365mb *mb = priv->chip_data;
 
+	cancel_delayed_work_sync(&mb->sds_core_reset_work);
 	rtl8365mb_stats_teardown(priv);
 	rtl8365mb_irq_teardown(priv);
 }
