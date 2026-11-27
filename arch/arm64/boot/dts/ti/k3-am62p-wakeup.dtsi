@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Device Tree file for the AM62P WAKEUP domain peripherals
+ *
+ * Copyright (C) 2026 Texas Instruments Incorporated - https://www.ti.com/
+ */
+
+&wkup_conf {
+	gpsw_efuse: efuse@230 {
+		compatible = "ti,am62p-efuse", "socionext,uniphier-efuse";
+		reg = <0x230 0x10>;
+		#address-cells = <1>;
+		bootph-all;
+		#size-cells = <1>;
+
+		gpsw1: gpsw1@4 {
+			reg = <0x4 0x4>;
+		};
+	};
+};
+
+&chipid {
+	nvmem-cells = <&gpsw1>;
+	nvmem-cell-names = "gpsw1";
+};

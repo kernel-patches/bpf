@@ -11,6 +11,7 @@
 /plugin/;
 
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/media/video-interface-devices.h>
 #include "k3-pinctrl.h"
 
 &{/} {
@@ -64,6 +65,7 @@
 		VANA-supply = <&reg_2p8v>;
 		VDIG-supply = <&reg_1p8v>;
 		VDDL-supply = <&reg_1p2v>;
+		orientation = <MEDIA_ORIENTATION_EXTERNAL>;
 
 		port {
 			csi2_cam0: endpoint {
@@ -88,6 +90,7 @@
 		VANA-supply = <&reg_2p8v>;
 		VDIG-supply = <&reg_1p8v>;
 		VDDL-supply = <&reg_1p2v>;
+		orientation = <MEDIA_ORIENTATION_EXTERNAL>;
 
 		port {
 			csi2_cam1: endpoint {
