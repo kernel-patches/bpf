@@ -976,11 +976,14 @@ int aq_nic_set_multicast_list(struct aq_nic_s *self, struct net_device *ndev)
 	struct aq_nic_cfg_s *cfg = &self->aq_nic_cfg;
 	unsigned int packet_filter = ndev->flags;
 	struct netdev_hw_addr *ha = NULL;
+	unsigned int mc_address_max;
 	unsigned int i = 0U;
 	int err = 0;
 
+	mc_address_max = hw_ops->hw_get_multicast_address_max(self->aq_hw);
+
 	self->mc_list.count = 0;
-	if (netdev_uc_count(ndev) > AQ_HW_MULTICAST_ADDRESS_MAX) {
+	if (netdev_uc_count(ndev) > mc_address_max) {
 		packet_filter |= IFF_PROMISC;
 	} else {
 		netdev_for_each_uc_addr(ha, ndev) {
@@ -990,7 +993,7 @@ int aq_nic_set_multicast_list(struct aq_nic_s *self, struct net_device *ndev)
 
 	cfg->is_mc_list_enabled = !!(packet_filter & IFF_MULTICAST);
 	if (cfg->is_mc_list_enabled) {
-		if (i + netdev_mc_count(ndev) > AQ_HW_MULTICAST_ADDRESS_MAX) {
+		if (i + netdev_mc_count(ndev) > mc_address_max) {
 			packet_filter |= IFF_ALLMULTI;
 		} else {
 			netdev_for_each_mc_addr(ha, ndev) {
@@ -1000,7 +1003,7 @@ int aq_nic_set_multicast_list(struct aq_nic_s *self, struct net_device *ndev)
 		}
 	}
 
-	if (i > 0 && i <= AQ_HW_MULTICAST_ADDRESS_MAX) {
+	if (i > 0 && i <= mc_address_max) {
 		self->mc_list.count = i;
 		err = hw_ops->hw_multicast_list_set(self->aq_hw,
 						    self->mc_list.ar,
