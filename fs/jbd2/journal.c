@@ -75,6 +75,7 @@ EXPORT_SYMBOL(jbd2_journal_check_available_features);
 EXPORT_SYMBOL(jbd2_journal_set_features);
 EXPORT_SYMBOL(jbd2_journal_load);
 EXPORT_SYMBOL(jbd2_journal_destroy);
+EXPORT_SYMBOL(jbd2_journal_unregister_shrinker);
 EXPORT_SYMBOL(jbd2_journal_abort);
 EXPORT_SYMBOL(jbd2_journal_errno);
 EXPORT_SYMBOL(jbd2_journal_ack_err);
@@ -2126,6 +2127,16 @@ int jbd2_journal_load(journal_t *journal)
 	return 0;
 }
 
+void jbd2_journal_unregister_shrinker(journal_t *journal)
+{
+	struct shrinker *shrinker = journal->j_shrinker;
+
+	if (!shrinker)
+		return;
+	journal->j_shrinker = NULL;
+	shrinker_free(shrinker);
+}
+
 /**
  * jbd2_journal_destroy() - Release a journal_t structure.
  * @journal: Journal to act on.
@@ -2199,10 +2210,8 @@ int jbd2_journal_destroy(journal_t *journal)
 		brelse(journal->j_sb_buffer);
 	}
 
-	if (journal->j_shrinker) {
-		percpu_counter_destroy(&journal->j_checkpoint_jh_count);
-		shrinker_free(journal->j_shrinker);
-	}
+	jbd2_journal_unregister_shrinker(journal);
+	percpu_counter_destroy(&journal->j_checkpoint_jh_count);
 	if (journal->j_proc_entry)
 		jbd2_stats_proc_exit(journal);
 	iput(journal->j_inode);

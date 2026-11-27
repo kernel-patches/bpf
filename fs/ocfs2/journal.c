@@ -1115,6 +1115,7 @@ void ocfs2_journal_shutdown(struct ocfs2_super *osb)
 			mlog_errno(status);
 	}
 
+	jbd2_journal_unregister_shrinker(journal->j_journal);
 	/*
 	 * Exclude the final JBD2 inode cleanup in ocfs2_clear_inode() while
 	 * the journal is destroyed and freed.
