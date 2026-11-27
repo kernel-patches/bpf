@@ -376,6 +376,19 @@ int btrfs_fileattr_set(struct mnt_idmap *idmap,
 	}
 
 	/*
+	 * Callers write back the whole flag set, so only touch the compression
+	 * flags and the compression property if FS_COMPR_FL or FS_NOCOMP_FL
+	 * changes.
+	 */
+	if (!((fsflags ^ old_fsflags) & (FS_COMPR_FL | FS_NOCOMP_FL))) {
+		/* 1 item for the inode */
+		trans = btrfs_start_transaction(root, 1);
+		if (IS_ERR(trans))
+			return PTR_ERR(trans);
+		goto update_flags;
+	}
+
+	/*
 	 * The COMPRESS flag can only be changed by users, while the NOCOMPRESS
 	 * flag may be changed automatically if compression code won't make
 	 * things smaller.
@@ -2380,6 +2393,17 @@ static noinline int btrfs_ioctl_snap_destroy(struct file *file,
 
 	inode = d_inode(dentry);
 	dest = BTRFS_I(inode)->root;
+
+	/*
+	 * A concurrent rename may have changed which subvolume the name
+	 * refers to. Verify that the resolved ID still matches the requested ID.
+	 */
+	if (destroy_v2 && (vol_args2->flags & BTRFS_SUBVOL_SPEC_BY_ID) &&
+	    btrfs_root_id(dest) != vol_args2->subvolid) {
+		ret = -EAGAIN;
+		goto out_end_removing;
+	}
+
 	if (!capable(CAP_SYS_ADMIN)) {
 		/*
 		 * Regular user.  Only allow this with a special mount
@@ -3881,7 +3905,7 @@ static long btrfs_ioctl_quota_rescan_status(struct btrfs_fs_info *fs_info,
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (fs_info->qgroup_flags & BTRFS_QGROUP_STATUS_FLAG_RESCAN) {
+	if (test_bit(BTRFS_QGROUP_STATUS_BIT_RESCAN, &fs_info->qgroup_flags)) {
 		qsa.flags = 1;
 		qsa.progress = fs_info->qgroup_rescan_progress.objectid;
 	}
@@ -4637,7 +4661,8 @@ out:
 	btrfs_inode_unlock(inode, BTRFS_ILOCK_SHARED);
 
 	io_uring_cmd_done(cmd, ret, IO_URING_CMD_TASK_WORK_ISSUE_FLAGS);
-	add_rchar(current, ret);
+	if (ret > 0)
+		add_rchar(current, ret);
 
 	for (index = 0; index < priv->nr_pages; index++)
 		__free_page(priv->pages[index]);
@@ -4749,9 +4774,6 @@ static int btrfs_uring_encoded_read(struct io_uring_cmd *cmd, unsigned int issue
 	struct io_btrfs_cmd *bc = io_uring_cmd_to_pdu(cmd, struct io_btrfs_cmd);
 	struct btrfs_uring_encoded_data *data = NULL;
 
-	if (cmd->flags & IORING_URING_CMD_REISSUE)
-		data = bc->data;
-
 	if (!capable(CAP_SYS_ADMIN)) {
 		ret = -EPERM;
 		goto out_acct;
@@ -4833,8 +4855,6 @@ static int btrfs_uring_encoded_read(struct io_uring_cmd *cmd, unsigned int issue
 
 	ret = btrfs_encoded_read(&kiocb, &data->iter, &data->args, &cached_state,
 				 &disk_bytenr, &disk_io_size);
-	if (ret == -EAGAIN)
-		goto out_free;
 	if (ret < 0 && ret != -EIOCBQUEUED)
 		goto out_free;
 
@@ -4891,11 +4911,7 @@ static int btrfs_uring_encoded_write(struct io_uring_cmd *cmd, unsigned int issu
 	struct kiocb kiocb;
 	ssize_t ret;
 	void __user *sqe_addr;
-	struct io_btrfs_cmd *bc = io_uring_cmd_to_pdu(cmd, struct io_btrfs_cmd);
 	struct btrfs_uring_encoded_data *data = NULL;
-
-	if (cmd->flags & IORING_URING_CMD_REISSUE)
-		data = bc->data;
 
 	if (!capable(CAP_SYS_ADMIN)) {
 		ret = -EPERM;
@@ -4919,8 +4935,6 @@ static int btrfs_uring_encoded_write(struct io_uring_cmd *cmd, unsigned int issu
 			ret = -ENOMEM;
 			goto out_acct;
 		}
-
-		bc->data = data;
 
 		if (issue_flags & IO_URING_F_COMPAT) {
 #if defined(CONFIG_64BIT) && defined(CONFIG_COMPAT)
@@ -5007,7 +5021,6 @@ out_acct:
 	inc_syscw(current);
 
 	kfree(data);
-	bc->data = NULL;
 	return ret;
 }
 
@@ -5039,6 +5052,7 @@ static int btrfs_ioctl_subvol_sync(struct btrfs_fs_info *fs_info, void __user *a
 	struct btrfs_ioctl_subvol_wait args = { 0 };
 	signed long sched_ret;
 	int refs;
+	int ret;
 	u64 root_flags;
 	bool wait_for_deletion = false;
 	bool found = false;
@@ -5109,8 +5123,9 @@ static int btrfs_ioctl_subvol_sync(struct btrfs_fs_info *fs_info, void __user *a
 	}
 
 	/* 32bit limitation: fs_roots_radix key is not wide enough. */
-	if (sizeof(unsigned long) != sizeof(u64) && args.subvolid > U32_MAX)
-		return -EOVERFLOW;
+	ret = btrfs_check_subvolid(fs_info, args.subvolid);
+	if (ret < 0)
+		return ret;
 
 	while (1) {
 		/* Wait for the specific one. */
@@ -5149,8 +5164,12 @@ static int btrfs_ioctl_subvol_sync(struct btrfs_fs_info *fs_info, void __user *a
 			return -ENOENT;
 
 		wait_for_deletion = true;
-		ASSERT(root_flags & BTRFS_ROOT_SUBVOL_DEAD, "root_flags=0x%llx",
-		       root_flags);
+		if (unlikely(!(root_flags & BTRFS_ROOT_SUBVOL_DEAD))) {
+			btrfs_err(fs_info,
+				  "subvol %llu has refs 0 without DEAD flag",
+				  args.subvolid);
+			return -EUCLEAN;
+		}
 		sched_ret = schedule_timeout_interruptible(HZ);
 		/* Early wake up or error. */
 		if (sched_ret != 0)
