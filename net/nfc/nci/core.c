@@ -582,7 +582,7 @@ static int nci_close_device(struct nci_dev *ndev)
 						   ndev->cur_conn_id,
 						   -ENODEV);
 		mutex_unlock(&ndev->req_lock);
-		return 0;
+		goto flush_rx;
 	}
 
 	/* Drop RX and TX queues */
@@ -622,8 +622,16 @@ static int nci_close_device(struct nci_dev *ndev)
 
 	mutex_unlock(&ndev->req_lock);
 
+flush_rx:
 	/* rx_work may take req_lock via nci_deactivate_target */
 	flush_workqueue(ndev->rx_wq);
+
+	mutex_lock(&ndev->req_lock);
+	if (!test_bit(NCI_UP, &ndev->flags)) {
+		kfree_skb(ndev->rx_data_reassembly);
+		ndev->rx_data_reassembly = NULL;
+	}
+	mutex_unlock(&ndev->req_lock);
 
 	return 0;
 }
@@ -1607,10 +1615,13 @@ static void nci_rx_work(struct work_struct *work)
 	/* check if a data exchange timeout has occurred */
 	if (test_bit(NCI_DATA_EXCHANGE_TO, &ndev->flags)) {
 		/* complete the data exchange transaction, if exists */
-		if (test_bit(NCI_DATA_EXCHANGE, &ndev->flags))
+		if (test_bit(NCI_DATA_EXCHANGE, &ndev->flags)) {
+			kfree_skb(ndev->rx_data_reassembly);
+			ndev->rx_data_reassembly = NULL;
 			nci_data_exchange_complete(ndev, NULL,
 						   ndev->cur_conn_id,
 						   -ETIMEDOUT);
+		}
 
 		clear_bit(NCI_DATA_EXCHANGE_TO, &ndev->flags);
 	}
