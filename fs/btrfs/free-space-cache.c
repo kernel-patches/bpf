@@ -241,7 +241,7 @@ int btrfs_truncate_free_space_cache(struct btrfs_trans_handle *trans,
 	ret = btrfs_update_inode(trans, inode);
 
 fail:
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 
 	return ret;
@@ -1269,6 +1269,26 @@ static bool steal_from_bitmap_to_end(struct btrfs_free_space_ctl *ctl,
 	return true;
 }
 
+/*
+ * Return the index of the last clear bit at or below @bit, or ULONG_MAX if
+ * bits 0 to @bit are all set.  Scan backwards a word at a time, so the cost
+ * follows the length of the run of set bits that ends at @bit rather than the
+ * number of clear bits below it.
+ */
+static unsigned long find_last_clear_bit_upto(const unsigned long *bitmap,
+					      unsigned long bit)
+{
+	unsigned long idx = BIT_WORD(bit);
+	unsigned long word = ~bitmap[idx] & BITMAP_LAST_WORD_MASK(bit + 1);
+
+	while (!word) {
+		if (idx == 0)
+			return ULONG_MAX;
+		word = ~bitmap[--idx];
+	}
+	return idx * BITS_PER_LONG + __fls(word);
+}
+
 static bool steal_from_bitmap_to_front(struct btrfs_free_space_ctl *ctl,
 				       struct btrfs_free_space *info,
 				       bool update_stat)
@@ -1277,7 +1297,6 @@ static bool steal_from_bitmap_to_front(struct btrfs_free_space_ctl *ctl,
 	struct btrfs_free_space *bitmap;
 	u64 bitmap_offset;
 	unsigned long i;
-	unsigned long j;
 	unsigned long prev_j;
 	u64 bytes;
 
@@ -1294,13 +1313,8 @@ static bool steal_from_bitmap_to_front(struct btrfs_free_space_ctl *ctl,
 		return false;
 
 	i = offset_to_bit(bitmap->offset, unit, info->offset) - 1;
-	j = 0;
-	prev_j = (unsigned long)-1;
-	for_each_clear_bit_from(j, bitmap->bitmap, BITS_PER_BITMAP) {
-		if (j > i)
-			break;
-		prev_j = j;
-	}
+	prev_j = find_last_clear_bit_upto(bitmap->bitmap,
+					  min(i, BITS_PER_BITMAP - 1));
 	if (prev_j == i)
 		return false;
 

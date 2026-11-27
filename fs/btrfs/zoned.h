@@ -38,7 +38,11 @@ struct btrfs_zoned_device_info {
 	u32 nr_zones;
 	unsigned int max_active_zones;
 	/*
-	 * Reserved active zones for one metadata and one system block group.
+	 * Reserved active zones for one metadata, one tree-log and one system
+	 * block group: the reservation made at mount minus the zones of such
+	 * block groups active on this device now. It is negative when more of
+	 * them are active than were reserved, which does not mean that there
+	 * are extra active zones.
 	 * It can vary per-device depending on the allocation status.
 	 */
 	int reserved_active_zones;
@@ -82,6 +86,7 @@ int btrfs_sync_zone_write_pointer(struct btrfs_device *tgt_dev, u64 logical,
 				  u64 physical_start, u64 physical_pos);
 bool btrfs_zone_activate(struct btrfs_block_group *block_group);
 int btrfs_zone_finish(struct btrfs_block_group *block_group);
+void btrfs_zone_finish_relocated(struct btrfs_block_group *block_group);
 bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, u64 flags);
 int btrfs_zone_finish_endio(struct btrfs_fs_info *fs_info, u64 logical,
 			     u64 length);
@@ -237,6 +242,8 @@ static inline int btrfs_zone_finish(struct btrfs_block_group *block_group)
 {
 	return 0;
 }
+
+static inline void btrfs_zone_finish_relocated(struct btrfs_block_group *block_group) { }
 
 static inline bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices,
 					   u64 flags)

@@ -1568,11 +1568,11 @@ static int __btrfs_inc_extent_ref(struct btrfs_trans_handle *trans,
 	/* now insert the actual backref */
 	if (owner < BTRFS_FIRST_FREE_OBJECTID) {
 		ret = insert_tree_block_ref(trans, path, node, bytenr);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 	} else {
 		ret = insert_extent_data_ref(trans, path, node, bytenr);
-		if (ret)
+		if (unlikely(ret))
 			btrfs_abort_transaction(trans, ret);
 	}
 
@@ -2881,7 +2881,7 @@ static int unpin_extent_range(struct btrfs_fs_info *fs_info,
 		if (cluster && cluster->fragmented &&
 		    total_unpinned > empty_cluster) {
 			spin_lock(&cluster->lock);
-			cluster->fragmented = 0;
+			cluster->fragmented = false;
 			spin_unlock(&cluster->lock);
 		}
 
@@ -3192,7 +3192,7 @@ static int do_free_extent_accounting(struct btrfs_trans_handle *trans,
 	}
 
 	ret = btrfs_update_block_group(trans, bytenr, num_bytes, false);
-	if (ret)
+	if (unlikely(ret))
 		btrfs_abort_transaction(trans, ret);
 
 	return ret;
@@ -3956,7 +3956,7 @@ static int find_free_extent_unclustered(struct btrfs_block_group *bg,
 	 */
 	if (unlikely(last_ptr)) {
 		spin_lock(&last_ptr->lock);
-		last_ptr->fragmented = 1;
+		last_ptr->fragmented = true;
 		spin_unlock(&last_ptr->lock);
 	}
 	if (ffe_ctl->cached) {
@@ -4387,7 +4387,7 @@ static int find_free_extent_update_loop(struct btrfs_fs_info *fs_info,
 		if (ret == -ENOSPC) {
 			ret = 0;
 			ffe_ctl->loop++;
-		} else if (ret < 0) {
+		} else if (unlikely(ret < 0)) {
 			btrfs_abort_transaction(trans, ret);
 		} else {
 			ret = 0;
@@ -6123,7 +6123,7 @@ static noinline int walk_up_proc(struct btrfs_trans_handle *trans,
 
 	ret = btrfs_free_tree_block(trans, btrfs_root_id(root), eb, parent,
 				    wc->refs[level] == 1);
-	if (ret < 0)
+	if (unlikely(ret < 0))
 		btrfs_abort_transaction(trans, ret);
 out:
 	wc->refs[level] = 0;
@@ -6333,9 +6333,12 @@ int btrfs_drop_snapshot(struct btrfs_root *root, bool update_ref, bool for_reloc
 		btrfs_disk_key_to_cpu(&key, &root_item->drop_progress);
 		memcpy(&wc->update_progress, &key,
 		       sizeof(wc->update_progress));
+		/* keep the resume point until this run drops something itself */
+		memcpy(&wc->drop_progress, &key, sizeof(wc->drop_progress));
 
 		level = btrfs_root_drop_level(root_item);
 		BUG_ON(level == 0);
+		wc->drop_level = level;
 		path->lowest_level = level;
 		ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 		path->lowest_level = 0;
