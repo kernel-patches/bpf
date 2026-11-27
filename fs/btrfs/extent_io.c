@@ -2879,8 +2879,7 @@ retry:
  * locked.
  */
 void extent_write_locked_range(struct inode *inode, const struct folio *locked_folio,
-			       u64 start, u64 end, struct writeback_control *wbc,
-			       bool pages_dirty)
+			       u64 start, u64 end, struct writeback_control *wbc)
 {
 	bool found_error = false;
 	int ret = 0;
@@ -2923,7 +2922,7 @@ void extent_write_locked_range(struct inode *inode, const struct folio *locked_f
 		cur_len = cur_end + 1 - cur;
 
 		ASSERT(folio_test_locked(folio));
-		if (pages_dirty && folio != locked_folio)
+		if (folio != locked_folio)
 			ASSERT(folio_test_dirty(folio));
 
 		/*
@@ -3156,15 +3155,18 @@ static bool folio_range_has_eb(struct folio *folio)
 static void detach_extent_buffer_folio(const struct extent_buffer *eb, struct folio *folio)
 {
 	struct btrfs_fs_info *fs_info = eb->fs_info;
-	struct address_space *mapping = folio->mapping;
+	struct address_space *mapping = NULL;
 	const bool mapped = !test_bit(EXTENT_BUFFER_UNMAPPED, &eb->bflags);
 
 	/*
 	 * For mapped eb, we're going to change the folio private, which should
-	 * be done under the i_private_lock.
+	 * be done under the i_private_lock. Do not use folio->mapping, the
+	 * folio may have left the page cache, see release_extent_buffer().
 	 */
-	if (mapped)
+	if (mapped) {
+		mapping = fs_info->btree_inode->i_mapping;
 		spin_lock(&mapping->i_private_lock);
+	}
 
 	if (!folio_test_private(folio)) {
 		if (mapped)
@@ -4012,7 +4014,26 @@ static inline void btrfs_release_extent_buffer_rcu(struct rcu_head *head)
 static int release_extent_buffer(struct extent_buffer *eb)
 	__releases(&eb->refs_lock)
 {
+	struct folio *pinned[INLINE_EXTENT_BUFFER_PAGES];
+	int nr_pinned = 0;
+
 	lockdep_assert_held(&eb->refs_lock);
+
+	/*
+	 * Once refs drops to 0 our folios can be taken over and freed, so pin
+	 * them until they are detached. refs only drops below 3 under
+	 * refs_lock, so checking for 1 is enough. Keep the folios in a local
+	 * array: if refs does not hit 0, another holder may free the eb.
+	 */
+	if (refcount_read(&eb->refs) == 1 &&
+	    !test_bit(EXTENT_BUFFER_UNMAPPED, &eb->bflags)) {
+		for (int i = 0; i < INLINE_EXTENT_BUFFER_PAGES; i++) {
+			if (!eb->folios[i])
+				continue;
+			folio_get(eb->folios[i]);
+			pinned[nr_pinned++] = eb->folios[i];
+		}
+	}
 
 	if (refcount_dec_and_test(&eb->refs)) {
 		struct btrfs_fs_info *fs_info = eb->fs_info;
@@ -4040,6 +4061,8 @@ static int release_extent_buffer(struct extent_buffer *eb)
 		btrfs_leak_debug_del_eb(eb);
 		/* Should be safe to release folios at this point. */
 		btrfs_release_extent_buffer_folios(eb);
+		for (int i = 0; i < nr_pinned; i++)
+			folio_put(pinned[i]);
 #ifdef CONFIG_BTRFS_FS_RUN_SANITY_TESTS
 		if (unlikely(test_bit(EXTENT_BUFFER_UNMAPPED, &eb->bflags))) {
 			kmem_cache_free(extent_buffer_cache, eb);
@@ -4050,6 +4073,9 @@ static int release_extent_buffer(struct extent_buffer *eb)
 		return 1;
 	}
 	spin_unlock(&eb->refs_lock);
+
+	for (int i = 0; i < nr_pinned; i++)
+		folio_put(pinned[i]);
 
 	return 0;
 }

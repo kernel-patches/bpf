@@ -65,7 +65,7 @@ static int test_load_zone_info(struct btrfs_fs_info *fs_info,
 	}
 
 	active = bitmap_zalloc(test->num_stripes, GFP_KERNEL);
-	if (!zone_info) {
+	if (!active) {
 		test_err("cannot allocate active bitmap");
 		return -ENOMEM;
 	}

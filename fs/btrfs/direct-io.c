@@ -12,11 +12,13 @@
 #include "volumes.h"
 #include "bio.h"
 #include "ordered-data.h"
+#include "qgroup.h"
 
 struct btrfs_dio_data {
 	loff_t old_isize;
 	struct extent_changeset *data_reserved;
 	struct btrfs_ordered_extent *ordered;
+	u64 data_space_consumed;
 	bool data_space_reserved;
 	bool nocow_done;
 	bool updated_isize;
@@ -195,6 +197,7 @@ again:
 	}
 	if (ret)
 		return ERR_PTR(ret);
+	dio_data->data_space_consumed = ins.offset;
 
 	file_extent.disk_bytenr = ins.objectid;
 	file_extent.disk_num_bytes = ins.offset;
@@ -610,9 +613,13 @@ unlock_err:
 			       EXTENT_LOCKED | EXTENT_DIO_LOCKED, &cached_state);
 err:
 	if (dio_data->data_space_reserved) {
-		btrfs_free_reserved_data_space(BTRFS_I(inode),
-					       dio_data->data_reserved,
-					       start, data_alloc_len);
+		const u64 consumed = dio_data->data_space_consumed;
+
+		if (consumed < data_alloc_len)
+			btrfs_free_reserved_data_space_noquota(BTRFS_I(inode),
+						data_alloc_len - consumed);
+		btrfs_qgroup_free_data(BTRFS_I(inode), dio_data->data_reserved,
+				       start, data_alloc_len, NULL);
 		extent_changeset_free(dio_data->data_reserved);
 	}
 
@@ -892,9 +899,13 @@ ssize_t btrfs_direct_write(struct kiocb *iocb, struct iov_iter *from)
 	 * If the write DIO is within EOF, use a shared lock and also only if
 	 * security bits will likely not be dropped by file_remove_privs() called
 	 * from btrfs_write_check(). Either will need to be rechecked after the
-	 * lock was acquired.
+	 * lock was acquired. Also if this is a sync write we will need to fsync
+	 * and therefore we must lock in exclusive mode, otherwise we would race
+	 * with other concurrent DIO writes and the fsync would not wait for
+	 * their ordered extent to finish IO before logging the new extent maps.
 	 */
-	if (iocb->ki_pos + iov_iter_count(from) <= i_size_read(inode) && IS_NOSEC(inode))
+	if (iocb->ki_pos + iov_iter_count(from) <= i_size_read(inode) &&
+	    IS_NOSEC(inode) && !iocb_is_dsync(iocb))
 		ilock_flags |= BTRFS_ILOCK_SHARED;
 
 relock:
@@ -911,6 +922,13 @@ relock:
 
 	if ((ilock_flags & BTRFS_ILOCK_SHARED) &&
 	    test_bit(BTRFS_INODE_REFLINK_SRC, &BTRFS_I(inode)->runtime_flags)) {
+		btrfs_inode_unlock(BTRFS_I(inode), ilock_flags);
+		ilock_flags &= ~BTRFS_ILOCK_SHARED;
+		goto relock;
+	}
+
+	/* Sync writes must use exclusive locking, see the comment above. */
+	if ((ilock_flags & BTRFS_ILOCK_SHARED) && iocb_is_dsync(iocb)) {
 		btrfs_inode_unlock(BTRFS_I(inode), ilock_flags);
 		ilock_flags &= ~BTRFS_ILOCK_SHARED;
 		goto relock;
@@ -1044,20 +1062,36 @@ buffered:
 	/*
 	 * Ensure all data is persisted. We want the next direct IO read to be
 	 * able to read what was just written.
+	 * On success btrfs_buffered_write() incremented iocb->ki_pos already.
 	 */
 	endbyte = pos + written_buffered - 1;
 	ret = btrfs_fdatawrite_range(BTRFS_I(inode), pos, endbyte);
-	if (ret)
+	if (ret) {
+		iocb->ki_pos = pos;
 		goto out;
+	}
 	ret = filemap_fdatawait_range(inode->i_mapping, pos, endbyte);
-	if (ret)
+	if (ret) {
+		iocb->ki_pos = pos;
 		goto out;
+	}
 	written += written_buffered;
-	iocb->ki_pos = pos + written_buffered;
 	invalidate_mapping_pages(file->f_mapping, pos >> PAGE_SHIFT,
 				 endbyte >> PAGE_SHIFT);
 out:
-	return ret < 0 ? ret : written;
+	if (ret == -EIOCBQUEUED)
+		return ret;
+	/*
+	 * Always report partial writes if we wrote something, otherwise it
+	 * could lead to silent corruption for some applications: for example
+	 * if an application does writes to a file opened with append only mode,
+	 * in case we succeed doing a part of the write and then fallback to
+	 * buffered IO and that fails (or return -EAGAIN because we are in a
+	 * NOWAIT context), we mislead the application into trying to write the
+	 * whole buffer again, resulting in duplicating part of the data and
+	 * therefore a corruption at the application level.
+	 */
+	return written > 0 ? written : ret;
 }
 
 static int check_direct_read(struct btrfs_fs_info *fs_info,

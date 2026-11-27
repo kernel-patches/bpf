@@ -2240,7 +2240,7 @@ static int btrfs_control_open(struct inode *inode, struct file *file)
 static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 				unsigned long arg)
 {
-	struct btrfs_ioctl_vol_args *vol;
+	struct btrfs_ioctl_vol_args AUTO_KFREE(vol);
 	struct btrfs_device *device = NULL;
 	dev_t devt = 0;
 	int ret = -ENOTTY;
@@ -2248,12 +2248,28 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	vol = memdup_user((void __user *)arg, sizeof(*vol));
-	if (IS_ERR(vol))
-		return PTR_ERR(vol);
-	ret = btrfs_check_ioctl_vol_args_path(vol);
-	if (ret < 0)
-		goto out;
+	switch (cmd) {
+	case BTRFS_IOC_SCAN_DEV:
+	case BTRFS_IOC_FORGET_DEV:
+	case BTRFS_IOC_DEVICES_READY:
+		/*
+		 * Not all control ioctls take a struct btrfs_ioctl_vol_args as
+		 * argument, some may pass a smaller buffer and attempting to
+		 * read more may result in an unexpected -EFAULT if the memory
+		 * crosses an unmapped page. BTRFS_IOC_GET_SUPPORTED_FEATURES
+		 * expects a much smaller buffer for a short array of
+		 * struct btrfs_ioctl_feature_flags elements. So attempt a copy
+		 * of a struct btrfs_ioctl_vol_args only for the ioctls that
+		 * expect such an argument.
+		 */
+		vol = memdup_user((void __user *)arg, sizeof(*vol));
+		if (IS_ERR(vol))
+			return PTR_ERR(vol);
+		ret = btrfs_check_ioctl_vol_args_path(vol);
+		if (ret < 0)
+			return ret;
+		break;
+	}
 
 	switch (cmd) {
 	case BTRFS_IOC_SCAN_DEV:
@@ -2298,8 +2314,6 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 		break;
 	}
 
-out:
-	kfree(vol);
 	return ret;
 }
 
