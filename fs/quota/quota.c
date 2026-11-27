@@ -66,7 +66,7 @@ static int quota_sync_all(int type)
 
 	ret = security_quotactl(Q_SYNC, type, 0, NULL);
 	if (!ret)
-		iterate_supers(quota_sync_one, &type);
+		iterate_supers_born(quota_sync_one, &type);
 	return ret;
 }
 
@@ -763,6 +763,28 @@ static int quota_rmxquota(struct super_block *sb, void __user *addr)
 	return sb->s_qcop->rm_xquota(sb, flags);
 }
 
+/* Return 1 if 'cmd' will block on frozen filesystem */
+static int quotactl_cmd_write(int cmd)
+{
+	/*
+	 * We cannot allow Q_GETQUOTA and Q_GETNEXTQUOTA without write access
+	 * as dquot_acquire() may allocate space for new structure and OCFS2
+	 * needs to increment on-disk use count.
+	 */
+	switch (cmd) {
+	case Q_GETFMT:
+	case Q_GETINFO:
+	case Q_SYNC:
+	case Q_XGETQSTAT:
+	case Q_XGETQSTATV:
+	case Q_XGETQUOTA:
+	case Q_XGETNEXTQUOTA:
+	case Q_XQUOTASYNC:
+		return 0;
+	}
+	return 1;
+}
+
 /* Copy parameters and call proper function */
 static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id,
 		       void __user *addr, const struct path *path)
@@ -782,6 +804,10 @@ static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id,
 	ret = check_quotactl_permission(sb, type, cmd, id);
 	if (ret < 0)
 		return ret;
+
+	/* An error made the filesystem read-only. */
+	if (sb_emergency_ro(sb) && quotactl_cmd_write(cmd))
+		return -EROFS;
 
 	switch (cmd) {
 	case Q_QUOTAON:
@@ -821,35 +847,13 @@ static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id,
 	case Q_XGETNEXTQUOTA:
 		return quota_getnextxquota(sb, type, id, addr);
 	case Q_XQUOTASYNC:
-		if (sb_rdonly(sb))
+		if (sb_rdonly_any(sb))
 			return -EROFS;
 		/* XFS quotas are fully coherent now, making this call a noop */
 		return 0;
 	default:
 		return -EINVAL;
 	}
-}
-
-/* Return 1 if 'cmd' will block on frozen filesystem */
-static int quotactl_cmd_write(int cmd)
-{
-	/*
-	 * We cannot allow Q_GETQUOTA and Q_GETNEXTQUOTA without write access
-	 * as dquot_acquire() may allocate space for new structure and OCFS2
-	 * needs to increment on-disk use count.
-	 */
-	switch (cmd) {
-	case Q_GETFMT:
-	case Q_GETINFO:
-	case Q_SYNC:
-	case Q_XGETQSTAT:
-	case Q_XGETQSTATV:
-	case Q_XGETQUOTA:
-	case Q_XGETNEXTQUOTA:
-	case Q_XQUOTASYNC:
-		return 0;
-	}
-	return 1;
 }
 
 /* Return true if quotactl command is manipulating quota on/off state */
@@ -894,11 +898,15 @@ retry:
 			up_write(&sb->s_umount);
 		else
 			up_read(&sb->s_umount);
-		/* Wait for sb to unfreeze */
-		sb_start_write(sb);
-		sb_end_write(sb);
+		/*
+		 * Wait for sb to unfreeze. A read-only superblock is frozen
+		 * without taking s_writers so sb_start_write() won't wait.
+		 */
+		error = wait_var_event_killable(&sb->s_writers.frozen,
+				READ_ONCE(sb->s_writers.frozen) == SB_UNFROZEN);
 		put_super(sb);
-		cond_resched();
+		if (error)
+			return ERR_PTR(error);
 		goto retry;
 	}
 	return sb;
@@ -993,9 +1001,11 @@ SYSCALL_DEFINE4(quotactl_fd, unsigned int, fd, unsigned int, cmd,
 
 	sb = fd_file(f)->f_path.mnt->mnt_sb;
 	if (quotactl_cmd_onoff(cmds))
-		down_write(&sb->s_umount);
+		ret = down_write_killable(&sb->s_umount);
 	else
-		down_read(&sb->s_umount);
+		ret = down_read_killable(&sb->s_umount);
+	if (ret)
+		goto out;
 
 	ret = do_quotactl(sb, type, cmds, id, addr, ERR_PTR(-EINVAL));
 
@@ -1003,7 +1013,7 @@ SYSCALL_DEFINE4(quotactl_fd, unsigned int, fd, unsigned int, cmd,
 		up_write(&sb->s_umount);
 	else
 		up_read(&sb->s_umount);
-
+out:
 	if (quotactl_cmd_write(cmds))
 		mnt_drop_write(fd_file(f)->f_path.mnt);
 	return ret;

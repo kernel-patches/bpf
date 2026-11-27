@@ -687,7 +687,7 @@ static ssize_t update_mpp(u64 *entitlement, u8 *weight)
  * This function should be invoked only on systems with
  * FW_FEATURE_SPLPAR.
  */
-static ssize_t lparcfg_write(struct file *file, const char __user * buf,
+static ssize_t lparcfg_write(struct file *file, char *buf,
 			     size_t count, loff_t * off)
 {
 	char kbuf[64];
@@ -702,8 +702,7 @@ static ssize_t lparcfg_write(struct file *file, const char __user * buf,
 	if (count == 0 || count >= sizeof(kbuf))
 		return -EINVAL;
 
-	if (copy_from_user(kbuf, buf, count))
-		return -EFAULT;
+	memcpy(kbuf, buf, count);
 	kbuf[count] = '\0';
 	tmp = strchr(kbuf, '=');
 	if (!tmp)
@@ -797,17 +796,9 @@ static int lparcfg_data(struct seq_file *m, void *v)
 	return pseries_lparcfg_data(m, v);
 }
 
-static int lparcfg_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, lparcfg_data, NULL);
-}
-
 static const struct proc_ops lparcfg_proc_ops = {
-	.proc_read	= seq_read,
-	.proc_write	= lparcfg_write,
-	.proc_open	= lparcfg_open,
-	.proc_release	= single_release,
-	.proc_lseek	= seq_lseek,
+	.proc_write_buf	= lparcfg_write,
+	.proc_show	= lparcfg_data,
 };
 
 static int __init lparcfg_init(void)

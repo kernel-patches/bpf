@@ -103,7 +103,8 @@ void generic_fillattr(const struct mnt_idmap *idmap, u32 request_mask,
 	}
 
 	stat->blksize = i_blocksize(inode);
-	stat->blocks = inode->i_blocks;
+	/* The block count is a snapshot and may race with space accounting. */
+	stat->blocks = data_race(inode->i_blocks);
 
 	if ((request_mask & STATX_CHANGE_COOKIE) && IS_I_VERSION(inode)) {
 		stat->result_mask |= STATX_CHANGE_COOKIE;
@@ -206,9 +207,13 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
 	if (IS_VERITY(inode))
 		stat->attributes |= STATX_ATTR_VERITY;
 
+	if (is_mgtime(inode))
+		stat->attributes |= STATX_ATTR_MULTIGRAIN_TIMESTAMP;
+
 	stat->attributes_mask |= (STATX_ATTR_AUTOMOUNT |
 				  STATX_ATTR_DAX |
-				  STATX_ATTR_VERITY);
+				  STATX_ATTR_VERITY |
+				  STATX_ATTR_MULTIGRAIN_TIMESTAMP);
 
 	idmap = mnt_idmap(path->mnt);
 	if (inode->i_op->getattr) {

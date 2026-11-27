@@ -365,7 +365,9 @@ static int btrfs_xattr_handler_set(const struct xattr_handler *handler,
 				   const char *name, const void *buffer,
 				   size_t size, int flags)
 {
-	if (btrfs_root_readonly(BTRFS_I(inode)->root))
+	struct btrfs_root *root = BTRFS_I(inode)->root;
+
+	if (btrfs_root_readonly(root) || btrfs_fs_rdonly(root->fs_info))
 		return -EROFS;
 
 	name = xattr_full_name(handler, name);
@@ -409,7 +411,9 @@ static int btrfs_xattr_handler_set_security(const struct xattr_handler *handler,
 					    const void *buffer,
 					    size_t size, int flags)
 {
-	if (btrfs_root_readonly(BTRFS_I(inode)->root))
+	struct btrfs_root *root = BTRFS_I(inode)->root;
+
+	if (btrfs_root_readonly(root) || btrfs_fs_rdonly(root->fs_info))
 		return -EROFS;
 
 	name = xattr_full_name(handler, name);

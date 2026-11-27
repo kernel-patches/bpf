@@ -706,7 +706,7 @@ struct pseudo_fs_context *init_pseudo(struct fs_context *fc,
 		fc->fs_private = ctx;
 		fc->ops = &pseudo_fs_context_ops;
 		fc->sb_flags |= SB_NOUSER;
-		fc->s_iflags |= SB_I_NOEXEC | SB_I_NODEV;
+		fc_init_pseudo(fc);
 		fc->global = true;
 	}
 	return ctx;
@@ -978,7 +978,7 @@ static int simple_write_end(const struct kiocb *iocb,
 	 * No need to use i_size_read() here, the i_size
 	 * cannot change under us because we hold the i_rwsem.
 	 */
-	if (last_pos > inode->i_size)
+	if (copied && last_pos > inode->i_size)
 		i_size_write(inode, last_pos);
 
 	folio_mark_dirty(folio);

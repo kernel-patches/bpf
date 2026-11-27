@@ -74,6 +74,9 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, bool abnr)
 	int rc;
 	int xflag;
 
+	if (sb_emergency_ro(ip->i_sb))
+		return -EROFS;
+
 	if (isReadOnly(ip)) {
 		jfs_error(ip->i_sb, "read-only filesystem\n");
 		return -EIO;
@@ -258,6 +261,9 @@ int extRecord(struct inode *ip, xad_t * xp)
 {
 	int rc;
 
+	if (sb_emergency_ro(ip->i_sb))
+		return -EROFS;
+
 	if (isReadOnly(ip)) {
 		jfs_error(ip->i_sb, "read-only filesystem\n");
 		return -EIO;
@@ -269,6 +275,10 @@ int extRecord(struct inode *ip, xad_t * xp)
 
 	/* update the extent */
 	rc = xtUpdate(0, ip, xp);
+
+	/* get the anonymous tlocks committed, like extAlloc() does */
+	if (!rc)
+		mark_inode_dirty(ip);
 
 	mutex_unlock(&JFS_IP(ip)->commit_mutex);
 	return rc;

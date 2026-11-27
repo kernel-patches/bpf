@@ -374,14 +374,14 @@ static ssize_t exfat_writeback_range(struct iomap_writepage_ctx *wpc,
 		struct folio *folio, u64 offset, unsigned int len, u64 end_pos)
 {
 	struct inode *inode = wpc->inode;
+	int error;
 
-	if (exfat_forced_shutdown(inode->i_sb))
-		return -EIO;
+	error = exfat_emergency_state(inode->i_sb);
+	if (error)
+		return error;
 
 	if (offset < wpc->iomap.offset ||
 	    offset >= wpc->iomap.offset + wpc->iomap.length) {
-		int error;
-
 		error = __exfat_iomap_begin(inode, offset, len,
 				0, &wpc->iomap, false,
 				exfat_get_valid_size(EXFAT_I(inode)));
