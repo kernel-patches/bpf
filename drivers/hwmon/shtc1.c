@@ -13,7 +13,7 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/err.h>
 #include <linux/delay.h>
-#include <linux/platform_data/shtc1.h>
+#include <linux/ktime.h>
 #include <linux/of.h>
 
 /* commands (high precision mode) */
@@ -56,12 +56,13 @@ struct shtc1_data {
 	struct i2c_client *client;
 	struct mutex update_lock;
 	bool valid;
-	unsigned long last_updated; /* in jiffies */
+	ktime_t last_updated;
 
 	const unsigned char *command;
 	unsigned int nonblocking_wait_time; /* in us */
 
-	struct shtc1_platform_data setup;
+	bool blocking_io;
+	bool high_precision;
 	enum shtcx_chips chip;
 
 	int temperature; /* 1000 * temperature in dgr C */
@@ -84,7 +85,7 @@ static int shtc1_update_values(struct i2c_client *client,
 	 * will wait until the data is ready. For non blocking mode, we
 	 * have to wait ourselves.
 	 */
-	if (!data->setup.blocking_io)
+	if (!data->blocking_io)
 		usleep_range(data->nonblocking_wait_time,
 			     data->nonblocking_wait_time + 1000);
 
@@ -108,7 +109,8 @@ static struct shtc1_data *shtc1_update_client(struct device *dev)
 
 	mutex_lock(&data->update_lock);
 
-	if (time_after(jiffies, data->last_updated + HZ / 10) || !data->valid) {
+	if (!data->valid ||
+	    ktime_after(ktime_get(), ktime_add_ms(data->last_updated, 100))) {
 		ret = shtc1_update_values(client, data, buf, sizeof(buf));
 		if (ret)
 			goto out;
@@ -125,7 +127,7 @@ static struct shtc1_data *shtc1_update_client(struct device *dev)
 		val = be16_to_cpup((__be16 *)(buf + 3));
 		data->humidity = ((12500 * val) >> 13);
 
-		data->last_updated = jiffies;
+		data->last_updated = ktime_get();
 		data->valid = true;
 	}
 
@@ -169,15 +171,15 @@ ATTRIBUTE_GROUPS(shtc1);
 
 static void shtc1_select_command(struct shtc1_data *data)
 {
-	if (data->setup.high_precision) {
-		data->command = data->setup.blocking_io ?
+	if (data->high_precision) {
+		data->command = data->blocking_io ?
 				shtc1_cmd_measure_blocking_hpm :
 				shtc1_cmd_measure_nonblocking_hpm;
 		data->nonblocking_wait_time = (data->chip == shtc1) ?
 				SHTC1_NONBLOCKING_WAIT_TIME_HPM :
 				SHTC3_NONBLOCKING_WAIT_TIME_HPM;
 	} else {
-		data->command = data->setup.blocking_io ?
+		data->command = data->blocking_io ?
 				shtc1_cmd_measure_blocking_lpm :
 				shtc1_cmd_measure_nonblocking_lpm;
 		data->nonblocking_wait_time = (data->chip == shtc1) ?
@@ -229,18 +231,10 @@ static int shtc1_probe(struct i2c_client *client)
 	if (!data)
 		return -ENOMEM;
 
-	data->setup.blocking_io = false;
-	data->setup.high_precision = true;
 	data->client = client;
 	data->chip = chip;
-
-	if (np) {
-		data->setup.blocking_io = of_property_read_bool(np, "sensirion,blocking-io");
-		data->setup.high_precision = !of_property_read_bool(np, "sensirion,low-precision");
-	} else {
-		if (client->dev.platform_data)
-			data->setup = *(struct shtc1_platform_data *)dev->platform_data;
-	}
+	data->blocking_io = of_property_read_bool(np, "sensirion,blocking-io");
+	data->high_precision = !of_property_read_bool(np, "sensirion,low-precision");
 
 	shtc1_select_command(data);
 	mutex_init(&data->update_lock);
