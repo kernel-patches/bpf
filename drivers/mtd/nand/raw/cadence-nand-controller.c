@@ -1902,8 +1902,7 @@ static int cadence_nand_slave_dma_transfer(struct cdns_nand_ctrl *cdns_ctrl,
 		goto err_unmap;
 	}
 
-	tx->callback = cadence_nand_slave_dma_transfer_finished;
-	tx->callback_param = &finished;
+	dmaengine_desc_set_callback(tx, cadence_nand_slave_dma_transfer_finished, NULL, &finished);
 
 	cookie = dmaengine_submit(tx);
 	if (dma_submit_error(cookie)) {

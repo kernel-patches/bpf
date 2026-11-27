@@ -893,8 +893,8 @@ static int stm32_fmc2_nfc_xfer(struct nand_chip *chip, const u8 *buf,
 
 	reinit_completion(&nfc->dma_data_complete);
 	reinit_completion(&nfc->complete);
-	desc_data->callback = stm32_fmc2_nfc_dma_callback;
-	desc_data->callback_param = &nfc->dma_data_complete;
+	dmaengine_desc_set_callback(desc_data, stm32_fmc2_nfc_dma_callback,
+				    NULL, &nfc->dma_data_complete);
 	ret = dma_submit_error(dmaengine_submit(desc_data));
 	if (ret)
 		goto err_unmap_data;
@@ -919,8 +919,8 @@ static int stm32_fmc2_nfc_xfer(struct nand_chip *chip, const u8 *buf,
 		}
 
 		reinit_completion(&nfc->dma_ecc_complete);
-		desc_ecc->callback = stm32_fmc2_nfc_dma_callback;
-		desc_ecc->callback_param = &nfc->dma_ecc_complete;
+		dmaengine_desc_set_callback(desc_ecc, stm32_fmc2_nfc_dma_callback,
+					    NULL, &nfc->dma_ecc_complete);
 		ret = dma_submit_error(dmaengine_submit(desc_ecc));
 		if (ret)
 			goto err_unmap_data;
