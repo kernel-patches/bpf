@@ -449,6 +449,11 @@ static inline bool css_is_online(struct cgroup_subsys_state *css)
 	return css->flags & CSS_ONLINE;
 }
 
+static inline bool css_is_released(struct cgroup_subsys_state *css)
+{
+	return css->flags & CSS_RELEASED;
+}
+
 static inline bool css_is_self(struct cgroup_subsys_state *css)
 {
 	if (css == &css->cgroup->self) {
