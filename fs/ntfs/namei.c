@@ -290,8 +290,9 @@ handle_name:
 				goto err_out;
 			}
 			ctx = ntfs_attr_get_search_ctx(ni, m);
-			if (unlikely(!ctx)) {
-				err = -ENOMEM;
+			if (IS_ERR(ctx)) {
+				err = PTR_ERR(ctx);
+				ctx = NULL;
 				goto err_out;
 			}
 			do {
@@ -422,6 +423,7 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 	struct ntfs_volume *vol = dir_ni->vol;
 	struct ntfs_inode *ni;
 	bool rollback_data = false, rollback_sd = false, rollback_reparse = false;
+	bool rollback_ea = false;
 	struct file_name_attr *fn = NULL;
 	struct standard_information *si = NULL;
 	int err = 0, fn_len, si_len;
@@ -429,6 +431,8 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 	struct mft_record *ni_mrec, *dni_mrec;
 	struct super_block *sb = dir_ni->vol->sb;
 	struct inode *rollback_data_vi = NULL, *rollback_sd_vi = NULL;
+	struct inode *rollback_ea_vi = NULL, *rollback_eai_vi = NULL;
+	struct inode *rollback_rp_vi = NULL, *rollback_al_vi = NULL;
 	__le64 parent_mft_ref;
 	u64 child_mft_ref;
 	__le16 ea_size;
@@ -469,19 +473,6 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 
 	mode = vi->i_mode;
 
-#ifdef CONFIG_NTFS_FS_POSIX_ACL
-	if (!S_ISLNK(mode) && (sb->s_flags & SB_POSIXACL)) {
-		err = ntfs_init_acl(idmap, vi, dir);
-		if (err) {
-			iput(vi);
-			return ERR_PTR(err);
-		}
-	} else
-#endif
-	{
-		vi->i_flags |= S_NOSEC;
-	}
-
 	if (uid_valid(vol->uid))
 		vi->i_uid = vol->uid;
 
@@ -500,9 +491,11 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 	simple_inode_init_ts(vi);
 	ni->i_crtime = inode_get_ctime(vi);
 
-	inode_set_mtime_to_ts(dir, ni->i_crtime);
-	inode_set_ctime_to_ts(dir, ni->i_crtime);
-	mark_inode_dirty(dir);
+	if (name) {
+		inode_set_mtime_to_ts(dir, ni->i_crtime);
+		inode_set_ctime_to_ts(dir, ni->i_crtime);
+		mark_inode_dirty(dir);
+	}
 
 	err = ntfs_mft_record_alloc(dir_ni->vol, mode, &ni, NULL,
 			&ni_mrec, -1);
@@ -523,6 +516,10 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 	vi->i_ino = (unsigned long)ni->mft_no;
 	inode_set_iversion(vi, 1);
 	insert_inode_hash(vi);
+
+	/* Attribute inodes must not pin an unpublished file in cache. */
+	if (!name)
+		clear_nlink(vi);
 
 	mutex_lock_nested(&ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
 	mutex_lock_nested(&dir_ni->mrec_lock, NTFS_INODE_MUTEX_PARENT);
@@ -614,6 +611,7 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 		err = ntfs_attr_open(ni, AT_INDEX_ROOT, I30, 4);
 		if (err)
 			goto err_out;
+		i_size_write(vi, ni->data_size);
 	} else {
 		/* Add DATA attribute to inode. */
 		err = ntfs_attr_add(ni, AT_DATA, AT_UNNAMED, 0, NULL, 0);
@@ -646,14 +644,38 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 			goto err_out;
 	}
 
+	/* ACL EAs need the allocated MFT record and initialized attributes. */
+	rollback_ea = true;
+#ifdef CONFIG_NTFS_FS_POSIX_ACL
+	if (!S_ISLNK(mode) && (sb->s_flags & SB_POSIXACL)) {
+		/* The ACL helpers acquire both the parent's and child's locks. */
+		mutex_unlock(&dir_ni->mrec_lock);
+		mutex_unlock(&ni->mrec_lock);
+		err = ntfs_init_acl(idmap, vi, dir);
+		mutex_lock_nested(&ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
+		mutex_lock_nested(&dir_ni->mrec_lock, NTFS_INODE_MUTEX_PARENT);
+		if (err)
+			goto err_out;
+		mode = vi->i_mode;
+	}
+#endif
+	if (S_ISLNK(mode) || !(sb->s_flags & SB_POSIXACL))
+		vi->i_flags |= S_NOSEC;
+
 	err = ntfs_ea_set_wsl_inode(vi, dev, &ea_size,
 			NTFS_EA_UID | NTFS_EA_GID | NTFS_EA_MODE);
 	if (err)
 		goto err_out;
 
+	if (!name) {
+		ni_mrec->link_count = 0;
+		mark_mft_record_dirty(ni);
+		goto done;
+	}
+
 	/* Create FILE_NAME attribute. */
-	fn_len = sizeof(struct file_name_attr) + name_len * sizeof(__le16);
-	fn = kzalloc(fn_len, GFP_NOFS);
+	fn_len = struct_size(fn, file_name, name_len);
+	fn = kzalloc_flex(*fn, file_name, name_len, GFP_NOFS);
 	if (!fn) {
 		err = -ENOMEM;
 		goto err_out;
@@ -679,7 +701,8 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 	if (NVolHideDotFiles(vol) && name_len > 0 && name[0] == cpu_to_le16('.'))
 		fn->file_attributes |= FILE_ATTR_HIDDEN;
 	fn->creation_time = fn->last_data_change_time = utc2ntfs(ni->i_crtime);
-	fn->last_mft_change_time = fn->last_access_time = fn->creation_time;
+	fn->last_mft_change_time = utc2ntfs(inode_get_ctime(vi));
+	fn->last_access_time = fn->creation_time;
 	memcpy(fn->file_name, name, name_len * sizeof(__le16));
 
 	/* Add FILE_NAME attribute to inode. */
@@ -702,12 +725,13 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 		goto err_out;
 	}
 
+	ni->flags = fn->file_attributes |
+		    (ni->flags & FILE_ATTRIBUTE_RECALL_ON_OPEN);
+done:
 	unmap_mft_record(ni);
 	mutex_unlock(&dir_ni->mrec_lock);
 	mutex_unlock(&ni->mrec_lock);
 
-	ni->flags = fn->file_attributes |
-		    (ni->flags & FILE_ATTRIBUTE_RECALL_ON_OPEN);
 	/* Set the sequence number. */
 	vi->i_generation = ni->seq_no;
 	set_nlink(vi, 1);
@@ -720,6 +744,27 @@ static struct ntfs_inode *__ntfs_create(const struct mnt_idmap *idmap, struct in
 	return ni;
 
 err_out:
+	if (rollback_ea) {
+		int rollback_err;
+
+		rollback_err = ntfs_attr_exist(ni, AT_EA, AT_UNNAMED, 0);
+		if (rollback_err > 0)
+			rollback_err = ntfs_attr_remove(ni, AT_EA, AT_UNNAMED, 0,
+							&rollback_ea_vi);
+		if (rollback_err < 0)
+			ntfs_error(sb, "Failed to roll back EA attribute: %d",
+				   rollback_err);
+
+		rollback_err = ntfs_attr_exist(ni, AT_EA_INFORMATION,
+					       AT_UNNAMED, 0);
+		if (rollback_err > 0)
+			rollback_err = ntfs_attr_remove(ni, AT_EA_INFORMATION,
+							AT_UNNAMED, 0,
+							&rollback_eai_vi);
+		if (rollback_err < 0)
+			ntfs_error(sb, "Failed to roll back EA_INFORMATION attribute: %d",
+				   rollback_err);
+	}
 	if (rollback_sd) {
 		int rollback_err;
 
@@ -740,8 +785,17 @@ err_out:
 			ntfs_error(sb, "Failed to roll back DATA attribute.\n");
 	}
 
-	if (rollback_reparse)
-		ntfs_delete_reparse_index(ni);
+	if (rollback_reparse) {
+		if (ntfs_delete_reparse_index(ni) < 0)
+			ntfs_error(sb, "Failed to roll back reparse index entry.");
+		if (ntfs_attr_remove(ni, AT_REPARSE_POINT, AT_UNNAMED, 0,
+				     &rollback_rp_vi))
+			ntfs_error(sb, "Failed to roll back REPARSE_POINT attribute.");
+	}
+	if (NInoAttrList(ni) &&
+	    ntfs_attr_remove(ni, AT_ATTRIBUTE_LIST, AT_UNNAMED, 0,
+			     &rollback_al_vi))
+		ntfs_error(sb, "Failed to roll back ATTRIBUTE_LIST attribute.");
 	/*
 	 * Free extent MFT records (should not exist any with current
 	 * ntfs_create implementation, but for any case if something will be
@@ -766,6 +820,16 @@ err_out:
 	mutex_unlock(&dir_ni->mrec_lock);
 	mutex_unlock(&ni->mrec_lock);
 
+	/* The MFT record has already been freed above. */
+	set_nlink(vi, 1);
+	if (rollback_ea_vi)
+		iput(rollback_ea_vi);
+	if (rollback_eai_vi)
+		iput(rollback_eai_vi);
+	if (rollback_al_vi)
+		iput(rollback_al_vi);
+	if (rollback_rp_vi)
+		iput(rollback_rp_vi);
 	if (rollback_data_vi)
 		iput(rollback_data_vi);
 	if (rollback_sd_vi)
@@ -836,6 +900,31 @@ out_free_stream_names:
 	return 0;
 }
 
+static int ntfs_tmpfile(const struct mnt_idmap *idmap, struct inode *dir,
+			struct file *file, umode_t mode)
+{
+	struct ntfs_volume *vol = NTFS_SB(dir->i_sb);
+	struct ntfs_inode *ni;
+	struct inode *inode;
+	int err;
+
+	if (NVolShutdown(vol))
+		return -EIO;
+
+	err = ntfs_set_volume_flags(vol, VOLUME_IS_DIRTY);
+	if (err)
+		return err;
+
+	ni = __ntfs_create(idmap, dir, NULL, 0, mode, 0, NULL, 0);
+	if (IS_ERR(ni))
+		return PTR_ERR(ni);
+
+	inode = VFS_I(ni);
+	d_tmpfile(file, inode);
+	unlock_new_inode(inode);
+	return finish_open_simple(file, 0);
+}
+
 static int ntfs_check_unlinkable_dir(struct ntfs_attr_search_ctx *ctx, struct file_name_attr *fn)
 {
 	int link_count;
@@ -874,6 +963,58 @@ static int ntfs_test_inode_attr(struct inode *vi, void *data)
 	if (NInoAttr(ni) || ni->nr_extents == -1)
 		return 1;
 	return 0;
+}
+
+static int ntfs_match_dirty_attr(struct inode *vi, u64 mft_no, void *data)
+{
+	struct ntfs_inode *ni = NTFS_I(vi);
+	int found = 0;
+
+	if (ni->mft_no != mft_no || !NInoAttr(ni) ||
+	    ntfs_inode_is_named_stream(ni))
+		return 0;
+
+	spin_lock(&vi->i_lock);
+	if (!(inode_state_read(vi) & (I_NEW | I_CREATING | I_FREEING | I_WILL_FREE)) &&
+	    (mapping_tagged(vi->i_mapping, PAGECACHE_TAG_DIRTY) ||
+	     mapping_tagged(vi->i_mapping, PAGECACHE_TAG_WRITEBACK))) {
+		__iget(vi);
+		found = 1;
+	}
+	spin_unlock(&vi->i_lock);
+	return found;
+}
+
+/*
+ * Return with the target's mrec_lock held and its internal attributes clean.
+ * Rename also needs the source locked first. Drop both locks for writeback,
+ * then rescan under the locks to catch concurrent attribute conversions.
+ * Directory mrec_locks must not be held by the caller.
+ */
+static int ntfs_lock_unlink_inodes(struct ntfs_inode *ni,
+				   struct ntfs_inode *source_ni)
+{
+	struct inode *attr_vi;
+	int err;
+
+	for (;;) {
+		if (source_ni)
+			mutex_lock_nested(&source_ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
+		mutex_lock_nested(&ni->mrec_lock, source_ni ?
+				  NTFS_INODE_MUTEX_NORMAL_2 : NTFS_INODE_MUTEX_NORMAL);
+		attr_vi = find_inode_nowait(VFS_I(ni)->i_sb, ni->mft_no,
+					    ntfs_match_dirty_attr, NULL);
+		if (!attr_vi)
+			return 0;
+		mutex_unlock(&ni->mrec_lock);
+		if (source_ni)
+			mutex_unlock(&source_ni->mrec_lock);
+
+		err = filemap_write_and_wait(attr_vi->i_mapping);
+		iput(attr_vi);
+		if (err)
+			return err;
+	}
 }
 
 static void ntfs_cleanup_deleted_inode(struct ntfs_inode *ni)
@@ -926,7 +1067,9 @@ static int ntfs_delete(struct ntfs_inode *ni, struct ntfs_inode *dir_ni,
 	ntfs_debug("Entering.\n");
 
 	if (need_lock == true) {
-		mutex_lock_nested(&ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
+		err = ntfs_lock_unlink_inodes(ni, NULL);
+		if (err)
+			return err;
 		mutex_lock_nested(&dir_ni->mrec_lock, NTFS_INODE_MUTEX_PARENT);
 	}
 
@@ -943,13 +1086,13 @@ static int ntfs_delete(struct ntfs_inode *ni, struct ntfs_inode *dir_ni,
 	 * only then remove WIN32 name.
 	 */
 	actx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!actx) {
+	if (IS_ERR(actx)) {
 		ntfs_error(sb, "%s, Failed to get search context", __func__);
 		if (need_lock) {
 			mutex_unlock(&dir_ni->mrec_lock);
 			mutex_unlock(&ni->mrec_lock);
 		}
-		return -ENOMEM;
+		return PTR_ERR(actx);
 	}
 search:
 	while ((err = ntfs_attr_lookup(AT_FILE_NAME, AT_UNNAMED, 0, CASE_SENSITIVE,
@@ -1223,6 +1366,7 @@ out:
  * @dir_ni:	ntfs inode for directory in which new link should be placed
  * @name:	unicode name of the new link
  * @name_len:	length of the name in unicode characters
+ * @ctime:	metadata change time for the new FILE_NAME
  *
  * Create a new hard link. This involves adding an entry to the directory
  * index and adding a new FILE_NAME attribute to the target inode.
@@ -1230,7 +1374,7 @@ out:
  * Return 0 on success and -errno on error.
  */
 static int __ntfs_link(struct ntfs_inode *ni, struct ntfs_inode *dir_ni,
-		__le16 *name, u8 name_len)
+		__le16 *name, u8 name_len, struct timespec64 ctime)
 {
 	struct super_block *sb;
 	struct inode *vi = VFS_I(ni);
@@ -1250,15 +1394,15 @@ static int __ntfs_link(struct ntfs_inode *ni, struct ntfs_inode *dir_ni,
 		goto err_out;
 	}
 
-	if (le16_to_cpu(ni_mrec->link_count) == 0) {
+	if (!ni_mrec->link_count &&
+	    !(inode_state_read_once(vi) & I_LINKABLE)) {
 		err = -ENOENT;
 		goto err_out;
 	}
 
 	/* Create FILE_NAME attribute. */
-	fn_len = sizeof(struct file_name_attr) + name_len * sizeof(__le16);
-
-	fn = kzalloc(fn_len, GFP_NOFS);
+	fn_len = struct_size(fn, file_name, name_len);
+	fn = kzalloc_flex(*fn, file_name, name_len, GFP_NOFS);
 	if (!fn) {
 		err = -ENOMEM;
 		goto err_out;
@@ -1292,9 +1436,27 @@ static int __ntfs_link(struct ntfs_inode *ni, struct ntfs_inode *dir_ni,
 
 	fn->creation_time = utc2ntfs(ni->i_crtime);
 	fn->last_data_change_time = utc2ntfs(inode_get_mtime(vi));
-	fn->last_mft_change_time = utc2ntfs(inode_get_ctime(vi));
+	fn->last_mft_change_time = utc2ntfs(ctime);
 	fn->last_access_time = utc2ntfs(inode_get_atime(vi));
 	memcpy(fn->file_name, name, name_len * sizeof(__le16));
+
+	if (NInoHasEA(ni) && !(ni->flags & FILE_ATTR_REPARSE_POINT)) {
+		struct ea_information *info;
+		s64 size;
+
+		info = ntfs_attr_readall(ni, AT_EA_INFORMATION, AT_UNNAMED, 0, &size);
+		if (IS_ERR(info)) {
+			err = PTR_ERR(info);
+			goto err_out;
+		}
+		if (size != sizeof(*info))
+			err = -EUCLEAN;
+		else
+			fn->type.ea.packed_ea_size = info->ea_length;
+		kvfree(info);
+		if (err)
+			goto err_out;
+	}
 
 	/* Add FILE_NAME attribute to index. */
 	err = ntfs_index_add_filename(dir_ni, fn, MK_MREF(ni->mft_no,
@@ -1400,9 +1562,13 @@ static int ntfs_rename(const struct mnt_idmap *idmap, struct inode *old_dir,
 
 	ntfs_set_volume_flags(vol, VOLUME_IS_DIRTY);
 
-	mutex_lock_nested(&old_ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
-	if (new_ni)
-		mutex_lock_nested(&new_ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL_2);
+	if (new_ni) {
+		err = ntfs_lock_unlink_inodes(new_ni, old_ni);
+		if (err)
+			goto out_names;
+	} else {
+		mutex_lock_nested(&old_ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
+	}
 
 	if (old_dir == new_dir) {
 		mutex_lock_nested(&old_dir_ni->mrec_lock, NTFS_INODE_MUTEX_PARENT);
@@ -1443,7 +1609,8 @@ static int ntfs_rename(const struct mnt_idmap *idmap, struct inode *old_dir,
 			goto err_out;
 	}
 
-	err = __ntfs_link(old_ni, new_dir_ni, uname_new, new_name_len);
+	err = __ntfs_link(old_ni, new_dir_ni, uname_new, new_name_len,
+			  inode_get_ctime(old_inode));
 	if (err)
 		goto err_out;
 
@@ -1485,6 +1652,7 @@ err_out:
 	mutex_unlock(&old_ni->mrec_lock);
 	if (new_ni)
 		ntfs_cleanup_deleted_inode(new_ni);
+out_names:
 	if (uname_new)
 		kmem_cache_free(ntfs_name_cache, uname_new);
 	if (uname_old)
@@ -1609,6 +1777,7 @@ static int ntfs_link(struct dentry *old_dentry, struct inode *dir,
 	int uname_len;
 	int err;
 	struct ntfs_inode *ni = NTFS_I(vi), *dir_ni = NTFS_I(dir);
+	struct timespec64 ctime;
 
 	if (NVolShutdown(vol))
 		return -EIO;
@@ -1633,7 +1802,8 @@ static int ntfs_link(struct dentry *old_dentry, struct inode *dir,
 	ihold(vi);
 	mutex_lock_nested(&ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL);
 	mutex_lock_nested(&dir_ni->mrec_lock, NTFS_INODE_MUTEX_PARENT);
-	err = __ntfs_link(NTFS_I(vi), NTFS_I(dir), uname, uname_len);
+	ctime = current_time(vi);
+	err = __ntfs_link(ni, dir_ni, uname, uname_len, ctime);
 	if (err) {
 		mutex_unlock(&dir_ni->mrec_lock);
 		mutex_unlock(&ni->mrec_lock);
@@ -1643,12 +1813,13 @@ static int ntfs_link(struct dentry *old_dentry, struct inode *dir,
 	}
 
 	inode_inc_iversion(dir);
-	simple_inode_init_ts(dir);
+	inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
+	mark_inode_dirty(dir);
 
 	inode_inc_iversion(vi);
-	simple_inode_init_ts(vi);
+	inode_set_ctime_to_ts(vi, ctime);
+	mark_inode_dirty(vi);
 
-	/* timestamp is already written, so mark_inode_dirty() is unneeded. */
 	d_instantiate(dentry, vi);
 	mutex_unlock(&dir_ni->mrec_lock);
 	mutex_unlock(&ni->mrec_lock);
@@ -1664,11 +1835,12 @@ out:
 const struct inode_operations ntfs_dir_inode_ops = {
 	.lookup		= ntfs_lookup,	/* VFS: Lookup directory. */
 	.create		= ntfs_create,
+	.tmpfile	= ntfs_tmpfile,
 	.unlink		= ntfs_unlink,
 	.mkdir		= ntfs_mkdir,
 	.rmdir		= ntfs_rmdir,
 	.rename		= ntfs_rename,
-	.get_acl	= ntfs_get_acl,
+	.get_inode_acl	= ntfs_get_acl,
 	.set_acl	= ntfs_set_acl,
 	.listxattr	= ntfs_listxattr,
 	.setattr	= ntfs_setattr,
@@ -1689,7 +1861,8 @@ const struct inode_operations ntfs_dir_inode_ops = {
  * fs/exportfs/expfs.c::find_exported_dentry() which in turn is called from the
  * default ->decode_fh() which is export_decode_fh() in the same file.
  *
- * Note: ntfs_get_parent() is called with @d_inode(child_dent)->i_mutex down.
+ * Serialize the file name lookup and parent load against rename and rmdir
+ * with the child's mrec_lock; exportfs does not hold the child's inode lock.
  *
  * Return the dentry of the parent directory on success or the error code on
  * error (IS_ERR() is true).
@@ -1697,6 +1870,7 @@ const struct inode_operations ntfs_dir_inode_ops = {
 static struct dentry *ntfs_get_parent(struct dentry *child_dent)
 {
 	struct inode *vi = d_inode(child_dent);
+	struct inode *parent;
 	struct ntfs_inode *ni = NTFS_I(vi);
 	struct mft_record *mrec;
 	struct ntfs_attr_search_ctx *ctx;
@@ -1706,15 +1880,19 @@ static struct dentry *ntfs_get_parent(struct dentry *child_dent)
 	int err;
 
 	ntfs_debug("Entering for inode 0x%llx.", ni->mft_no);
+	mutex_lock(&ni->mrec_lock);
 	/* Get the mft record of the inode belonging to the child dentry. */
 	mrec = map_mft_record(ni);
-	if (IS_ERR(mrec))
-		return ERR_CAST(mrec);
+	if (IS_ERR(mrec)) {
+		err = PTR_ERR(mrec);
+		goto unlock_err;
+	}
 	/* Find the first file name attribute in the mft record. */
 	ctx = ntfs_attr_get_search_ctx(ni, mrec);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		unmap_mft_record(ni);
-		return ERR_PTR(-ENOMEM);
+		err = PTR_ERR(ctx);
+		goto unlock_err;
 	}
 try_next:
 	err = ntfs_attr_lookup(AT_FILE_NAME, NULL, 0, CASE_SENSITIVE, 0, NULL,
@@ -1726,7 +1904,7 @@ try_next:
 			ntfs_error(vi->i_sb,
 				   "Inode 0x%llx does not have a file name attribute.  Run chkdsk.",
 				   ni->mft_no);
-		return ERR_PTR(err);
+		goto unlock_err;
 	}
 	attr = ctx->attr;
 	if (unlikely(attr->non_resident))
@@ -1742,7 +1920,14 @@ try_next:
 	ntfs_attr_put_search_ctx(ctx);
 	unmap_mft_record(ni);
 
-	return d_obtain_alias(ntfs_iget(vi->i_sb, parent_ino));
+	parent = ntfs_iget(vi->i_sb, parent_ino);
+	goto out;
+
+unlock_err:
+	parent = ERR_PTR(err);
+out:
+	mutex_unlock(&ni->mrec_lock);
+	return d_obtain_alias(parent);
 }
 
 static struct inode *ntfs_nfs_get_inode(struct super_block *sb,

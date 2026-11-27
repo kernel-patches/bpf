@@ -288,6 +288,25 @@ struct inode *ntfs_attr_iget(struct inode *base_vi, __le32 type,
 }
 
 /*
+ * ntfs_attr_ilookup - find an attribute inode that is already in the cache
+ *
+ * Like ntfs_attr_iget() but never reads anything. Returns the inode with an
+ * increased reference count, or NULL if it is not cached.
+ */
+struct inode *ntfs_attr_ilookup(struct inode *base_vi, __le32 type,
+		__le16 *name, u32 name_len)
+{
+	struct ntfs_attr na = {
+		.mft_no = base_vi->i_ino,
+		.type = type,
+		.name = name,
+		.name_len = name_len,
+	};
+
+	return ilookup5(base_vi->i_sb, na.mft_no, ntfs_test_inode, &na);
+}
+
+/*
  * ntfs_index_iget - obtain a struct inode corresponding to an index
  * @base_vi:	vfs base inode containing the index related attributes
  * @name:	Unicode name of the index
@@ -372,8 +391,8 @@ static int ntfs_non_resident_dealloc_clusters(struct ntfs_inode *ni)
 	int err = 0;
 
 	actx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!actx)
-		return -ENOMEM;
+	if (IS_ERR(actx))
+		return PTR_ERR(actx);
 	WARN_ON(actx->mrec->link_count != 0);
 
 	/**
@@ -779,8 +798,9 @@ static int ntfs_read_locked_inode(struct inode *vi)
 	}
 
 	ctx = ntfs_attr_get_search_ctx(ni, m);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 
@@ -938,6 +958,15 @@ skip_attr_list_load:
 			goto unm_err_out;
 	} else if (err != -ENOENT) {
 		goto unm_err_out;
+	}
+
+	/* Classify $Extend children regardless of their data or index layout. */
+	if (ni->mft_no >= FILE_first_user) {
+		err = ntfs_is_extended_system_file(ctx);
+		if (err < 0)
+			goto unm_err_out;
+		if (err > 0)
+			NInoSetExtendSys(ni);
 	}
 
 	if (ni->flags & FILE_ATTR_REPARSE_POINT) {
@@ -1287,11 +1316,13 @@ no_data_attr_special_case:
 
 	/*
 	 * System files such as $Bitmap and $MFT are maintained by the driver
-	 * itself, and writing them from userspace corrupts the volume.
-	 * Always make them immutable regardless of the sys_immutable option.
-	 * Directories are skipped so the root and $Extend stay usable.
+	 * itself. Always make them immutable regardless of the sys_immutable
+	 * option. Protect $Extend and its system files too; modifying them
+	 * through the VFS can corrupt NTFS metadata.
 	 */
-	if (ni->mft_no < FILE_first_user && S_ISREG(vi->i_mode))
+	if (NInoExtendSys(ni) ||
+	    ni->mft_no == FILE_Extend ||
+	    (ni->mft_no < FILE_first_user && S_ISREG(vi->i_mode)))
 		vi->i_flags |= S_IMMUTABLE;
 
 	/*
@@ -1391,8 +1422,9 @@ static int ntfs_read_locked_attr_inode(struct inode *base_vi, struct inode *vi)
 		goto err_out;
 	}
 	ctx = ntfs_attr_get_search_ctx(base_ni, m);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 	/* Find the attribute. */
@@ -1656,8 +1688,9 @@ static int ntfs_read_locked_index_inode(struct inode *base_vi, struct inode *vi)
 		goto err_out;
 	}
 	ctx = ntfs_attr_get_search_ctx(base_ni, m);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 	/* Find the index root attribute. */
@@ -2048,8 +2081,9 @@ int ntfs_read_inode_mount(struct inode *vi)
 	vi->i_mapping->a_ops = &ntfs_mft_aops;
 
 	ctx = ntfs_attr_get_search_ctx(ni, m);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto err_out;
 	}
 
@@ -2658,8 +2692,8 @@ static int ntfs_inode_sync_standard_information(struct inode *vi, struct mft_rec
 
 	/* Update the access times in the standard information attribute. */
 	ctx = ntfs_attr_get_search_ctx(ni, m);
-	if (unlikely(!ctx))
-		return -ENOMEM;
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 	err = ntfs_attr_lookup(AT_STANDARD_INFORMATION, NULL, 0,
 			CASE_SENSITIVE, 0, NULL, 0, ctx);
 	if (unlikely(err)) {
@@ -2759,8 +2793,8 @@ int ntfs_inode_sync_filename(struct ntfs_inode *ni)
 	ntfs_debug("Entering for inode %llu\n", ni->mft_no);
 
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx)
-		return -ENOMEM;
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 
 	/* Collect the reparse tag, if any */
 	reparse_tag = cpu_to_le32(0);
@@ -2936,6 +2970,10 @@ int __ntfs_write_inode(struct inode *vi, int sync)
 		return 0;
 	}
 
+	/* Failed creations retain I_CREATING after discard_new_inode(). */
+	if (inode_state_read_once(vi) & I_CREATING)
+		return 0;
+
 	/* igrab prevents vi from being evicted while mrec_lock is hold. */
 	if (igrab(vi) != NULL)
 		need_iput = true;
@@ -2955,6 +2993,8 @@ int __ntfs_write_inode(struct inode *vi, int sync)
 		if (!err)
 			NInoClearRunlistDirty(ni);
 		up_write(&ni->runlist.lock);
+		if (err)
+			goto unm_err_out;
 	}
 
 	err = ntfs_inode_sync_standard_information(vi, m);
@@ -3246,8 +3286,9 @@ int ntfs_inode_add_attrlist(struct ntfs_inode *ni)
 
 	/* Form attribute list. */
 	ctx = ntfs_attr_get_search_ctx(ni, ni_mrec);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto err_out;
 	}
 
@@ -3618,9 +3659,9 @@ int ntfs_inode_free_space(struct ntfs_inode *ni, int size)
 		return 0;
 
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(sb, "%s, Failed to get search context", __func__);
-		return -ENOMEM;
+		return PTR_ERR(ctx);
 	}
 
 	/*
@@ -3742,10 +3783,11 @@ s64 ntfs_inode_attr_pread(struct inode *vi, s64 pos, s64 count, u8 *buf)
 		u8 *attr;
 
 		ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-		if (!ctx) {
+		if (IS_ERR(ctx)) {
 			ntfs_error(vi->i_sb, "Failed to get attr search ctx");
-			err = -ENOMEM;
+			err = PTR_ERR(ctx);
 			mutex_unlock(&mrec_ni->mrec_lock);
+			ctx = NULL;
 			goto out;
 		}
 
@@ -3773,8 +3815,14 @@ s64 ntfs_inode_attr_pread(struct inode *vi, s64 pos, s64 count, u8 *buf)
 
 	index = pos >> PAGE_SHIFT;
 	do {
-		/* Update @index and get the next folio. */
-		folio = read_mapping_folio(mapping, index, NULL);
+		/*
+		 * Update @index and get the next folio.  The contents of a named
+		 * stream are user data, so a fatal signal may still stop that read.
+		 */
+		if (ntfs_inode_is_named_stream(ni))
+			folio = read_mapping_folio(mapping, index, NULL);
+		else
+			folio = ntfs_read_metadata_folio(mapping, index);
 		if (IS_ERR(folio)) {
 			err = PTR_ERR(folio);
 			break;
@@ -3926,9 +3974,18 @@ static s64 __ntfs_inode_non_resident_attr_pwrite(struct inode *vi,
 				break;
 			}
 		} else {
-			folio = read_mapping_folio(mapping, index, NULL);
+			/*
+			 * Named stream contents are user data; keep that read
+			 * killable, as in ntfs_inode_attr_pread().
+			 */
+			if (ntfs_inode_is_named_stream(ni))
+				folio = read_mapping_folio(mapping, index, NULL);
+			else
+				folio = ntfs_read_metadata_folio(mapping, index);
 			if (IS_ERR(folio)) {
 				ret = PTR_ERR(folio);
+				if (ret == -EINTR)
+					break;
 				ntfs_error(vi->i_sb, "Failed to read a page %lu for attr %#x: %ld",
 						index, ni->type, PTR_ERR(folio));
 				break;
@@ -4052,6 +4109,16 @@ s64 ntfs_inode_attr_pwrite(struct inode *vi, s64 pos, s64 count, u8 *buf, bool s
 
 	WARN_ON(!NInoAttr(ni));
 
+	/*
+	 * A zero-link attribute inode is evicted at the final iput(), even
+	 * if its base file has since been linked. Write its data before
+	 * eviction can discard the dirty pages. Also cover the interval after
+	 * unlink clears the base inode's link count but before attribute cleanup.
+	 */
+	if ((!vi->i_nlink || !VFS_I(base_ni)->i_nlink) &&
+	    !ntfs_inode_is_named_stream(ni))
+		sync = true;
+
 	if (ntfs_inode_is_named_stream(ni)) {
 		if (NInoEncrypted(ni))
 			return -EACCES;
@@ -4067,9 +4134,10 @@ s64 ntfs_inode_attr_pwrite(struct inode *vi, s64 pos, s64 count, u8 *buf, bool s
 	}
 
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vi->i_sb, "Failed to get attr search ctx");
-		ret = -ENOMEM;
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out_unlock;
 	}
 

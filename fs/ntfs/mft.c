@@ -143,7 +143,7 @@ static inline struct mft_record *map_mft_record_folio(struct ntfs_inode *ni)
 	}
 
 	/* Read, map, and pin the folio. */
-	folio = read_mapping_folio(mft_vi->i_mapping, index, NULL);
+	folio = ntfs_read_metadata_folio(mft_vi->i_mapping, index);
 	if (!IS_ERR(folio)) {
 		u8 *addr;
 
@@ -549,8 +549,8 @@ static int ntfs_sync_mft_mirror_unit(struct ntfs_volume *vol,
 	if (unit->folio_ofs + unit->len > folio_size(source))
 		return -EIO;
 
-	mirror = read_mapping_folio(vol->mftmirr_ino->i_mapping,
-				    mirror_file_ofs >> PAGE_SHIFT, NULL);
+	mirror = ntfs_read_metadata_folio(vol->mftmirr_ino->i_mapping,
+					  mirror_file_ofs >> PAGE_SHIFT);
 	if (IS_ERR(mirror))
 		return PTR_ERR(mirror);
 
@@ -1023,7 +1023,7 @@ static bool mft_reserved_is_free(struct ntfs_volume *vol,
 	if (!m)
 		return false;
 
-	folio = read_mapping_folio(vol->mft_ino->i_mapping, index, NULL);
+	folio = ntfs_read_metadata_folio(vol->mft_ino->i_mapping, index);
 	if (IS_ERR(folio))
 		goto free_m;
 
@@ -1199,8 +1199,8 @@ static s64 mft_bitmap_alloc_free_rec(struct ntfs_volume *vol,
 		 * for a zero bit.
 		 */
 		if (size) {
-			folio = read_mapping_folio(mftbmp_mapping,
-					ofs >> PAGE_SHIFT, NULL);
+			folio = ntfs_read_metadata_folio(mftbmp_mapping,
+							 ofs >> PAGE_SHIFT);
 			if (IS_ERR(folio)) {
 				ntfs_error(vol->sb, "Failed to read mft bitmap, aborting.");
 				return PTR_ERR(folio);
@@ -1392,8 +1392,8 @@ static int ntfs_mft_bitmap_extend_allocation_nolock(struct ntfs_volume *vol)
 	 * to us.
 	 */
 	ll = lcn >> 3;
-	folio = read_mapping_folio(vol->lcnbmp_ino->i_mapping,
-			ll >> PAGE_SHIFT, NULL);
+	folio = ntfs_read_metadata_folio(vol->lcnbmp_ino->i_mapping,
+					 ll >> PAGE_SHIFT);
 	if (IS_ERR(folio)) {
 		up_write(&mftbmp_ni->runlist.lock);
 		ntfs_error(vol->sb, "Failed to read from lcn bitmap.");
@@ -1473,9 +1473,10 @@ alloc_cluster:
 		goto undo_alloc;
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, mrec);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.");
-		ret = -ENOMEM;
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto undo_alloc;
 	}
 	ret = ntfs_attr_lookup(mftbmp_ni->type, mftbmp_ni->name,
@@ -1673,9 +1674,10 @@ static int ntfs_mft_bitmap_extend_initialized_nolock(struct ntfs_volume *vol)
 		return PTR_ERR(mrec);
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, mrec);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.");
-		ret = -ENOMEM;
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 	ret = ntfs_attr_lookup(mftbmp_ni->type, mftbmp_ni->name,
@@ -1724,9 +1726,10 @@ static int ntfs_mft_bitmap_extend_initialized_nolock(struct ntfs_volume *vol)
 		return ret;
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, mrec);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.%s", es);
 		NVolSetErrors(vol);
+		ctx = NULL;
 		goto unm_err_out;
 	}
 	if (ntfs_attr_lookup(mftbmp_ni->type, mftbmp_ni->name,
@@ -1912,9 +1915,10 @@ static int ntfs_mft_data_extend_allocation_nolock(struct ntfs_volume *vol)
 		goto undo_alloc;
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, mrec);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.");
-		ret = -ENOMEM;
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto undo_alloc;
 	}
 	ret = ntfs_attr_lookup(mft_ni->type, mft_ni->name, mft_ni->name_len,
@@ -2207,7 +2211,7 @@ static int ntfs_mft_record_format(const struct ntfs_volume *vol, const s64 mft_n
 	}
 
 	/* Read, map, and pin the folio containing the mft record. */
-	folio = read_mapping_folio(mft_vi->i_mapping, index, NULL);
+	folio = ntfs_read_metadata_folio(mft_vi->i_mapping, index);
 	if (IS_ERR(folio)) {
 		ntfs_error(vol->sb, "Failed to map page containing mft record to format 0x%llx.",
 				(long long)mft_no);
@@ -2663,10 +2667,11 @@ have_alloc_rec:
 		goto undo_data_init;
 	}
 	ctx = ntfs_attr_get_search_ctx(mft_ni, m);
-	if (unlikely(!ctx)) {
+	if (IS_ERR(ctx)) {
 		ntfs_error(vol->sb, "Failed to get search context.");
-		err = -ENOMEM;
+		err = PTR_ERR(ctx);
 		unmap_mft_record(mft_ni);
+		ctx = NULL;
 		goto undo_data_init;
 	}
 	err = ntfs_attr_lookup(mft_ni->type, mft_ni->name, mft_ni->name_len,
@@ -2725,7 +2730,7 @@ mft_rec_already_initialized:
 	index = NTFS_MFT_NR_TO_PIDX(vol, bit);
 	ofs = NTFS_MFT_NR_TO_POFS(vol, bit);
 	/* Read, map, and pin the folio containing the mft record. */
-	folio = read_mapping_folio(vol->mft_ino->i_mapping, index, NULL);
+	folio = ntfs_read_metadata_folio(vol->mft_ino->i_mapping, index);
 	if (IS_ERR(folio)) {
 		ntfs_error(vol->sb, "Failed to map page containing allocated mft record 0x%llx.",
 				bit);

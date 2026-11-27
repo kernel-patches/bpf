@@ -231,6 +231,10 @@ int ntfs_fileattr_set(const struct mnt_idmap *idmap, struct dentry *dentry,
 	if (fa->flags & ~allowed)
 		return -EOPNOTSUPP;
 
+	/* File flag updates would modify $Extend metadata. */
+	if (ni->mft_no == FILE_Extend || NInoExtendSys(ni))
+		return -EPERM;
+
 	forced_immutable = ntfs_is_forced_immutable(vi);
 	if (!(fa->flags & FS_IMMUTABLE_FL) && forced_immutable)
 		return -EPERM;
@@ -323,22 +327,18 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 		ret = __ntfs_write_inode(vi, 1);
 	write_inode_now(vi, !datasync);
 
-	/*
-	 * file_write_and_wait_range() already flushed this stream mapping.
-	 * A stream fsync does not need to flush sibling attribute mappings.
-	 */
-	if (stream)
-		goto sync_volume;
-
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx)
-		return -ENOMEM;
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 
 	mutex_lock_nested(&ni->mrec_lock, NTFS_INODE_MUTEX_NORMAL_CHILD);
 	while (!(err = ntfs_attr_lookup(AT_UNUSED, NULL, 0, 0, 0, NULL, 0, ctx))) {
 		if (ctx->attr->type == AT_FILE_NAME) {
 			struct file_name_attr *fn = (struct file_name_attr *)((u8 *)ctx->attr +
 					le16_to_cpu(ctx->attr->data.resident.value_offset));
+
+			if (MREF_LE(fn->parent_directory) == ni->mft_no)
+				continue;
 
 			parent_vi = ntfs_iget(vi->i_sb, MREF_LE(fn->parent_directory));
 			if (IS_ERR(parent_vi))
@@ -409,7 +409,6 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 	if (err && !ret)
 		ret = err;
 
-sync_volume:
 	write_inode_now(vol->mftbmp_ino, 1);
 	down_write(&vol->lcnbmp_lock);
 	write_inode_now(vol->lcnbmp_ino, 1);
@@ -810,7 +809,7 @@ static ssize_t ntfs_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		ret2 = filemap_write_and_wait_range(iocb->ki_filp->f_mapping,
 				offset, end);
 		if (ret2) {
-			ret = -EIO;
+			ret = ret2;
 			goto out;
 		}
 		invalidate_mapping_pages(iocb->ki_filp->f_mapping,
@@ -1585,7 +1584,7 @@ const struct inode_operations ntfs_file_inode_ops = {
 	.fileattr_get	= ntfs_fileattr_get,
 	.fileattr_set	= ntfs_fileattr_set,
 	.listxattr	= ntfs_listxattr,
-	.get_acl	= ntfs_get_acl,
+	.get_inode_acl	= ntfs_get_acl,
 	.set_acl	= ntfs_set_acl,
 	.fiemap		= ntfs_fiemap,
 };
@@ -1605,7 +1604,7 @@ const struct inode_operations ntfs_special_inode_operations = {
 	.listxattr	= ntfs_listxattr,
 	.fileattr_get	= ntfs_fileattr_get,
 	.fileattr_set	= ntfs_fileattr_set,
-	.get_acl	= ntfs_get_acl,
+	.get_inode_acl	= ntfs_get_acl,
 	.set_acl	= ntfs_set_acl,
 };
 

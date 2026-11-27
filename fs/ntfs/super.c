@@ -498,8 +498,9 @@ static int ntfs_write_volume_flags(struct ntfs_volume *vol,
 		goto done;
 
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto put_unm_err_out;
 	}
 
@@ -621,8 +622,9 @@ int ntfs_write_volume_label(struct ntfs_volume *vol, char *label)
 
 	mutex_lock(&vol_ni->mrec_lock);
 	ctx = ntfs_attr_get_search_ctx(vol_ni, NULL);
-	if (!ctx) {
-		ret = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		ret = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out;
 	}
 
@@ -1187,8 +1189,8 @@ static bool check_mft_mirror(struct ntfs_volume *vol)
 				folio_put(mft_folio);
 			}
 			/* Get the $MFT page. */
-			mft_folio = read_mapping_folio(vol->mft_ino->i_mapping,
-					index, NULL);
+			mft_folio = ntfs_read_metadata_folio(vol->mft_ino->i_mapping,
+							     index);
 			if (IS_ERR(mft_folio)) {
 				ntfs_error(sb, "Failed to read $MFT.");
 				return false;
@@ -1196,8 +1198,8 @@ static bool check_mft_mirror(struct ntfs_volume *vol)
 			kmft_base = kmap_local_folio(mft_folio, 0);
 			kmft = kmft_base;
 			/* Get the $MFTMirr page. */
-			mirr_folio = read_mapping_folio(vol->mftmirr_ino->i_mapping,
-					index, NULL);
+			mirr_folio = ntfs_read_metadata_folio(vol->mftmirr_ino->i_mapping,
+							      index);
 			if (IS_ERR(mirr_folio)) {
 				ntfs_error(sb, "Failed to read $MFTMirr.");
 				goto mft_unmap_out;
@@ -1206,6 +1208,14 @@ static bool check_mft_mirror(struct ntfs_volume *vol)
 			kmirr = kmirr_base;
 			++index;
 		}
+
+		/*
+		 * Windows 10 may leave mirror records beyond the system files
+		 * stale.  Read the full mirror to map its runlist, but only
+		 * compare the system records, as ntfs-3g does.
+		 */
+		if (i >= FILE_first_user)
+			goto next_record;
 
 		/* Do not check the record if it is not in use. */
 		if (((struct mft_record *)kmft)->flags & MFT_RECORD_IN_USE) {
@@ -1250,6 +1260,7 @@ mft_unmap_out:
 				   i);
 			goto mm_unmap_out;
 		}
+next_record:
 		kmft += vol->mft_record_size;
 		kmirr += vol->mft_record_size;
 	} while (++i < vol->mftmirr_size);
@@ -1395,7 +1406,7 @@ static int check_windows_hibernation_status(struct ntfs_volume *vol)
 		goto iput_out;
 	}
 
-	folio = read_mapping_folio(vi->i_mapping, 0, NULL);
+	folio = ntfs_read_metadata_folio(vi->i_mapping, 0);
 	if (IS_ERR(folio)) {
 		ntfs_error(vol->sb, "Failed to read from hiberfil.sys.");
 		ret = PTR_ERR(folio);
@@ -1460,7 +1471,7 @@ static bool load_and_init_attrdef(struct ntfs_volume *vol)
 	while (index < max_index) {
 		/* Read the attrdef table and copy it into the linear buffer. */
 read_partial_attrdef_page:
-		folio = read_mapping_folio(ino->i_mapping, index, NULL);
+		folio = ntfs_read_metadata_folio(ino->i_mapping, index);
 		if (IS_ERR(folio))
 			goto free_iput_failed;
 		addr = kmap_local_folio(folio, 0);
@@ -1526,7 +1537,7 @@ static bool load_and_init_upcase(struct ntfs_volume *vol)
 	while (index < max_index) {
 		/* Read the upcase table and copy it into the linear buffer. */
 read_partial_upcase_page:
-		folio = read_mapping_folio(ino->i_mapping, index, NULL);
+		folio = ntfs_read_metadata_folio(ino->i_mapping, index);
 		if (IS_ERR(folio))
 			goto iput_upcase_failed;
 		addr = kmap_local_folio(folio, 0);
@@ -1805,8 +1816,10 @@ iput_volume_failed:
 	}
 
 	ctx = ntfs_attr_get_search_ctx(NTFS_I(vol->vol_ino), m);
-	if (!ctx) {
+	if (IS_ERR(ctx)) {
+		ret = PTR_ERR(ctx);
 		ntfs_error(sb, "Failed to get attribute search context.");
+		ctx = NULL;
 		goto get_ctx_vol_failed;
 	}
 

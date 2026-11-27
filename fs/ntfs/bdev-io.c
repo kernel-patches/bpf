@@ -99,7 +99,7 @@ int ntfs_bdev_write(struct super_block *sb, void *buf, loff_t start, size_t size
 	for (; idx < idx_end; idx++, from = 0) {
 		u32 len;
 
-		folio = read_mapping_folio(sb->s_bdev->bd_mapping, idx, NULL);
+		folio = ntfs_read_metadata_folio(sb->s_bdev->bd_mapping, idx);
 		if (IS_ERR(folio)) {
 			ntfs_error(sb, "Unable to read %ld page", idx);
 			return PTR_ERR(folio);

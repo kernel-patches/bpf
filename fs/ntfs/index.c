@@ -654,8 +654,9 @@ static struct index_root *ntfs_ir_lookup(struct ntfs_inode *ni, __le16 *name,
 
 	ntfs_debug("Entering\n");
 	*ctx = ntfs_attr_get_search_ctx(ni, NULL);
-	if (!*ctx) {
+	if (IS_ERR(*ctx)) {
 		ntfs_error(ni->vol->sb, "%s, Failed to get search context", __func__);
+		*ctx = NULL;
 		return NULL;
 	}
 
@@ -1100,8 +1101,9 @@ static int ntfs_ibm_add(struct ntfs_index_context *icx)
 
 	ntfs_debug("Entering\n");
 
-	if (ntfs_attr_exist(icx->idx_ni, AT_BITMAP, icx->name, icx->name_len))
-		return 0;
+	ret = ntfs_attr_exist(icx->idx_ni, AT_BITMAP, icx->name, icx->name_len);
+	if (ret)
+		return ret < 0 ? ret : 0;
 	/*
 	 * AT_BITMAP must be at least 8 bytes.
 	 */
@@ -1343,7 +1345,11 @@ static int ntfs_ia_add(struct ntfs_index_context *icx)
 	if (ret)
 		return ret;
 
-	if (!ntfs_attr_exist(icx->idx_ni, AT_INDEX_ALLOCATION, icx->name, icx->name_len)) {
+	ret = ntfs_attr_exist(icx->idx_ni, AT_INDEX_ALLOCATION, icx->name,
+			      icx->name_len);
+	if (ret < 0)
+		return ret;
+	if (!ret) {
 		ret = ntfs_attr_add(icx->idx_ni, AT_INDEX_ALLOCATION, icx->name,
 					icx->name_len, NULL, 0);
 		if (ret) {
@@ -1428,6 +1434,7 @@ retry:
 		icx->idx_ni->data_size = ix_root_size;
 		icx->idx_ni->initialized_size = ix_root_size;
 		icx->idx_ni->allocated_size = (ix_root_size + 7) & ~7;
+		i_size_write(VFS_I(icx->idx_ni), ix_root_size);
 	}
 
 	ntfs_ir_nill(ir);
@@ -1449,6 +1456,7 @@ retry:
 		icx->idx_ni->data_size = ix_root_size;
 		icx->idx_ni->initialized_size = ix_root_size;
 		icx->idx_ni->allocated_size = (ix_root_size + 7) & ~7;
+		i_size_write(VFS_I(icx->idx_ni), ix_root_size);
 	}
 	ntfs_ie_set_vcn(ie, new_ib_vcn);
 	goto err_out;
@@ -2274,7 +2282,7 @@ static struct index_entry *ntfs_index_walk_up(struct index_entry *ie,
 		ictx->pindex--;
 		if (!ictx->pindex) {
 			/* we have reached the root */
-			kfree(ictx->ib);
+			kvfree(ictx->ib);
 			ictx->ib = NULL;
 			ictx->is_in_root = true;
 			/* a new search context is to be allocated */

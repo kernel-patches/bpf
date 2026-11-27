@@ -306,8 +306,9 @@ static int parse_wof_chunk_table(struct ntfs_inode *base_ni,
 
 		mutex_lock(&base_ni->mrec_lock);
 		ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-		if (!ctx) {
-			ret = -ENOMEM;
+		if (IS_ERR(ctx)) {
+			ret = PTR_ERR(ctx);
+			ctx = NULL;
 			goto out_unlock_mrec;
 		}
 		ret = ntfs_attr_lookup(ni->type, ni->name, ni->name_len,
@@ -394,8 +395,9 @@ static int ntfs_read_wof_chunk(struct ntfs_volume *vol,
 
 	mutex_lock(&base_ni->mrec_lock);
 	ctx = ntfs_attr_get_search_ctx(base_ni, NULL);
-	if (!ctx) {
-		err = -ENOMEM;
+	if (IS_ERR(ctx)) {
+		err = PTR_ERR(ctx);
+		ctx = NULL;
 		goto out_unlock_mrec;
 	}
 
