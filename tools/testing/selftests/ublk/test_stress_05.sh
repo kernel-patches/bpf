@@ -3,6 +3,7 @@
 
 . "$(cd "$(dirname "$0")" && pwd)"/test_common.sh
 ERR_CODE=0
+pids=()
 
 if ! _have_program fio; then
 	exit "$UBLK_SKIP_CODE"
@@ -15,8 +16,7 @@ run_io_and_remove()
 	local dev_pid
 	shift 1
 
-	dev_id=$(_add_ublk_dev "$@")
-	_check_add_dev $TID $?
+	dev_id=$(_add_ublk_dev "$@") || return $?
 
 	[ "$UBLK_TEST_QUIET" -eq 0 ] && echo "run ublk IO vs. remove device(ublk add $*)"
 
@@ -40,8 +40,8 @@ ublk_io_and_remove()
 	ERR_CODE=$?
 	if [ ${ERR_CODE} -ne 0 ]; then
 		echo "$TID failure: $*"
-		_show_result $TID $ERR_CODE
 	fi
+	return "$ERR_CODE"
 }
 
 _prep_test "stress" "run IO and remove device with recovery enabled"
@@ -51,33 +51,47 @@ _create_backfile 1 256M
 
 for reissue in $(seq 0 1); do
 	ublk_io_and_remove 8G -t null -q 4 -g -r 1 -i "$reissue" &
+	pids+=("$!")
 	ublk_io_and_remove 256M -t loop -q 4 -g -r 1 -i "$reissue" "${UBLK_BACKFILES[0]}" &
-	wait
+	pids+=("$!")
+	_wait_test_pids "${pids[@]}"
+	pids=()
 done
 
 if _have_feature "ZERO_COPY"; then
 	for reissue in $(seq 0 1); do
 		ublk_io_and_remove 8G -t null -q 4 -z -r 1 -i "$reissue" &
+		pids+=("$!")
 		ublk_io_and_remove 256M -t loop -q 4 -z -r 1 -i "$reissue" "${UBLK_BACKFILES[1]}" &
-		wait
+		pids+=("$!")
+		_wait_test_pids "${pids[@]}"
+		pids=()
 	done
 fi
 
 if _have_feature "AUTO_BUF_REG"; then
 	for reissue in $(seq 0 1); do
 		ublk_io_and_remove 8G -t null -q 4 --auto_zc -r 1 -i "$reissue" &
+		pids+=("$!")
 		ublk_io_and_remove 256M -t loop -q 4 --auto_zc -r 1 -i "$reissue" "${UBLK_BACKFILES[1]}" &
+		pids+=("$!")
 		ublk_io_and_remove 8G -t null -q 4 -z --auto_zc --auto_zc_fallback -r 1 -i "$reissue" &
-		wait
+		pids+=("$!")
+		_wait_test_pids "${pids[@]}"
+		pids=()
 	done
 fi
 
 if _have_feature "PER_IO_DAEMON"; then
 	ublk_io_and_remove 8G -t null -q 4 --nthreads 8 --per_io_tasks -r 1 -i "$reissue" &
+	pids+=("$!")
 	ublk_io_and_remove 256M -t loop -q 4 --nthreads 8 --per_io_tasks -r 1 -i "$reissue" "${UBLK_BACKFILES[0]}" &
+	pids+=("$!")
 	ublk_io_and_remove 8G -t null -q 4 --nthreads 8 --per_io_tasks -r 1 -i "$reissue"  &
+	pids+=("$!")
 fi
-wait
+_wait_test_pids "${pids[@]}"
+pids=()
 
 _cleanup_test
 _show_result $TID $ERR_CODE

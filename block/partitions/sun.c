@@ -64,7 +64,7 @@ int sun_partition(struct parsed_partitions *state)
 		__be16 csum;       /* Label xor'd checksum */
 	} * label;
 	struct sun_partition *p;
-	unsigned long spc;
+	sector_t spc;
 	int use_vtoc;
 	int nparts;
 
@@ -102,9 +102,9 @@ int sun_partition(struct parsed_partitions *state)
 	 */
 	use_vtoc = use_vtoc || !(label->vtoc.sanity ||
 				 label->vtoc.version || label->vtoc.nparts);
-	spc = be16_to_cpu(label->ntrks) * be16_to_cpu(label->nsect);
+	spc = (sector_t)be16_to_cpu(label->ntrks) * be16_to_cpu(label->nsect);
 	for (i = 0; i < nparts; i++, p++) {
-		unsigned long st_sector;
+		sector_t st_sector;
 		unsigned int num_sectors;
 
 		st_sector = be32_to_cpu(p->start_cylinder) * spc;

@@ -3,7 +3,7 @@
 #define IOU_KBUF_H
 
 #include <uapi/linux/io_uring.h>
-#include <linux/io_uring_types.h>
+#include <linux/io_uring.h>
 
 enum {
 	/* ring mapped provided buffers */
@@ -98,7 +98,7 @@ static inline bool io_kbuf_recycle_ring(struct io_kiocb *req,
 					struct io_buffer_list *bl)
 {
 	if (bl) {
-		req->flags &= ~(REQ_F_BUFFER_RING|REQ_F_BUFFERS_COMMIT);
+		io_req_clear_flags(req, REQ_F_BUFFER_RING|REQ_F_BUFFERS_COMMIT);
 		return true;
 	}
 	return false;

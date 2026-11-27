@@ -172,13 +172,15 @@ static void io_release_ubuf(void *priv)
 	}
 }
 
-static struct io_mapped_ubuf *io_alloc_imu(struct io_ring_ctx *ctx,
-					   int nr_bvecs)
+static bool io_alloc_imu(struct io_ring_ctx *ctx, int nr_bvecs,
+			 struct io_mapped_ubuf **imu)
 {
 	if (nr_bvecs <= IO_CACHED_BVECS_SEGS)
-		return io_cache_alloc(&ctx->imu_cache, GFP_KERNEL_ACCOUNT);
-	return kvmalloc_flex(struct io_mapped_ubuf, bvec, nr_bvecs,
+		return io_cache_alloc(&ctx->imu_cache, GFP_KERNEL_ACCOUNT,
+				      (void **)imu);
+	*imu = kvmalloc_flex(struct io_mapped_ubuf, bvec, nr_bvecs,
 			     GFP_KERNEL_ACCOUNT);
+	return *imu;
 }
 
 static void io_free_imu(struct io_ring_ctx *ctx, struct io_mapped_ubuf *imu)
@@ -257,18 +259,21 @@ static void io_buffer_unmap(struct io_ring_ctx *ctx, struct io_mapped_ubuf *imu)
 	io_free_imu(ctx, imu);
 }
 
-struct io_rsrc_node *io_rsrc_node_alloc(struct io_ring_ctx *ctx, int type)
+bool io_rsrc_node_alloc(struct io_ring_ctx *ctx, int type,
+			struct io_rsrc_node **node_out)
 {
 	struct io_rsrc_node *node;
 
-	node = io_cache_alloc(&ctx->node_cache, GFP_KERNEL_ACCOUNT);
-	if (node) {
+	if (io_cache_alloc(&ctx->node_cache, GFP_KERNEL_ACCOUNT,
+			   (void **)&node)) {
 		node->type = type;
 		node->refs = 1;
 		node->tag = 0;
 		node->file_ptr = 0;
+		*node_out = node;
+		return true;
 	}
-	return node;
+	return false;
 }
 
 bool io_rsrc_cache_init(struct io_ring_ctx *ctx)
@@ -380,8 +385,7 @@ static int __io_sqe_files_update(struct io_ring_ctx *ctx,
 				err = -EBADF;
 				break;
 			}
-			node = io_rsrc_node_alloc(ctx, IORING_RSRC_FILE);
-			if (!node) {
+			if (!io_rsrc_node_alloc(ctx, IORING_RSRC_FILE, &node)) {
 				err = -ENOMEM;
 				fput(file);
 				break;
@@ -639,8 +643,6 @@ int io_files_update(struct io_kiocb *req, unsigned int issue_flags)
 		io_ring_submit_unlock(ctx, issue_flags);
 	}
 
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -724,8 +726,7 @@ int io_sqe_files_register(struct io_ring_ctx *ctx, void __user *arg,
 			goto fail;
 		}
 		ret = -ENOMEM;
-		node = io_rsrc_node_alloc(ctx, IORING_RSRC_FILE);
-		if (!node) {
+		if (!io_rsrc_node_alloc(ctx, IORING_RSRC_FILE, &node)) {
 			fput(file);
 			goto fail;
 		}
@@ -921,12 +922,10 @@ static struct io_rsrc_node *io_register_dmabuf_desc(struct io_ring_ctx *ctx,
 	struct io_mapped_ubuf *imu = NULL;
 	int ret;
 
-	node = io_rsrc_node_alloc(ctx, IORING_RSRC_BUFFER);
-	if (!node)
+	if (!io_rsrc_node_alloc(ctx, IORING_RSRC_BUFFER, &node))
 		return ERR_PTR(-ENOMEM);
 
-	imu = io_alloc_imu(ctx, 0);
-	if (!imu) {
+	if (!io_alloc_imu(ctx, 0, &imu)) {
 		ret = -ENOMEM;
 		goto err;
 	}
@@ -983,8 +982,7 @@ static struct io_rsrc_node *io_sqe_buffer_register(struct io_ring_ctx *ctx,
 	if (ret)
 		return ERR_PTR(ret);
 
-	node = io_rsrc_node_alloc(ctx, IORING_RSRC_BUFFER);
-	if (!node)
+	if (!io_rsrc_node_alloc(ctx, IORING_RSRC_BUFFER, &node))
 		return ERR_PTR(-ENOMEM);
 
 	ret = -ENOMEM;
@@ -1001,8 +999,7 @@ static struct io_rsrc_node *io_sqe_buffer_register(struct io_ring_ctx *ctx,
 			coalesced = io_coalesce_buffer(&pages, &nr_pages, &data);
 	}
 
-	imu = io_alloc_imu(ctx, nr_pages);
-	if (!imu)
+	if (!io_alloc_imu(ctx, nr_pages, &imu))
 		goto done;
 
 	imu->nr_bvecs = nr_pages;
@@ -1141,12 +1138,10 @@ static struct io_mapped_ubuf *io_kernel_buffer_init(struct io_ring_ctx *ctx,
 	if (data->nodes[index])
 		return ERR_PTR(-EBUSY);
 
-	node = io_rsrc_node_alloc(ctx, IORING_RSRC_BUFFER);
-	if (!node)
+	if (!io_rsrc_node_alloc(ctx, IORING_RSRC_BUFFER, &node))
 		return ERR_PTR(-ENOMEM);
 
-	imu = io_alloc_imu(ctx, nr_bvecs);
-	if (!imu) {
+	if (!io_alloc_imu(ctx, nr_bvecs, &imu)) {
 		io_cache_free(&ctx->node_cache, node);
 		return ERR_PTR(-ENOMEM);
 	}
@@ -1364,7 +1359,7 @@ inline struct io_rsrc_node *io_find_buf_node(struct io_kiocb *req,
 
 	if (req->flags & REQ_F_BUF_NODE)
 		return req->buf_node;
-	req->flags |= REQ_F_BUF_NODE;
+	io_req_set_flags(req, REQ_F_BUF_NODE);
 
 	io_ring_submit_lock(ctx, issue_flags);
 	node = io_rsrc_node_lookup(&ctx->buf_table, req->buf_index);
@@ -1374,7 +1369,7 @@ inline struct io_rsrc_node *io_find_buf_node(struct io_kiocb *req,
 		io_ring_submit_unlock(ctx, issue_flags);
 		return node;
 	}
-	req->flags &= ~REQ_F_BUF_NODE;
+	io_req_clear_flags(req, REQ_F_BUF_NODE);
 	io_ring_submit_unlock(ctx, issue_flags);
 	return NULL;
 }
@@ -1528,8 +1523,8 @@ static int io_clone_buffers(struct io_ring_ctx *ctx, struct io_ring_ctx *src_ctx
 				return -EOPNOTSUPP;
 			}
 
-			dst_node = io_rsrc_node_alloc(ctx, IORING_RSRC_BUFFER);
-			if (!dst_node) {
+			if (!io_rsrc_node_alloc(ctx, IORING_RSRC_BUFFER,
+						&dst_node)) {
 				io_rsrc_data_free(ctx, &data);
 				return -ENOMEM;
 			}
@@ -1859,7 +1854,7 @@ int __io_import_reg_vec(int ddir, struct iov_iter *iter,
 
 		*vec = tmp_vec;
 		iov = vec->iovec + iovec_off;
-		req->flags |= REQ_F_NEED_CLEANUP;
+		io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 	}
 
 	if (imu->flags & IO_REGBUF_F_KBUF)
@@ -1879,7 +1874,7 @@ int io_prep_reg_iovec(struct io_kiocb *req, struct iou_vec *iv,
 		ret = io_vec_realloc(iv, uvec_segs);
 		if (ret)
 			return ret;
-		req->flags |= REQ_F_NEED_CLEANUP;
+		io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 	}
 
 	/* pad iovec to the right */
@@ -1890,6 +1885,6 @@ int io_prep_reg_iovec(struct io_kiocb *req, struct iou_vec *iv,
 	if (IS_ERR(res))
 		return PTR_ERR(res);
 
-	req->flags |= REQ_F_IMPORT_BUFFER;
+	io_req_set_flags(req, REQ_F_IMPORT_BUFFER);
 	return 0;
 }
