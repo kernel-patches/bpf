@@ -33,6 +33,9 @@ is actively working on adding a BPF backend compiler as well, but are still
 missing some features such as BTF type tags which are necessary for using
 kptrs.
 
+Schedulers that use BPF arena (address space 1) need clang 22 or newer. See
+the [troubleshooting entry](#bpf-arena-schedulers-require-clang-22).
+
 2. pahole >= 1.25
 
 You may need pahole in order to generate BTF from DWARF.
@@ -245,6 +248,32 @@ const struct scx_exit_info *ei)
 In order to resolve this, please follow the steps above in
 [Getting a vmlinux.h file](#getting-a-vmlinuxh-file) in order to ensure your
 schedulers are using a vmlinux.h file that includes the requisite types.
+
+## Load Failures
+
+### BPF arena schedulers require clang 22
+
+Schedulers that use BPF arena (address space 1), such as `scx_qmap`, need
+clang 22 or newer. With older compilers the program may be rejected by the
+verifier, for example:
+
+```
+libbpf: prog 'qmap_dequeue': BPF program load failed: -EACCES
+...
+R7 invalid mem access 'scalar'
+...
+libbpf: failed to load object 'scx_qmap'
+```
+
+The register number varies with the program. Clang older than 22 does not
+insert `addr_space_cast` around inlined memory intrinsics (`llvm.memset()`,
+`llvm.memcpy()`, ...) on arena pointers, so the verifier sees a plain scalar
+being dereferenced. This was fixed in LLVM 22 ("[BPF] Handle certain mem
+intrinsic functions with addr-space arguments"):
+https://github.com/llvm/llvm-project/commit/94f290fffd80bd7c7d65db1df78cdacab633aab4
+
+Rebuild the scheduler with a sufficiently new clang; run `make clean` in this
+directory first if the object files were built with an older compiler.
 
 ## Misc
 

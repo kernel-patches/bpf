@@ -2322,7 +2322,6 @@ void scx_resched_curr_deferred(struct rq *rq);
 u64 __scx_bpf_now(struct rq *rq);
 void schedule_dsq_reenq(struct scx_sched *sch, struct scx_dispatch_q *dsq,
 			u64 reenq_flags, struct rq *locked_rq);
-void scx_wait_dispatching(struct task_struct *p);
 int __scx_init_task(struct scx_sched *sch, struct task_struct *p,
 		    struct cgroup *cgrp, bool fork);
 void scx_enable_task(struct scx_sched *sch, struct task_struct *p);
@@ -2768,14 +2767,14 @@ static inline struct scx_sched *scx_parent(struct scx_sched *sch) { return NULL;
 #endif	/* CONFIG_EXT_SUB_SCHED */
 
 /**
- * scx_exec_sched - Find the sched running @sch's tasks on @cpu
+ * scx_exec_sched - Find the sched hosting @sch's tasks on @cpu
  * @sch: sched owning the tasks
  * @cpu: cpu of interest
  *
- * A bypassing sched's tasks are run by its nearest ancestor that isn't
- * bypassing. Return @sch if it isn't bypassing on @cpu, otherwise that
- * ancestor, or the root if every ancestor is bypassing. Hold @cpu's rq lock for
- * a stable answer.
+ * A bypassing sched's tasks are hosted on the bypass DSQs of its nearest
+ * ancestor that isn't bypassing. Return @sch if it isn't bypassing on @cpu,
+ * otherwise that ancestor, or the root if every ancestor is bypassing. Hold
+ * @cpu's rq lock for a stable answer.
  */
 static inline struct scx_sched *scx_exec_sched(struct scx_sched *sch, s32 cpu)
 {

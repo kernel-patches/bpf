@@ -8,7 +8,11 @@
  * the dispatching CPU's local DSQ, so most moves cross CPUs. With
  * @test_use_move_to_local, tasks are queued on a user DSQ and consumed with
  * scx_bpf_dsq_move_to_local(). Otherwise, they are queued in a BPF queue and
- * dispatched with SCX_DSQ_LOCAL_ON.
+ * dispatched with SCX_DSQ_LOCAL_ON or, with @test_use_global, inserted into
+ * SCX_DSQ_GLOBAL, often from a CPU other than the task's.
+ *
+ * ops.dequeue() also verifies that it's always called with the task's rq
+ * locked.
  *
  * Copyright (c) 2026 Google LLC.
  */
@@ -53,10 +57,11 @@ struct task_struct___core_sched {
 } __attribute__((preserve_access_index));
 
 bool test_use_move_to_local;
+bool test_use_global;
 
 u64 enqueue_cnt, dequeue_cnt, dispatch_dequeue_cnt, change_dequeue_cnt;
 u64 remote_dispatch_cnt, remote_running_cnt, missed_dequeue_cnt;
-u64 core_sched_exec_dequeue_cnt;
+u64 core_sched_exec_dequeue_cnt, remote_global_cnt, wrong_rq_dequeue_cnt;
 
 static struct task_ctx *lookup_task_ctx(struct task_struct *p)
 {
@@ -121,8 +126,21 @@ out:
 void BPF_STRUCT_OPS(dequeue_remote_dequeue, struct task_struct *p, u64 deq_flags)
 {
 	struct task_ctx *tctx;
+	struct rq *locked_rq;
 
 	__sync_fetch_and_add(&dequeue_cnt, 1);
+
+	/*
+	 * ops.dequeue() must always run with @p's rq locked, even when @p is
+	 * inserted into SCX_DSQ_GLOBAL by ops.dispatch() on another CPU.
+	 */
+	locked_rq = scx_bpf_locked_rq();
+	if (!locked_rq || locked_rq->cpu != scx_bpf_task_cpu(p)) {
+		__sync_fetch_and_add(&wrong_rq_dequeue_cnt, 1);
+		scx_bpf_error("%d (%s): dequeue without task rq lock (locked=%d cpu=%d)",
+			      p->pid, p->comm, locked_rq ? locked_rq->cpu : -1,
+			      scx_bpf_task_cpu(p));
+	}
 
 	tctx = lookup_task_ctx(p);
 	if (!tctx)
@@ -187,7 +205,17 @@ void BPF_STRUCT_OPS(dequeue_remote_dispatch, s32 cpu, struct task_struct *prev)
 			continue;
 		}
 
-		if (bpf_cpumask_test_cpu(cpu, p->cpus_ptr)) {
+		if (test_use_global) {
+			/*
+			 * @p goes on the global DSQ of its own node, which this
+			 * CPU may not consume. Kick @p's CPU in case it's idle.
+			 */
+			if (scx_bpf_task_cpu(p) != cpu) {
+				__sync_fetch_and_add(&remote_global_cnt, 1);
+				scx_bpf_kick_cpu(scx_bpf_task_cpu(p), SCX_KICK_IDLE);
+			}
+			scx_bpf_dsq_insert(p, SCX_DSQ_GLOBAL, SCX_SLICE_DFL, 0);
+		} else if (bpf_cpumask_test_cpu(cpu, p->cpus_ptr)) {
 			if (scx_bpf_task_cpu(p) != cpu)
 				__sync_fetch_and_add(&remote_dispatch_cnt, 1);
 			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL_ON | cpu,
