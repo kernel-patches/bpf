@@ -41,6 +41,7 @@ static inline struct ccu_common *hw_to_ccu_common(struct clk_hw *hw)
 
 struct spacemit_ccu_data {
 	const char *reset_name;
+	const char *pm_name;
 	struct clk_hw **hws;
 	size_t num;
 };

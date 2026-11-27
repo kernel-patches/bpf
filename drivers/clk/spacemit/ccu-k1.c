@@ -972,6 +972,7 @@ static struct clk_hw *k1_ccu_apmu_hws[] = {
 
 static const struct spacemit_ccu_data k1_ccu_apmu_data = {
 	.reset_name	= "k1-apmu-reset",
+	.pm_name	= "k1-apmu-pmdomain",
 	.hws		= k1_ccu_apmu_hws,
 	.num		= ARRAY_SIZE(k1_ccu_apmu_hws),
 };
