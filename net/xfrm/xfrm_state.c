@@ -221,7 +221,6 @@ static void xfrm_hash_resize(struct work_struct *work)
 	xfrm_hash_free(oseq, osize);
 }
 
-static DEFINE_SPINLOCK(xfrm_state_afinfo_lock);
 static struct xfrm_state_afinfo __rcu *xfrm_state_afinfo[NPROTO];
 
 static DEFINE_SPINLOCK(xfrm_state_gc_lock);
@@ -534,16 +533,13 @@ static const struct xfrm_mode *xfrm_get_mode(unsigned int encap, int family)
 }
 
 static const struct xfrm_mode_cbs  __rcu *xfrm_mode_cbs_map[XFRM_MODE_MAX];
-static DEFINE_SPINLOCK(xfrm_mode_cbs_map_lock);
 
 int xfrm_register_mode_cbs(u8 mode, const struct xfrm_mode_cbs *mode_cbs)
 {
 	if (mode >= XFRM_MODE_MAX)
 		return -EINVAL;
 
-	spin_lock_bh(&xfrm_mode_cbs_map_lock);
 	rcu_assign_pointer(xfrm_mode_cbs_map[mode], mode_cbs);
-	spin_unlock_bh(&xfrm_mode_cbs_map_lock);
 
 	return 0;
 }
@@ -554,9 +550,7 @@ void xfrm_unregister_mode_cbs(u8 mode)
 	if (mode >= XFRM_MODE_MAX)
 		return;
 
-	spin_lock_bh(&xfrm_mode_cbs_map_lock);
 	RCU_INIT_POINTER(xfrm_mode_cbs_map[mode], NULL);
-	spin_unlock_bh(&xfrm_mode_cbs_map_lock);
 	synchronize_rcu();
 }
 EXPORT_SYMBOL(xfrm_unregister_mode_cbs);
@@ -1657,10 +1651,11 @@ out:
 		*err = acquire_in_progress ? -EAGAIN : error;
 	}
 
-	if (x && x->km.state == XFRM_STATE_VALID && !cached &&
+	if (x && !cached &&
 	    (!(pol->flags & XFRM_POLICY_CPU_ACQUIRE) || x->pcpu_num == pcpu_id)) {
 		spin_lock_bh(&net->xfrm.xfrm_state_lock);
-		if (hlist_unhashed(&x->state_cache))
+		if (x->km.state == XFRM_STATE_VALID &&
+		    hlist_unhashed(&x->state_cache))
 			hlist_add_head_rcu(&x->state_cache, &pol->state_cache_list);
 		spin_unlock_bh(&net->xfrm.xfrm_state_lock);
 	}
@@ -3027,7 +3022,6 @@ static bool km_is_alive(const struct km_event *c)
 }
 
 #if IS_ENABLED(CONFIG_XFRM_USER_COMPAT)
-static DEFINE_SPINLOCK(xfrm_translator_lock);
 static struct xfrm_translator __rcu *xfrm_translator;
 
 struct xfrm_translator *xfrm_get_translator(void)
@@ -3054,31 +3048,22 @@ EXPORT_SYMBOL_GPL(xfrm_put_translator);
 
 int xfrm_register_translator(struct xfrm_translator *xtr)
 {
-	int err = 0;
+	if (cmpxchg(&xfrm_translator, NULL, RCU_INITIALIZER(xtr)))
+		return -EEXIST;
 
-	spin_lock_bh(&xfrm_translator_lock);
-	if (unlikely(xfrm_translator != NULL))
-		err = -EEXIST;
-	else
-		rcu_assign_pointer(xfrm_translator, xtr);
-	spin_unlock_bh(&xfrm_translator_lock);
-
-	return err;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(xfrm_register_translator);
 
 int xfrm_unregister_translator(struct xfrm_translator *xtr)
 {
+	struct xfrm_translator __rcu *old;
 	int err = 0;
 
-	spin_lock_bh(&xfrm_translator_lock);
-	if (likely(xfrm_translator != NULL)) {
-		if (rcu_access_pointer(xfrm_translator) != xtr)
-			err = -EINVAL;
-		else
-			RCU_INIT_POINTER(xfrm_translator, NULL);
-	}
-	spin_unlock_bh(&xfrm_translator_lock);
+	old = cmpxchg(&xfrm_translator, RCU_INITIALIZER(xtr), NULL);
+	if (old && old != RCU_INITIALIZER(xtr))
+		err = -EINVAL;
+
 	synchronize_rcu();
 
 	return err;
@@ -3166,36 +3151,30 @@ EXPORT_SYMBOL(xfrm_unregister_km);
 
 int xfrm_state_register_afinfo(struct xfrm_state_afinfo *afinfo)
 {
-	int err = 0;
-
 	if (WARN_ON(afinfo->family >= NPROTO))
 		return -EAFNOSUPPORT;
 
-	spin_lock_bh(&xfrm_state_afinfo_lock);
-	if (unlikely(xfrm_state_afinfo[afinfo->family] != NULL))
-		err = -EEXIST;
-	else
-		rcu_assign_pointer(xfrm_state_afinfo[afinfo->family], afinfo);
-	spin_unlock_bh(&xfrm_state_afinfo_lock);
-	return err;
+	if (cmpxchg(&xfrm_state_afinfo[afinfo->family], NULL,
+		    RCU_INITIALIZER(afinfo)))
+		return -EEXIST;
+
+	return 0;
 }
 EXPORT_SYMBOL(xfrm_state_register_afinfo);
 
 int xfrm_state_unregister_afinfo(struct xfrm_state_afinfo *afinfo)
 {
+	struct xfrm_state_afinfo __rcu *old;
 	int err = 0, family = afinfo->family;
 
 	if (WARN_ON(family >= NPROTO))
 		return -EAFNOSUPPORT;
 
-	spin_lock_bh(&xfrm_state_afinfo_lock);
-	if (likely(xfrm_state_afinfo[afinfo->family] != NULL)) {
-		if (rcu_access_pointer(xfrm_state_afinfo[family]) != afinfo)
-			err = -EINVAL;
-		else
-			RCU_INIT_POINTER(xfrm_state_afinfo[afinfo->family], NULL);
-	}
-	spin_unlock_bh(&xfrm_state_afinfo_lock);
+	old = cmpxchg(&xfrm_state_afinfo[family], RCU_INITIALIZER(afinfo),
+		      NULL);
+	if (old && old != RCU_INITIALIZER(afinfo))
+		err = -EINVAL;
+
 	synchronize_rcu();
 	return err;
 }
