@@ -5394,6 +5394,9 @@ static void ice_remove(struct pci_dev *pdev)
 		ice_free_vfs(pf);
 	}
 
+	ice_service_task_stop(pf);
+	ice_aq_cancel_waiting_tasks(pf);
+
 	if (!ice_is_safe_mode(pf))
 		ice_remove_arfs(pf);
 
@@ -5414,7 +5417,6 @@ static void ice_remove(struct pci_dev *pdev)
 	ice_deinit_hw(&pf->hw);
 
 	ice_deinit_dev(pf);
-	ice_aq_cancel_waiting_tasks(pf);
 	set_bit(ICE_DOWN, pf->state);
 }
 
