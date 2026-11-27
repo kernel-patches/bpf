@@ -9,6 +9,8 @@
 	aliases {
 		rtc0 = &rtc;
 		rtc1 = &snvs_rtc;
+		spi0 = &ecspi3;
+		/delete-property/ spi2;
 	};
 
 	backlight: backlight {

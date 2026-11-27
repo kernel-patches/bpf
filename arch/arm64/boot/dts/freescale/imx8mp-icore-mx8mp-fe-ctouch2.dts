@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (C) 2026 Amarula Solutions, Dario Binacchi <dario.binacchi@amarulasolutions.com>
+ * Copyright (C) 2026 Engicam srl
+ */
+
+/dts-v1/;
+
+#include "imx8mp.dtsi"
+#include "imx8mp-icore-mx8mp-fe.dtsi"
+#include "imx8mp-icore-mx8mp-ctouch2.dtsi"
+
+/ {
+	model = "Engicam i.Core MX8M Plus Fast Ethernet C.TOUCH 2.0";
+	compatible = "engicam,icore-mx8mp-fe-ctouch2", "engicam,icore-mx8mp-fe",
+		     "fsl,imx8mp";
+};

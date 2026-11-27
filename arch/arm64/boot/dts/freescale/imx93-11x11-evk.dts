@@ -22,6 +22,12 @@
 		VCC-supply = <&reg_3p3v>;
 	};
 
+	dmic: dmic {
+		compatible = "dmic-codec";
+		#sound-dai-cells = <0>;
+		num-channels = <4>;
+	};
+
 	pdm_mqs1_mux: mux-controller-0 {
 		compatible = "gpio-mux";
 		#mux-control-cells = <0>;
@@ -110,6 +116,10 @@
 		pri-dai-link {
 			link-name = "micfil hifi";
 			format = "i2s";
+
+			codec {
+				sound-dai = <&dmic>;
+			};
 
 			cpu {
 				sound-dai = <&micfil>;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
 /*
  * Copyright (c) Toradex
  *
@@ -22,37 +22,25 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 
+#include "imx6ull-imx7-colibri-tdx-panel-cap-touch-7inch-parallel.dtsi"
+
 &atmel_mxt_ts {
-	pinctrl-0 = <&pinctrl_atmel_adapter>;
+	pinctrl-0 = <&pinctrl_atmel_adap>;
 	/* SODIMM 28 / TOUCH_INT# */
-	interrupt-parent = <&gpio1>;
-	interrupts = <9 IRQ_TYPE_EDGE_FALLING>;
+	interrupt-parent = <&gpio4>;
+	interrupts = <16 IRQ_TYPE_EDGE_FALLING>;
 	/* SODIMM 30 / TOUCH_RST# */
-	reset-gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;
-
-	status = "okay";
-};
-
-&backlight {
-	status = "okay";
-};
-
-&lcdif {
-	status = "okay";
-};
-
-&panel_dpi {
-	compatible = "logictechno,lt161010-2nhc";
+	reset-gpios = <&gpio2 5 GPIO_ACTIVE_LOW>;
 
 	status = "okay";
 };
 
 /* Conflict with SODIMM 28 / TOUCH_INT# */
-&pwm2 {
+&pwm5 {
 	status = "disabled";
 };
 
 /* Conflict with SODIMM 30 / TOUCH_RST# */
-&pwm3 {
+&pwm6 {
 	status = "disabled";
 };

@@ -31,6 +31,8 @@
 		serial1 = &lpuart7;
 		serial2 = &lpuart1;
 		serial3 = &lpuart2;
+		spi0 = &lpspi6;
+		spi1 = &lpspi4;
 		usb0 = &usb3;
 		usb1 = &usb2;
 	};
@@ -91,6 +93,7 @@
 		gpios = <&som_gpio_expander_0 7 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 		regulator-always-on;
+		regulator-boot-on;
 		regulator-max-microvolt = <1200000>;
 		regulator-min-microvolt = <1200000>;
 		regulator-name = "On-module +V1.2_DP";
@@ -142,7 +145,7 @@
 		compatible = "fsl,imx95-cm7";
 		mboxes = <&mu7 0 1 &mu7 1 1 &mu7 3 1>;
 		mbox-names = "tx", "rx", "rxdb";
-		memory-region = <&vdevbuffer>, <&vdev0vring0>, <&vdev0vring1>,
+		memory-region = <&vdev0buffer>, <&vdev0vring0>, <&vdev0vring1>,
 				<&vdev1vring0>, <&vdev1vring1>, <&rsc_table>, <&m7_reserved>;
 	};
 
@@ -189,7 +192,7 @@
 			no-map;
 		};
 
-		vdevbuffer: vdevbuffer@88020000 {
+		vdev0buffer: vdev0buffer@88020000 {
 			compatible = "shared-dma-pool";
 			reg = <0 0x88020000 0 0x100000>;
 			no-map;
@@ -277,7 +280,29 @@
 			  "",
 			  "AQUILA_B42",
 			  "",
-			  "AQUILA_B43";
+			  "AQUILA_B43",
+			  "", /* 10 */
+			  "",
+			  "",
+			  "",
+			  "",
+			  "",
+			  "",
+			  "",
+			  "",
+			  "",
+			  "", /* 20 */
+			  "",
+			  "",
+			  "",
+			  "",
+			  "",
+			  "AQUILA_B58",
+			  "",
+			  "",
+			  "",
+			  "", /* 30 */
+			  "";
 };
 
 &gpio3 {
@@ -323,18 +348,20 @@
 			  "",
 			  "",
 			  "",
-			  "",
+			  "AQUILA_B23",
 			  "AQUILA_C22",
 			  "AQUILA_C21",
 			  "AQUILA_C20",
-			  "", /* 20 */
-			  "",
-			  "",
+			  "AQUILA_B21", /* 20 */
+			  "AQUILA_B20",
+			  "AQUILA_B22",
 			  "AQUILA_C23",
 			  "AQUILA_D23",
 			  "AQUILA_D24",
+			  "AQUILA_B24",
+			  "AQUILA_D25",
 			  "",
-			  "AQUILA_D25";
+			  "";
 };
 
 &gpio5 {
@@ -553,7 +580,7 @@
 };
 
 /* Aquila UART_4 */
-&lpuart2 {
+uart_mcu: &lpuart2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_uart2>;
 };
@@ -932,7 +959,7 @@
 	};
 
 	/* Aquila I2C_2 */
-	pinctrl_i3c2: i3c2cgrp {
+	pinctrl_i3c2: i3c2grp {
 		fsl,pins = <IMX95_PAD_ENET1_MDC__I3C2_SCL	0x40001186>, /* Aquila C17 */
 			   <IMX95_PAD_ENET1_MDIO__I3C2_SDA	0x40001186>; /* Aquila C16 */
 	};
@@ -1041,8 +1068,28 @@
 			   <IMX95_PAD_ENET2_RX_CTL__NETCMIX_TOP_SAI2_TX_DATA_BIT0	0x11e>; /* Aquila B22 */
 	};
 
+	/* Aquila I2S_1_MCLK as GPIO */
+	pinctrl_i2s_1_mclk_gpio: sai2mclkgpiogrp {
+		fsl,pins = <IMX95_PAD_ENET2_RD2__GPIO4_IO_BIT26	0x31e>; /* Aquila B24 */
+	};
+
 	pinctrl_sai2_mclk: sai2mclkgrp {
 		fsl,pins = <IMX95_PAD_ENET2_RD2__NETCMIX_TOP_SAI2_MCLK	0x31e>; /* Aquila B24 */
+	};
+
+	/* Aquila I2S_1_D_IN as GPIO */
+	pinctrl_i2s_1_d_in_gpio: sai2rxdata0gpiogrp {
+		fsl,pins = <IMX95_PAD_ENET2_TD3__GPIO4_IO_BIT16	0x31e>; /* Aquila B23 */
+	};
+
+	/* Aquila I2S_1_D_OUT as GPIO */
+	pinctrl_i2s_1_d_out_gpio: sai2txdata0gpiogrp {
+		fsl,pins = <IMX95_PAD_ENET2_RX_CTL__GPIO4_IO_BIT22	0x31e>; /* Aquila B22 */
+	};
+
+	/* Aquila I2S_1_SYNC as GPIO */
+	pinctrl_i2s_1_sync_gpio: sai2txsyncgpiogrp {
+		fsl,pins = <IMX95_PAD_ENET2_TX_CTL__GPIO4_IO_BIT20	0x31e>; /* Aquila B21 */
 	};
 
 	/* Aquila SD_1_CD# as GPIO */
@@ -1068,6 +1115,11 @@
 	/* Aquila PWM_3_DSI */
 	pinctrl_pwm3_dsi: tpm5ch0grp {
 		fsl,pins = <IMX95_PAD_GPIO_IO06__TPM5_CH0	0x11e>; /* Aquila B46 */
+	};
+
+	/* Aquila PWM_4_DP as GPIO */
+	pinctrl_pwm4_dp_gpio: tpm5ch3gpiogrp {
+		fsl,pins = <IMX95_PAD_GPIO_IO26__GPIO2_IO_BIT26	0x31e>; /* Aquila B58 */
 	};
 
 	/* Aquila PWM_4_DP */

@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Overlay for the NXP FRDM-IMX8MPLUS board: connect PTP event channel 0
+ * of the EQOS Ethernet controller to the J18 expansion header.
+ *
+ *   J18 pin 13 (GPIO1_IO08): external timestamp input (EXTTS 0)
+ *   J18 pin 28 (GPIO1_IO09): periodic output (PEROUT 0)
+ */
+
+#include "imx8mp-pinfunc.h"
+
+/dts-v1/;
+/plugin/;
+
+&eqos {
+	pinctrl-0 = <&pinctrl_eqos>, <&pinctrl_eqos_1588_event>;
+};
+
+&iomuxc {
+	pinctrl_eqos_1588_event: eqos1588eventgrp {
+		fsl,pins = <
+			MX8MP_IOMUXC_GPIO1_IO08__ENET_QOS_1588_EVENT0_AUX_IN	(MX8MP_PULL_ENABLE | MX8MP_HYS_SCHMITT)
+			MX8MP_IOMUXC_GPIO1_IO09__ENET_QOS_1588_EVENT0_OUT	(MX8MP_DSE_X6 | MX8MP_FSEL_FAST)
+		>;
+	};
+};

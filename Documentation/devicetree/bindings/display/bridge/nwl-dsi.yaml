@@ -137,8 +137,6 @@ properties:
       - port@1
 
 required:
-  - '#address-cells'
-  - '#size-cells'
   - clock-names
   - clocks
   - compatible
