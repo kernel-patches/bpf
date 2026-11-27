@@ -38,9 +38,6 @@ static inline bool mempool_is_saturated(struct mempool *pool)
 }
 
 void mempool_exit(struct mempool *pool);
-int mempool_init_node(struct mempool *pool, int min_nr,
-		mempool_alloc_t *alloc_fn, mempool_free_t *free_fn,
-		void *pool_data, gfp_t gfp_mask, int node_id);
 int mempool_init_noprof(struct mempool *pool, int min_nr,
 		mempool_alloc_t *alloc_fn, mempool_free_t *free_fn,
 		void *pool_data);
@@ -59,7 +56,9 @@ struct mempool *mempool_create_node_noprof(int min_nr,
 	mempool_create_node(_min_nr, _alloc_fn, _free_fn, _pool_data,	\
 			    GFP_KERNEL, NUMA_NO_NODE)
 
-int mempool_resize(struct mempool *pool, int new_min_nr);
+int mempool_resize_noprof(struct mempool *pool, int new_min_nr);
+#define mempool_resize(...)						\
+	alloc_hooks(mempool_resize_noprof(__VA_ARGS__))
 void mempool_destroy(struct mempool *pool);
 
 void *mempool_alloc_noprof(struct mempool *pool, gfp_t gfp_mask) __malloc;

@@ -42,7 +42,13 @@
 		    F_SEAL_EXEC)
 
 #define MFD_NOEXEC_SEAL	0x0008U
-union semun {
+
+/*
+ * glibc and musl leave union semun for the caller to define, but bionic
+ * already provides it in <sys/sem.h>. Use a private name so the test
+ * builds against all of them.
+ */
+union memfd_semun {
 	int val;
 	struct semid_ds *buf;
 	unsigned short int *array;
@@ -120,6 +126,8 @@ static void sysctl_assert_write(const char *val)
 		printf("write sysctl %s failed: %m\n", val);
 		abort();
 	}
+
+	close(fd);
 }
 
 static void sysctl_fail_write(const char *val)
@@ -136,6 +144,8 @@ static void sysctl_fail_write(const char *val)
 				val);
 		abort();
 	}
+
+	close(fd);
 }
 
 static void sysctl_assert_equal(const char *val)
@@ -152,6 +162,8 @@ static void sysctl_assert_equal(const char *val)
 		printf("read sysctl failed: %m\n");
 		abort();
 	}
+
+	close(fd);
 
 	/* Strip trailing whitespace. */
 	p = buf;
@@ -1387,7 +1399,7 @@ static void test_sysctl_sysctl2_failset(void)
 static int sysctl_nested_child(void *arg)
 {
 	int pid, sem;
-	union semun semun;
+	union memfd_semun semun;
 	struct sembuf sembuf;
 
 	printf("%s nested sysctl 0\n", memfd_str);

@@ -18,6 +18,11 @@ struct folio;
 
 /**
  * struct folio_batch - A collection of folios.
+ * @nr: Number of folios currently in the batch.
+ * @i: Index of the next folio to process in folio_batch_next().
+ * @percpu_pvec_drained: Whether the per-CPU deferred LRU queues have already
+ *                       been drained during __folio_batch_release().
+ * @folios: Array of pointers to the folios in the batch.
  *
  * The folio_batch is used to amortise the cost of retrieving and
  * operating on a set of folios.  The order of folios in the batch may be

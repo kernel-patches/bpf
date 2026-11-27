@@ -28,6 +28,9 @@
 #include <trace/events/printk.h>
 
 #include <asm/page.h>
+#ifdef CONFIG_DCACHE_WORD_ACCESS
+#include <asm/word-at-a-time.h>
+#endif
 
 #include "kasan.h"
 #include "../slab.h"
@@ -1052,22 +1055,30 @@ static void kmem_cache_oob(struct kunit *test)
 
 static void kmem_cache_double_free(struct kunit *test)
 {
-	char *p;
+	char *p, *pin;
 	size_t size = 200;
 	struct kmem_cache *cache;
 
 	cache = kmem_cache_create("test_cache", size, 0, 0, NULL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cache);
 
+	migrate_disable();
+	pin = kmem_cache_alloc(cache, GFP_KERNEL);
 	p = kmem_cache_alloc(cache, GFP_KERNEL);
-	if (!p) {
+	migrate_enable();
+
+	if (!p || !pin) {
 		kunit_err(test, "Allocation failed: %s\n", __func__);
+		kfree(p);
+		kfree(pin);
 		kmem_cache_destroy(cache);
 		return;
 	}
 
 	kmem_cache_free(cache, p);
 	KUNIT_EXPECT_KASAN_FAIL(test, kmem_cache_free(cache, p));
+
+	kmem_cache_free(cache, pin);
 	kmem_cache_destroy(cache);
 }
 
@@ -1286,7 +1297,7 @@ static void kmem_cache_rcu_uaf(struct kunit *test)
  */
 static void kmem_cache_rcu_reuse(struct kunit *test)
 {
-	char *p, *p2;
+	char *p, *p2, *pin;
 	struct kmem_cache *cache;
 
 	KASAN_TEST_NEEDS_CONFIG_OFF(test, CONFIG_SLUB_RCU_DEBUG);
@@ -1296,6 +1307,13 @@ static void kmem_cache_rcu_reuse(struct kunit *test)
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cache);
 
 	migrate_disable();
+	pin = kmem_cache_alloc(cache, GFP_KERNEL);
+	if (!pin) {
+		kunit_err(test, "Allocation failed: %s\n", __func__);
+		migrate_enable();
+		goto destroy;
+	}
+
 	p = kmem_cache_alloc(cache, GFP_KERNEL);
 	if (!p) {
 		kunit_err(test, "Allocation failed: %s\n", __func__);
@@ -1312,8 +1330,12 @@ static void kmem_cache_rcu_reuse(struct kunit *test)
 
 	kmem_cache_free(cache, p2);
 
+
 out:
 	migrate_enable();
+	kmem_cache_free(cache, pin);
+
+destroy:
 	kmem_cache_destroy(cache);
 }
 
@@ -1805,6 +1827,26 @@ static void kasan_memcmp(struct kunit *test)
 	KUNIT_EXPECT_KASAN_FAIL_READ(test,
 		kasan_int_result = memcmp(ptr, arr, size+1));
 	kfree(ptr);
+}
+
+static void kasan_load_unaligned_zeropad(struct kunit *test)
+{
+#ifdef CONFIG_DCACHE_WORD_ACCESS
+	char *ptr;
+
+	/* The tag check is turned off for this load on arm64 with MTE. */
+	KASAN_TEST_NEEDS_CONFIG_OFF(test, CONFIG_KASAN_HW_TAGS);
+
+	ptr = kmalloc(64, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ptr);
+	kfree(ptr);
+
+	OPTIMIZER_HIDE_VAR(ptr);
+	KUNIT_EXPECT_KASAN_FAIL_READ(test,
+		kasan_int_result = load_unaligned_zeropad(ptr));
+#else
+	kunit_skip(test, "Test requires CONFIG_DCACHE_WORD_ACCESS=y");
+#endif
 }
 
 static void kasan_strings(struct kunit *test)
@@ -2403,6 +2445,7 @@ static struct kunit_case kasan_kunit_test_cases[] = {
 	KUNIT_CASE(kasan_alloca_oob_right),
 	KUNIT_CASE(kasan_memchr),
 	KUNIT_CASE(kasan_memcmp),
+	KUNIT_CASE(kasan_load_unaligned_zeropad),
 	KUNIT_CASE(kasan_strings),
 	KUNIT_CASE(kasan_bitops_generic),
 	KUNIT_CASE(kasan_bitops_tags),

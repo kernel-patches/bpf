@@ -626,7 +626,7 @@ static int __memcg_list_lru_alloc(struct mem_cgroup *memcg,
 			}
 			xas_unlock_irqrestore(&xas, flags);
 		} while (xas_nomem(&xas, gfp));
-	} while (pos != memcg && !css_is_dying(&pos->css));
+	} while (pos != memcg && !css_is_dying(&pos->css) && !xas_error(&xas));
 
 	if (unlikely(mlru))
 		kfree(mlru);

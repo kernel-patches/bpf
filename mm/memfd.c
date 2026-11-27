@@ -79,12 +79,6 @@ struct folio *memfd_alloc_folio(struct file *memfd, pgoff_t idx)
 	gfp_t gfp_mask;
 
 	if (is_file_hugepages(memfd)) {
-		/*
-		 * The folio would most likely be accessed by a DMA driver,
-		 * therefore, we have zone memory constraints where we can
-		 * alloc from. Also, the folio will be pinned for an indefinite
-		 * amount of time, so it is not expected to be migrated away.
-		 */
 		struct inode *inode = file_inode(memfd);
 		struct hstate *h = hstate_file(memfd);
 		int err = -ENOMEM;
@@ -92,7 +86,6 @@ struct folio *memfd_alloc_folio(struct file *memfd, pgoff_t idx)
 		u32 hash;
 
 		gfp_mask = htlb_alloc_mask(h);
-		gfp_mask &= ~(__GFP_HIGHMEM | __GFP_MOVABLE);
 		idx >>= huge_page_order(h);
 
 		/*
@@ -102,6 +95,21 @@ struct folio *memfd_alloc_folio(struct file *memfd, pgoff_t idx)
 		 */
 		hash = hugetlb_fault_mutex_hash(memfd->f_mapping, idx);
 		mutex_lock(&hugetlb_fault_mutex_table[hash]);
+
+		filemap_invalidate_lock_shared(memfd->f_mapping);
+		if (!hugetlb_pgoff_valid(memfd->f_mapping, idx, /* partial= */ true)) {
+			err = -EINVAL;
+			goto out_unlock;
+		}
+
+		/* Let the caller retry if we raced with population. */
+		folio = filemap_get_folio(memfd->f_mapping,
+					  idx << huge_page_order(h));
+		if (!IS_ERR(folio)) {
+			folio_put(folio);
+			err = -EEXIST;
+			goto out_unlock;
+		}
 
 		nr_resv = hugetlb_reserve_pages(inode, idx, idx + 1, NULL, EMPTY_VMA_FLAGS);
 		if (nr_resv < 0) {
@@ -138,6 +146,7 @@ struct folio *memfd_alloc_folio(struct file *memfd, pgoff_t idx)
 
 			hugetlb_set_folio_subpool(folio, subpool_inode(inode));
 			folio_unlock(folio);
+			filemap_invalidate_unlock_shared(memfd->f_mapping);
 			mutex_unlock(&hugetlb_fault_mutex_table[hash]);
 			return folio;
 		}
@@ -145,6 +154,7 @@ err_unresv:
 		if (nr_resv > 0)
 			hugetlb_unreserve_pages(inode, idx, idx + 1, 0);
 out_unlock:
+		filemap_invalidate_unlock_shared(memfd->f_mapping);
 		mutex_unlock(&hugetlb_fault_mutex_table[hash]);
 		return ERR_PTR(err);
 	}

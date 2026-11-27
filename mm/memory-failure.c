@@ -68,6 +68,8 @@
 #include "swap.h"
 #include "page_alloc.h"
 #include "internal.h"
+#include "memory-failure.h"
+#include "hugetlb_vmemmap.h"
 
 static int sysctl_memory_failure_early_kill __read_mostly;
 
@@ -2037,6 +2039,7 @@ static int get_huge_page_for_hwpoison(unsigned long pfn, int flags,
 	bool count_increased = false;
 	int ret, rc;
 
+	guard(vmemmap_remap)();
 	spin_lock_irq(&hugetlb_lock);
 	folio = page_folio(page);
 	if (!folio_test_hugetlb(folio)) {
@@ -2809,8 +2812,22 @@ int unpoison_memory(unsigned long pfn)
 		goto unlock_mutex;
 	}
 
+	/*
+	 * A hugetlb folio without reliable raw error info is leaked once it
+	 * is freed, and its hugetlb flag may be cleared by then.  Check the
+	 * flag in folio->private, which stays set on the leaked folio.
+	 */
+	if (folio_test_large(folio) &&
+	    folio_test_hugetlb_raw_hwp_unreliable(folio)) {
+		unpoison_pr_info("%#lx: cannot unpoison, poisoned subpages are unknown\n",
+				 pfn, &unpoison_rs);
+
+		goto unlock_mutex;
+	}
+
 	ghp = get_hwpoison_page(p, MF_UNPOISON);
 	if (!ghp) {
+		guard(vmemmap_remap)();
 		if (folio_test_hugetlb(folio)) {
 			huge = true;
 			count = folio_free_raw_hwp(folio, false);

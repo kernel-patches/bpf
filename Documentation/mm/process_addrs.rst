@@ -418,10 +418,10 @@ ordering of locks within memory management code:
 
   inode->i_rwsem        (while writing or truncating, not reading or faulting)
     mm->mmap_lock
-      mapping->invalidate_lock (in filemap_fault)
-        folio_lock
-          hugetlbfs_i_mmap_rwsem_key (in huge_pmd_share, see hugetlbfs below)
-            vma_start_write
+      vma_start_write[_killable]
+        mapping->invalidate_lock (in filemap_fault)
+          folio_lock
+            hugetlbfs_i_mmap_rwsem_key (in huge_pmd_share, see hugetlbfs below)
               mapping->i_mmap_rwsem
                 anon_vma->rwsem
                   mm->page_table_lock or pte_lock
@@ -659,7 +659,7 @@ acquired in :c:func:`!__p4d_alloc`, :c:func:`!__pud_alloc` and
    references the :c:member:`!mm->page_table_lock`.
 
 Allocating a PTE will either use the :c:member:`!mm->page_table_lock` or, if
-:c:macro:`!USE_SPLIT_PMD_PTLOCKS` is defined, a lock embedded in the PMD
+:c:macro:`!CONFIG_SPLIT_PMD_PTLOCKS` is enabled, a lock embedded in the PMD
 physical page metadata in the form of a :c:struct:`!struct ptdesc`, acquired by
 :c:func:`!pmd_ptdesc` called from :c:func:`!pmd_lock` and ultimately
 :c:func:`!__pte_alloc`.

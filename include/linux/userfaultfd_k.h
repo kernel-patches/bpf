@@ -167,11 +167,14 @@ static inline bool is_mergeable_vm_userfaultfd_ctx(struct vm_area_struct *vma,
 
 /*
  * Never enable huge pmd sharing on userfaultfd registered VMAs, because
- * userfaultfd state can be tracked per VMA or per page table entry.
+ * userfaultfd state can be tracked per VMA or per page table entry. Similarly,
+ * handle poison markers that stick around even after userfaultfd was
+ * unregistered.
  */
 static inline bool uffd_disable_huge_pmd_share(struct vm_area_struct *vma)
 {
-	return vma->vm_userfaultfd_ctx.ctx;
+	return vma->vm_userfaultfd_ctx.ctx ||
+	       vma_test_atomic_flag(vma, VMA_MAYBE_UFFD_POISON_BIT);
 }
 
 /*
@@ -198,7 +201,7 @@ static inline bool userfaultfd_missing(struct vm_area_struct *vma)
 
 static inline bool userfaultfd_wp(struct vm_area_struct *vma)
 {
-	return vma_test_any_mask(vma, VMA_UFFD_WP);
+	return vma_test_single_mask(vma, VMA_UFFD_WP);
 }
 
 static inline bool userfaultfd_minor(struct vm_area_struct *vma)
@@ -244,6 +247,18 @@ static inline bool userfaultfd_huge_pmd_rwp(struct vm_area_struct *vma,
 					    pmd_t pmd)
 {
 	return userfaultfd_rwp(vma) && pmd_uffd(pmd);
+}
+
+static inline bool userfaultfd_pte_protected(struct vm_area_struct *vma,
+					     pte_t pte)
+{
+	return userfaultfd_protected(vma) && pte_uffd(pte);
+}
+
+static inline bool userfaultfd_huge_pmd_protected(struct vm_area_struct *vma,
+						  pmd_t pmd)
+{
+	return userfaultfd_protected(vma) && pmd_uffd(pmd);
 }
 
 static inline bool userfaultfd_armed(struct vm_area_struct *vma)
@@ -386,6 +401,18 @@ static inline bool userfaultfd_pte_rwp(struct vm_area_struct *vma,
 
 static inline bool userfaultfd_huge_pmd_rwp(struct vm_area_struct *vma,
 					    pmd_t pmd)
+{
+	return false;
+}
+
+static inline bool userfaultfd_pte_protected(struct vm_area_struct *vma,
+					     pte_t pte)
+{
+	return false;
+}
+
+static inline bool userfaultfd_huge_pmd_protected(struct vm_area_struct *vma,
+						  pmd_t pmd)
 {
 	return false;
 }
