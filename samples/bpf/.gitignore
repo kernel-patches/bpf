@@ -12,7 +12,6 @@ spintest
 syscall_nrs.h
 syscall_tp
 task_fd_query
-tc_l2_redirect
 test_cgrp2_array_pin
 test_cgrp2_attach
 test_cgrp2_attach2
