@@ -1491,18 +1491,9 @@ static const char *ffs_dmabuf_get_timeline_name(struct dma_fence *fence)
 	return "";
 }
 
-static void ffs_dmabuf_fence_release(struct dma_fence *fence)
-{
-	struct ffs_dma_fence *dma_fence =
-		container_of(fence, struct ffs_dma_fence, base);
-
-	kfree(dma_fence);
-}
-
 static const struct dma_fence_ops ffs_dmabuf_fence_ops = {
 	.get_driver_name	= ffs_dmabuf_get_driver_name,
 	.get_timeline_name	= ffs_dmabuf_get_timeline_name,
-	.release		= ffs_dmabuf_fence_release,
 };
 
 static int ffs_dma_resv_lock(struct dma_buf *dmabuf, bool nonblock)
@@ -4135,7 +4126,7 @@ static ssize_t f_fs_opts_ready_show(struct config_item *item, char *page)
 
 CONFIGFS_ATTR_RO(f_fs_opts_, ready);
 
-static struct configfs_attribute *ffs_attrs[] = {
+static const struct configfs_attribute *const ffs_attrs[] = {
 	&f_fs_opts_attr_ready,
 	NULL,
 };
@@ -4153,7 +4144,7 @@ static const struct configfs_item_operations ffs_item_ops = {
 
 static const struct config_item_type ffs_func_type = {
 	.ct_item_ops	= &ffs_item_ops,
-	.ct_attrs	= ffs_attrs,
+	.ct_attrs_const	= ffs_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

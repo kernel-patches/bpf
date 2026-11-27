@@ -83,7 +83,7 @@
 #define F81534_TOKEN_MSR_CHANGE		0x04
 
 /*
- * We used interal SPI bus to access FLASH section. We must wait the SPI bus to
+ * We used internal SPI bus to access FLASH section. We must wait the SPI bus to
  * idle if we performed any command.
  *
  * SPI Bus status register: F81534_BUS_REG_STATUS
@@ -755,7 +755,7 @@ static int f81534_find_config_idx(struct usb_serial *serial, u8 *index)
  * The F81532/534 will not report serial port to USB serial subsystem when
  * H/W DCD/DSR/CTS/RI/RX pin connected to ground.
  *
- * To detect RX pin status, we'll enable MCR interal loopback, disable it and
+ * To detect RX pin status, we'll enable MCR internal loopback, disable it and
  * delayed for 60ms. It connected to ground If LSR register report UART_LSR_BI.
  */
 static bool f81534_check_port_hw_disabled(struct usb_serial *serial, int phy)
@@ -824,9 +824,9 @@ static bool f81534_check_port_hw_disabled(struct usb_serial *serial, int phy)
  * f81534_calc_num_ports() will run to final we marked as "oldest version"
  * for this IC.
  *
- * 2rd is designed to more generic to use any transceiver and this is our
+ * 2nd is designed to more generic to use any transceiver and this is our
  * mass production type. We'll save data in F81534_CUSTOM_ADDRESS_START
- * (0x2f00) with 9bytes. The 1st byte is a indicater. If the token is
+ * (0x2f00) with 9bytes. The 1st byte is a indicator. If the token is
  * F81534_CUSTOM_VALID_TOKEN(0xf0), the IC is 2nd gen type, the following
  * 4bytes save port mode (0:RS232/1:RS485 Invert/2:RS485), and the last
  * 4bytes save GPIO state(value from 0~7 to represent 3 GPIO output pin).

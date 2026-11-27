@@ -74,6 +74,7 @@ properties:
 
   resets:
     minItems: 1
+    maxItems: 4
 
 unevaluatedProperties: false
 

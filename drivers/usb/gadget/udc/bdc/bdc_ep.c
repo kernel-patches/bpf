@@ -198,7 +198,7 @@ static inline int bd_needed_req(struct bdc_req *req)
 	if (req->usb_req.length == 0)
 		return 1;
 
-	/* remaining bytes after tranfering all max BD size BD's */
+	/* remaining bytes after transferring all max BD size BD's */
 	remaining = req->usb_req.length % BD_MAX_BUFF_SIZE;
 	if (remaining)
 		bd_needed++;
@@ -298,8 +298,8 @@ static int bd_available_ep(struct bdc_ep *ep)
 		return bd_list->max_bdi - bd_list->num_tabs;
 
 	/*
-	 * Depending upon where eqp and dqp pointers are, caculate number
-	 * of avaialble bd's
+	 * Depending upon where eqp and dqp pointers are, calculate number
+	 * of available bd's
 	 */
 	if (bd_list->hwd_bdi < bd_list->eqp_bdi) {
 		/* available bd's are from eqp..max_bds + 0..dqp - chain_bds */
@@ -519,7 +519,7 @@ static int bdc_queue_xfr(struct bdc *bdc, struct bdc_req *req)
 	num_bds =  bd_needed_req(req);
 	bd_available = bd_available_ep(ep);
 
-	/* how many bd's are avaialble on ep */
+	/* how many bd's are available on ep */
 	if (num_bds > bd_available)
 		return -ENOMEM;
 
@@ -908,7 +908,8 @@ void bdc_free_ep(struct bdc *bdc)
 		if (!ep)
 			continue;
 
-		if (ep->flags & BDC_EP_ENABLED)
+		if ((ep->flags & BDC_EP_ENABLED) ||
+		    (epnum == 1 && ep->bd_list.num_tabs))
 			ep_bd_list_free(ep, ep->bd_list.num_tabs);
 
 		/* ep0 is not in this gadget list */
@@ -1093,7 +1094,7 @@ static void ep0_stall(struct bdc *bdc)
 	bdc->delayed_status = false;
 	ep_set_halt(ep, 1);
 
-	/* de-queue any pendig requests */
+	/* de-queue any pending requests */
 	while (!list_empty(&ep->queue)) {
 		req = list_entry(ep->queue.next, struct bdc_req,
 				queue);

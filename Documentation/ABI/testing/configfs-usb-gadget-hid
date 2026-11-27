@@ -10,4 +10,12 @@ Description:
 				except the data passed through /dev/hidg<N>
 		report_length	HID report length
 		subclass	HID device subclass to use
+		interval_fs	HID endpoint bInterval for full-speed
+				(in milliseconds, default: 10)
+		interval_hs	HID endpoint bInterval for high-speed, encoded
+				as 2^(bInterval-1) * 125 us (default: 4, i.e. 1 ms)
+		interval_ss	HID endpoint bInterval for super-speed, encoded
+				as 2^(bInterval-1) * 125 us (default: 4, i.e. 1 ms)
+		interval	HID endpoint bInterval for all speeds.
+				Overwrites the per-speed values above
 		=============	============================================

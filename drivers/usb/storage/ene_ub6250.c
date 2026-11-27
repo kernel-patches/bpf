@@ -475,7 +475,7 @@ struct ene_ub6250_info {
 	u32		bl_num;
 	int		SrbStatus;
 
-	/*------Power Managerment ---------------*/
+	/*------Power Management ---------------*/
 	bool		Power_IsResum;
 };
 
@@ -1092,7 +1092,6 @@ exit:
 
 	kfree(PageBuffer);
 
-	result = 0;
 	return result;
 }
 
@@ -1239,9 +1238,9 @@ static int ms_read_eraseblock(struct us_data *us, u32 PhyBlockAddr)
 
 static int ms_lib_check_disableblock(struct us_data *us, u16 PhyBlock)
 {
-	unsigned char *PageBuf = NULL;
+	__be16 *PageBuf = NULL;
 	u16 result = MS_STATUS_SUCCESS;
-	u16 blk, index = 0;
+	u16 blk, index;
 	struct ms_lib_type_extdat extdat;
 	struct ene_ub6250_info *info = (struct ene_ub6250_info *) us->extra;
 
@@ -1252,7 +1251,7 @@ static int ms_lib_check_disableblock(struct us_data *us, u16 PhyBlock)
 	}
 
 	ms_read_readpage(us, PhyBlock, 1, (u32 *)PageBuf, &extdat);
-	do {
+	for (index = 0; index < MS_BYTES_PER_PAGE / sizeof(*PageBuf); index++) {
 		blk = be16_to_cpu(PageBuf[index]);
 		if (blk == MS_LB_NOT_USED)
 			break;
@@ -1260,8 +1259,7 @@ static int ms_lib_check_disableblock(struct us_data *us, u16 PhyBlock)
 			result = MS_ERROR_FLASH_READ;
 			break;
 		}
-		index++;
-	} while (1);
+	}
 
 exit:
 	kfree(PageBuf);
@@ -1834,7 +1832,8 @@ static int ms_scsi_write(struct us_data *us, struct scsi_cmnd *srb)
 				goto exit;
 			}
 
-			info->MS_Lib.Phy2LogMap[oldphy] = MS_LB_NOT_USED_ERASED;
+			if (oldphy < info->MS_Lib.NumberOfPhyBlock)
+				info->MS_Lib.Phy2LogMap[oldphy] = MS_LB_NOT_USED_ERASED;
 			ms_lib_force_setlogical_pair(us, PhyBlockAddr, newphy);
 
 			blen -= len;
@@ -2139,8 +2138,9 @@ static int ene_ms_init(struct us_data *us)
 			MSP_BlockSize      = (bbuf[6] << 8) | bbuf[7];
 			MSP_UserAreaBlocks = (bbuf[10] << 8) | bbuf[11];
 			info->MSP_TotalBlock = MSP_BlockSize * MSP_UserAreaBlocks;
-		} else {
-			ms_card_init(us); /* Card is MS (to ms.c)*/
+		} else if (ms_card_init(us)) { /* Card is MS (to ms.c)*/
+			info->MS_Status &= ~MS_Ready;
+			return USB_STOR_TRANSPORT_ERROR;
 		}
 		usb_stor_dbg(us, "MS Init Code OK !!\n");
 	} else {

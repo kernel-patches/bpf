@@ -29,7 +29,7 @@
  *    supports a different number of streams.
  *
  * This routine replaces the usb_ep_autoconfig when needed
- * superspeed enhancments. If such enhancemnets are required,
+ * superspeed enhancements. If such enhancemnets are required,
  * the FD should call usb_ep_autoconfig_ss directly and provide
  * the additional ep_comp parameter.
  *

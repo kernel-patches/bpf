@@ -472,7 +472,7 @@ struct usb_composite_dev {
 	/* WebUSB */
 	u16				bcd_webusb_version;
 	u8				b_webusb_vendor_code;
-	char				landing_page[WEBUSB_URL_RAW_MAX_LENGTH];
+	char				landing_page[WEBUSB_URL_RAW_MAX_LENGTH + 1];
 	unsigned int			use_webusb:1;
 
 	/* private: */

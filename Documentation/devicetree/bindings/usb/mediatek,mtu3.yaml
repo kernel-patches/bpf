@@ -22,6 +22,7 @@ properties:
     items:
       - enum:
           - mediatek,mt2712-mtu3
+          - mediatek,mt6595-mtu3
           - mediatek,mt8173-mtu3
           - mediatek,mt8183-mtu3
           - mediatek,mt8186-mtu3
@@ -30,6 +31,7 @@ properties:
           - mediatek,mt8195-mtu3
           - mediatek,mt8196-mtu3
           - mediatek,mt8365-mtu3
+          - mediatek,mt8512-mtu3
       - const: mediatek,mtu3
 
   reg:

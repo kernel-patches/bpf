@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/net/asix,ax88178.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: ASIX AX88172/AX88772 USB Ethernet Controllers
+title: ASIX AX88172/AX88772/AX88179 USB Ethernet Controllers
 
 maintainers:
   - Oleksij Rempel <o.rempel@pengutronix.de>
@@ -22,6 +22,7 @@ properties:
           - usbb95,1720   # ASIX AX88172
           - usbb95,172a   # ASIX AX88172A
           - usbb95,1780   # ASIX AX88178
+          - usbb95,1790   # ASIX AX88179
           - usbb95,7720   # ASIX AX88772
           - usbb95,772a   # ASIX AX88772A
           - usbb95,772b   # ASIX AX88772B
@@ -29,6 +30,13 @@ properties:
 
   reg:
     maxItems: 1
+
+  reset-gpios:
+    description: GPIO connected to the RESET_N pin.
+    maxItems: 1
+
+  vdd-supply:
+    description: Power supply of the controller.
 
   local-mac-address: true
   mac-address: true

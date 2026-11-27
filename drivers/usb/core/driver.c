@@ -806,7 +806,7 @@ EXPORT_SYMBOL_GPL(usb_match_one_id);
  * vendor-specific, and hence matching against a standard product
  * class wouldn't work anyway.  If you really want to use an
  * interface-based match for such a device, create a match record
- * that also specifies the vendor ID.  (Unforunately there isn't a
+ * that also specifies the vendor ID.  (Unfortunately there isn't a
  * standard macro for creating records like this.)
  *
  * Within those groups, remember that not all combinations are

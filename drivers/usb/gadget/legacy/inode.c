@@ -2082,7 +2082,7 @@ static const struct file_operations ep0_operations = {
 
 
 /* FIXME PAM etc could set this security policy without mount options
- * if epfiles inherited ownership and permissons from ep0 ...
+ * if epfiles inherited ownership and permissions from ep0 ...
  */
 
 static unsigned default_uid;

@@ -102,7 +102,7 @@
 
 
 /* Cold Attach Status - xHC can set this bit to report device attached during
- * Sx state. Warm port reset should be perfomed to clear this bit and move port
+ * Sx state. Warm port reset should be performed to clear this bit and move port
  * to connected state.
  */
 #define PORT_CAS	(1 << 24)
@@ -174,7 +174,7 @@
 
 /*
  * USB3 specification define a 360ms tPollingLFPSTiemout for USB3 ports
- * to complete link training. usually link trainig completes much faster
+ * to complete link training. usually link training completes much faster
  * so check status 10 times with 36ms sleep in places we need to wait for
  * polling to complete.
  */

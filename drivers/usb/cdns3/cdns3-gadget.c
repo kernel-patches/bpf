@@ -452,7 +452,7 @@ static void __cdns3_descmiss_copy_data(struct usb_request *request,
 			       descmiss_req->actual);
 			request->actual = length;
 		} else {
-			/* It should never occures */
+			/* It should never occurs */
 			request->status = -ENOMEM;
 		}
 	} else {
@@ -1062,7 +1062,7 @@ static int cdns3_ep_run_stream_transfer(struct cdns3_endpoint *priv_ep,
 
 	if (!(priv_ep->flags & EP_STALLED)) {
 		trace_cdns3_ring(priv_ep);
-		/*clearing TRBERR and EP_STS_DESCMIS before seting DRDY*/
+		/*clearing TRBERR and EP_STS_DESCMIS before setting DRDY*/
 		writel(EP_STS_TRBERR | EP_STS_DESCMIS, &priv_dev->regs->ep_sts);
 
 		priv_ep->prime_flag = false;
@@ -1404,7 +1404,7 @@ static int cdns3_ep_run_transfer(struct cdns3_endpoint *priv_ep,
 
 	if (!priv_ep->wa1_set && !(priv_ep->flags & EP_STALLED)) {
 		trace_cdns3_ring(priv_ep);
-		/*clearing TRBERR and EP_STS_DESCMIS before seting DRDY*/
+		/*clearing TRBERR and EP_STS_DESCMIS before setting DRDY*/
 		writel(EP_STS_TRBERR | EP_STS_DESCMIS, &priv_dev->regs->ep_sts);
 		writel(EP_CMD_DRDY, &priv_dev->regs->ep_cmd);
 		cdns3_rearm_drdy_if_needed(priv_ep);

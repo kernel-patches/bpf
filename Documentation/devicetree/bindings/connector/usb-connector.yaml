@@ -283,6 +283,18 @@ properties:
     maximum: 200
     default: 200
 
+  sender-response-time-ms:
+    description: Represents the max time in ms that a Type-C port waits for
+      the port partner to respond to a message that requires a response. This
+      timer starts when the port's PHY layer receives the last bit of the
+      GoodCRC EOP corresponding to the message requiring a response. This timer
+      stops when the last bit of the EOP of the expected response message is
+      received by the PHY layer. A timeout leads to a soft or hard reset by the
+      port.
+    minimum: 24
+    maximum: 60
+    default: 60
+
   sink-bc12-completion-time-ms:
     description: Represents the max time in ms that a port in sink role takes
       to complete Battery Charger (BC1.2) Detection. BC1.2 detection is a

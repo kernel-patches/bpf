@@ -79,7 +79,7 @@ struct mu3h_sch_bw_info {
  * @maxpkt: max packet size of endpoint
  * @ep: address of usb_host_endpoint struct
  * @speed: usb device speed
- * @allocated: the bandwidth is aready allocated from bus_bw
+ * @allocated: the bandwidth is already allocated from bus_bw
  * @offset: which uframe of the interval that transfer should be
  *		scheduled first time within the interval
  * @repeat: the time gap between two uframes that transfers are

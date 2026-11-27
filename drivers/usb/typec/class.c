@@ -564,7 +564,7 @@ static const struct attribute_group *typec_altmode_groups[] = {
  * @adev: Handle to the alternate mode
  * @ops: Ops for the alternate mode
  *
- * After setting ops, attribute visiblity needs to be refreshed if the alternate
+ * After setting ops, attribute visibility needs to be refreshed if the alternate
  * mode can be activated.
  */
 void typec_altmode_set_ops(struct typec_altmode *adev,

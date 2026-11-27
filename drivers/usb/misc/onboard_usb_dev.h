@@ -30,6 +30,13 @@ static const struct onboard_dev_pdata microchip_usb2514_data = {
 	.is_hub = true,
 };
 
+static const struct onboard_dev_pdata microchip_usb4604_data = {
+	.reset_us = 3000,
+	.num_supplies = 1,
+	.supply_names = { "vdd" },
+	.is_hub = true,
+};
+
 static const struct onboard_dev_pdata microchip_usb5744_data = {
 	.reset_us = 0,
 	.power_on_delay_us = 10000,
@@ -54,6 +61,20 @@ static const struct onboard_dev_pdata realtek_rts5411_data = {
 
 static const struct onboard_dev_pdata realtek_rtl8188etv_data = {
 	.reset_us = 0,
+	.num_supplies = 1,
+	.supply_names = { "vdd" },
+	.is_hub = false,
+};
+
+static const struct onboard_dev_pdata asix_ax88179_data = {
+	.reset_us = 1000,
+	.num_supplies = 1,
+	.supply_names = { "vdd" },
+	.is_hub = false,
+};
+
+static const struct onboard_dev_pdata prolific_pl2775_data = {
+	.reset_us = 1000,
 	.num_supplies = 1,
 	.supply_names = { "vdd" },
 	.is_hub = false,
@@ -141,9 +162,14 @@ static const struct of_device_id onboard_dev_match[] = {
 	{ .compatible = "usb424,2514", .data = &microchip_usb2514_data, },
 	{ .compatible = "usb424,2517", .data = &microchip_usb424_data, },
 	{ .compatible = "usb424,2744", .data = &microchip_usb5744_data, },
+	{ .compatible = "usb424,4604", .data = &microchip_usb4604_data, },
 	{ .compatible = "usb424,5744", .data = &microchip_usb5744_data, },
 	{ .compatible = "usb451,8025", .data = &ti_tusb8020b_data, },
 	{ .compatible = "usb451,8027", .data = &ti_tusb8020b_data, },
+	{ .compatible = "usb451,8040", .data = &ti_tusb8020b_data, },
+	{ .compatible = "usb451,8041", .data = &ti_tusb8020b_data, },
+	{ .compatible = "usb451,8042", .data = &ti_tusb8020b_data, },
+	{ .compatible = "usb451,8043", .data = &ti_tusb8020b_data, },
 	{ .compatible = "usb451,8140", .data = &ti_tusb8020b_data, },
 	{ .compatible = "usb451,8142", .data = &ti_tusb8020b_data, },
 	{ .compatible = "usb451,8440", .data = &ti_tusb8020b_data, },
@@ -156,6 +182,8 @@ static const struct of_device_id onboard_dev_match[] = {
 	{ .compatible = "usb5e3,620", .data = &genesys_gl852g_data, },
 	{ .compatible = "usb5e3,625", .data = &genesys_gl3590_data, },
 	{ .compatible = "usb5e3,626", .data = &genesys_gl852g_data, },
+	{ .compatible = "usb67b,2775", .data = &prolific_pl2775_data, },
+	{ .compatible = "usbb95,1790", .data = &asix_ax88179_data, },
 	{ .compatible = "usbbda,179", .data = &realtek_rtl8188etv_data, },
 	{ .compatible = "usbbda,411", .data = &realtek_rts5411_data, },
 	{ .compatible = "usbbda,5411", .data = &realtek_rts5411_data, },

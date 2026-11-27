@@ -232,6 +232,7 @@ static u32 uvc_v4l2_get_bytesperline(const struct uvc_format *format,
 {
 	switch (format->fcc) {
 	case V4L2_PIX_FMT_NV12:
+	case V4L2_PIX_FMT_NV21:
 	case V4L2_PIX_FMT_YVU420:
 	case V4L2_PIX_FMT_YUV420:
 	case V4L2_PIX_FMT_M420:

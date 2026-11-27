@@ -17,6 +17,7 @@ properties:
           - usb424,2417
           - usb424,2514
           - usb424,2517
+          - usb424,4604
       - items:
           - enum:
               - usb424,2512

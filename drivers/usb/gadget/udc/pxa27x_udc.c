@@ -1037,7 +1037,7 @@ static int write_ep0_fifo(struct pxa_ep *ep, struct pxa27x_request *req)
  * special case of ep0 setup :
  *   (irq->handle_ep0_ctrl_req->gadget_setup->pxa_ep_queue)
  *
- * Returns 0 if succedeed, error otherwise
+ * Returns 0 if succeeded, error otherwise
  */
 static int pxa_ep_queue(struct usb_ep *_ep, struct usb_request *_req,
 			gfp_t gfp_flags)
@@ -1535,7 +1535,7 @@ static int pxa_udc_pullup(struct usb_gadget *_gadget, int is_active)
  * @_gadget: usb gadget
  * @is_active: 0 if should disable the udc, 1 if should enable
  *
- * Enables the udc, and optionnaly activates D+ pullup resistor. Or disables the
+ * Enables the udc, and optionally activates D+ pullup resistor. Or disables the
  * udc, and deactivates D+ pullup resistor.
  *
  * Returns 0
@@ -1943,7 +1943,7 @@ stall:
  *     STAGE. The driver add STATUS STAGE to send last zero length packet in
  *     OUT_STATUS_STAGE.
  *   - special attention was needed for IN_STATUS_STAGE. If a packet complete
- *     event is detected, we terminate the status stage without ackowledging the
+ *     event is detected, we terminate the status stage without acknowledging the
  *     packet (not to risk to loose a potential SETUP packet)
  */
 static void handle_ep0(struct pxa_udc *udc, int fifo_irq, int opc_irq)
@@ -2023,7 +2023,7 @@ static void handle_ep0(struct pxa_udc *udc, int fifo_irq, int opc_irq)
 }
 
 /**
- * handle_ep - Handle endpoint data tranfers
+ * handle_ep - Handle endpoint data transfers
  * @ep: pxa physical endpoint
  *
  * Tries to transfer all pending request data into the endpoint and/or
@@ -2091,7 +2091,7 @@ recursion_detected:
  * @config: usb configuration
  *
  * Post the request to upper level.
- * Don't use any pxa specific harware configuration capabilities
+ * Don't use any pxa specific hardware configuration capabilities
  */
 static void pxa27x_change_configuration(struct pxa_udc *udc, int config)
 {
@@ -2121,7 +2121,7 @@ static void pxa27x_change_configuration(struct pxa_udc *udc, int config)
  * @alt: alternate setting number
  *
  * Post the request to upper level.
- * Don't use any pxa specific harware configuration capabilities
+ * Don't use any pxa specific hardware configuration capabilities
  */
 static void pxa27x_change_interface(struct pxa_udc *udc, int iface, int alt)
 {

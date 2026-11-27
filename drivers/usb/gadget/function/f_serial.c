@@ -289,7 +289,7 @@ static ssize_t f_serial_port_num_show(struct config_item *item, char *page)
 
 CONFIGFS_ATTR_RO(f_serial_, port_num);
 
-static struct configfs_attribute *acm_attrs[] = {
+static const struct configfs_attribute *const acm_attrs[] = {
 #ifdef CONFIG_U_SERIAL_CONSOLE
 	&f_serial_attr_console,
 #endif
@@ -299,7 +299,7 @@ static struct configfs_attribute *acm_attrs[] = {
 
 static const struct config_item_type serial_func_type = {
 	.ct_item_ops	= &serial_item_ops,
-	.ct_attrs	= acm_attrs,
+	.ct_attrs_const	= acm_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

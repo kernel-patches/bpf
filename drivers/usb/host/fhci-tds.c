@@ -234,9 +234,9 @@ err:
 /*
  * initialize the endpoint register according to the given parameters
  *
- * artuments:
- * usb		A pointer to the data strucutre of the USB
- * ep		A pointer to the endpoint structre
+ * arguments:
+ * usb		A pointer to the data structure of the USB
+ * ep		A pointer to the endpoint structure
  * data_mem	The data memory partition(BUS)
  */
 void fhci_init_ep_registers(struct fhci_usb *usb, struct endpoint *ep,
@@ -367,7 +367,7 @@ static void fhci_td_transaction_confirm(struct fhci_usb *usb)
  * Arguments:
  * usb          A pointer to the USB structure
  * pkt          A pointer to the user frame structure
- * trans_type   Transaction tyep - IN,OUT or SETUP
+ * trans_type   Transaction type - IN,OUT or SETUP
  * dest_addr    Device address - 0~127
  * dest_ep      Endpoint number of the device - 0~16
  * trans_mode   Pipe type - ISO,Interrupt,bulk or control

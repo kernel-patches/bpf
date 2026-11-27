@@ -773,10 +773,7 @@ static void f_midi_out_trigger(struct snd_rawmidi_substream *substream, int up)
 
 	VDBG(midi, "%s()\n", __func__);
 
-	if (up)
-		set_bit(substream->number, &midi->out_triggered);
-	else
-		clear_bit(substream->number, &midi->out_triggered);
+	assign_bit(substream->number, &midi->out_triggered, up);
 }
 
 static const struct snd_rawmidi_ops gmidi_in_ops = {
@@ -1240,7 +1237,7 @@ F_MIDI_OPT(out_ports, true, MAX_PORTS);
 F_MIDI_OPT_STRING(id);
 F_MIDI_OPT_STRING(interface_string);
 
-static struct configfs_attribute *midi_attrs[] = {
+static const struct configfs_attribute *const midi_attrs[] = {
 	&f_midi_opts_attr_index,
 	&f_midi_opts_attr_buflen,
 	&f_midi_opts_attr_qlen,
@@ -1253,7 +1250,7 @@ static struct configfs_attribute *midi_attrs[] = {
 
 static const struct config_item_type midi_func_type = {
 	.ct_item_ops	= &midi_item_ops,
-	.ct_attrs	= midi_attrs,
+	.ct_attrs_const	= midi_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

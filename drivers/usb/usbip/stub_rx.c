@@ -391,7 +391,6 @@ static int get_pipe(struct stub_device *sdev, struct usbip_header *pdu)
 	}
 
 err_ret:
-	/* NOT REACHED */
 	dev_err(&sdev->udev->dev, "CMD_SUBMIT: invalid epnum %d\n", epnum);
 	return -1;
 }

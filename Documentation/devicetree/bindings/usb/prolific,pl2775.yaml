@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/usb/prolific,pl2775.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Prolific PL2775 USB 3.0 to SATA bridge
+
+maintainers:
+  - Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+
+description:
+  Device tree properties for hard wired Prolific PL2775 USB 3.0 to
+  SATA bridge controllers.
+
+allOf:
+  - $ref: usb-device.yaml#
+
+properties:
+  compatible:
+    const: usb67b,2775
+
+  reg: true
+
+  reset-gpios:
+    description: GPIO connected to the RESET_N pin.
+    maxItems: 1
+
+  vdd-supply:
+    description: Power supply of the controller.
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    usb {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        device@1 {
+            compatible = "usb67b,2775";
+            reg = <1>;
+            reset-gpios = <&gpio1 11 GPIO_ACTIVE_LOW>;
+        };
+    };

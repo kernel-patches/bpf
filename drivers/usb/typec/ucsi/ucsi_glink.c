@@ -433,7 +433,7 @@ static int pmic_glink_ucsi_probe(struct auxiliary_device *adev,
 
 		ret = fwnode_property_read_u32(fwnode, "reg", &port);
 		if (ret < 0) {
-			dev_err(dev, "missing reg property of %pOFn\n", fwnode);
+			dev_err(dev, "missing reg property of %pfwP\n", fwnode);
 			return ret;
 		}
 

@@ -1442,7 +1442,7 @@ int xhci_endpoint_init(struct xhci_hcd *xhci,
 
 	/*
 	 * Get values to fill the endpoint context, mostly from ep descriptor.
-	 * The average TRB buffer lengt for bulk endpoints is unclear as we
+	 * The average TRB buffer length for bulk endpoints is unclear as we
 	 * have no clue on scatter gather list entry size. For Isoc and Int,
 	 * set it to max available. See xHCI 1.1 spec 4.14.1.1 for details.
 	 */
@@ -2119,7 +2119,7 @@ static void xhci_add_in_port(struct xhci_hcd *xhci, unsigned int num_ports,
 			port_cap->psi[i] = readl(addr + 4 + i);
 
 			/* count unique ID values, two consecutive entries can
-			 * have the same ID if link is assymetric
+			 * have the same ID if link is asymmetric
 			 */
 			if (i && (XHCI_EXT_PORT_PSIV(port_cap->psi[i]) !=
 				  XHCI_EXT_PORT_PSIV(port_cap->psi[i - 1])))

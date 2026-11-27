@@ -42,7 +42,7 @@ static inline void ehci_brcm_wait_for_sof(struct ehci_hcd *ehci, u32 delay)
  * ehci_brcm_hub_control
  * The EHCI controller has a bug where it can violate the SOF
  * interval between the first two SOF's transmitted after resume
- * if the resume occurs near the end of the microframe. This causees
+ * if the resume occurs near the end of the microframe. This causes
  * the controller to detect babble on the suspended port and
  * will eventually cause the controller to reset the port.
  * The fix is to Intercept the echi-hcd request to complete RESUME and

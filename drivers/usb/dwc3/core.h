@@ -1015,7 +1015,7 @@ struct dwc3_glue_ops {
  * @err_recovery_work: workqueue used for controller error recovery
  * @ep0_trb: trb which is used for the ctrl_req
  * @bounce: address of bounce buffer
- * @setup_buf: used while precessing STD USB requests
+ * @setup_buf: used while processing STD USB requests
  * @ep0_trb_addr: dma address of @ep0_trb
  * @bounce_addr: dma address of @bounce
  * @ep0_usb_req: dummy req used while handling STD USB requests
@@ -1162,7 +1162,7 @@ struct dwc3_glue_ops {
  *			check during HS transmit.
  * @resume_hs_terminations: Set if we enable quirk for fixing improper crc
  *			generation after resume from suspend.
- * @ulpi_ext_vbus_drv: Set to confiure the upli chip to drives CPEN pin
+ * @ulpi_ext_vbus_drv: Set to configure the upli chip to drives CPEN pin
  *			VBUS with an external supply.
  * @parkmode_disable_ss_quirk: set if we need to disable all SuperSpeed
  *			instances in park mode.

@@ -94,7 +94,7 @@ static int isp1761_pci_init(struct pci_dev *dev)
 		return -ENOMEM;
 	}
 
-	/* Grab the PLX PCI mem maped port start address we need  */
+	/* Grab the PLX PCI mem mapped port start address we need  */
 	mem_start = pci_resource_start(dev, 0);
 	mem_length = pci_resource_len(dev, 0);
 

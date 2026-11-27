@@ -431,10 +431,18 @@ static int dwc3_qcom_suspend(struct dwc3_qcom *qcom, bool wakeup)
 	if (qcom->is_suspended)
 		return 0;
 
-	for (i = 0; i < qcom->num_ports; i++) {
-		val = readl(qcom->qscratch_base + pwr_evnt_irq_stat_reg[i]);
-		if (!(val & PWR_EVNT_LPM_IN_L2_MASK))
-			dev_err(qcom->dev, "port-%d HS-PHY not in L2\n", i + 1);
+	/*
+	 * Only a host with wakeup enabled keeps the HS PHY powered and parks
+	 * it in L2 across suspend. A peripheral disconnects from the bus and
+	 * powers the PHY off first, so its link never enters L2.
+	 */
+	if (dwc3_qcom_is_host(qcom) && wakeup) {
+		for (i = 0; i < qcom->num_ports; i++) {
+			val = readl(qcom->qscratch_base + pwr_evnt_irq_stat_reg[i]);
+			if (!(val & PWR_EVNT_LPM_IN_L2_MASK))
+				dev_err(qcom->dev, "port-%d HS-PHY not in L2\n",
+					i + 1);
+		}
 	}
 
 	for (i = qcom->num_clocks - 1; i >= 0; i--)

@@ -852,7 +852,7 @@ static int usbhsg_try_start(struct usbhs_priv *priv, u32 status)
 	usbhs_pipe_config_update(dcp->pipe, 0, 0, 64);
 
 	/*
-	 * system config enble
+	 * system config enable
 	 * - HI speed
 	 * - function
 	 * - usb module

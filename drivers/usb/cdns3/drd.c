@@ -58,7 +58,7 @@ static int cdns_set_mode(struct cdns *cdns, enum usb_dr_mode mode)
 			/*
 			 * Enable work around feature built into the
 			 * controller to address issue with RX Sensitivity
-			 * est (EL_17) for USB2 PHY. The issue only occures
+			 * est (EL_17) for USB2 PHY. The issue only occurs
 			 * for 0x0002450D controller version.
 			 */
 			if (cdns->phyrst_a_enable) {

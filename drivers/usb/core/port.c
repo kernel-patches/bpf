@@ -812,7 +812,7 @@ int usb_hub_create_port_device(struct usb_hub *hub, int port1)
 	find_and_link_peer(hub, port1);
 
 	/*
-	 * Enable runtime pm and hold a refernce that hub_configure()
+	 * Enable runtime pm and hold a reference that hub_configure()
 	 * will drop once the PM_QOS_NO_POWER_OFF flag state has been set
 	 * and the hub has been fully registered (hdev->maxchild set).
 	 */

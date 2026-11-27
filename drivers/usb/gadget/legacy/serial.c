@@ -286,6 +286,9 @@ static int switch_gserial_enable(bool do_enable)
 
 static int __init gserial_init(void)
 {
+	if (n_ports > MAX_U_SERIAL_PORTS)
+		return -EINVAL;
+
 	/* We *could* export two configs; that'd be much cleaner...
 	 * but neither of these product IDs was defined that way.
 	 */

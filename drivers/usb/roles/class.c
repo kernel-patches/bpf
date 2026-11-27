@@ -414,7 +414,7 @@ usb_role_switch_register(struct device *parent,
 EXPORT_SYMBOL_GPL(usb_role_switch_register);
 
 /**
- * usb_role_switch_unregister - Unregsiter USB Role Switch
+ * usb_role_switch_unregister - Unregister USB Role Switch
  * @sw: USB Role Switch
  *
  * Unregister switch that was registered with usb_role_switch_register().
