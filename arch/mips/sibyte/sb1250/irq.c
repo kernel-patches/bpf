@@ -182,7 +182,7 @@ static struct irq_chip sb1250_irq_type = {
 #endif
 };
 
-void __init init_sb1250_irqs(void)
+static void __init init_sb1250_irqs(void)
 {
 	int i;
 
@@ -268,8 +268,6 @@ void __init arch_init_irq(void)
 	/* Enable necessary IPs, disable the rest */
 	change_c0_status(ST0_IM, imask);
 }
-
-extern void sb1250_mailbox_interrupt(void);
 
 static inline void dispatch_ip2(void)
 {

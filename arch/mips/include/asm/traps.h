@@ -62,6 +62,8 @@ asmlinkage void do_page_fault(struct pt_regs *regs,
 	unsigned long write, unsigned long address);
 
 asmlinkage void cache_parity_error(void);
+asmlinkage void do_cache_error_r10k(struct pt_regs *regs, int resumable);
+extern char except_vec2_r10k[];
 asmlinkage void ejtag_exception_handler(struct pt_regs *regs);
 asmlinkage void __noreturn nmi_exception_handler(struct pt_regs *regs);
 

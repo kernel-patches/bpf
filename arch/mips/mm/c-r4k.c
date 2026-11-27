@@ -1690,6 +1690,15 @@ static void r4k_cache_error_setup(void)
 		set_uncached_handler(0x100, &except_vec2_sb1, 0x80);
 		break;
 
+#ifdef CONFIG_CPU_R10000
+	case CPU_R10000:
+	case CPU_R12000:
+	case CPU_R14000:
+	case CPU_R16000:
+		set_uncached_handler(0x100, except_vec2_r10k, 0x80);
+		break;
+#endif
+
 	default:
 		set_uncached_handler(0x100, &except_vec2_generic, 0x80);
 		break;

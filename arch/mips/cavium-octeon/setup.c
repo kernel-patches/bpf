@@ -1156,8 +1156,6 @@ void __init prom_free_prom_memory(void)
 	}
 }
 
-void __init octeon_fill_mac_addresses(void);
-
 void __init device_tree_init(void)
 {
 	const void *fdt = NULL;
@@ -1213,6 +1211,7 @@ void __init device_tree_init(void)
 	}
 	if (fill_mac)
 		octeon_fill_mac_addresses();
+	early_init_dt_verify(initial_boot_params, __pa(initial_boot_params));
 	unflatten_and_copy_device_tree();
 	init_octeon_system_type();
 }
