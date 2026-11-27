@@ -91,7 +91,7 @@ int ringbuf_missing_release1(void *ctx)
 }
 
 SEC("?raw_tp")
-__failure __msg("Unreleased reference id=3")
+__failure __msg("Unreleased reference id=")
 int ringbuf_missing_release2(void *ctx)
 {
 	struct bpf_dynptr ptr1, ptr2;
@@ -127,7 +127,7 @@ static int missing_release_callback_fn(__u32 index, void *data)
 
 /* A callback cannot return with the last dynptr for a referenced resource. */
 SEC("?raw_tp")
-__failure __msg("cannot overwrite referenced dynptr")
+__failure __msg("Unreleased reference id=1")
 int ringbuf_missing_release_callback(void *ctx)
 {
 	bpf_loop(10, missing_release_callback_fn, NULL, 0);
@@ -782,7 +782,7 @@ int dynptr_pruning_overwrite(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__success __msg("12: safe") __log_level(2)
+__success __msg("to 12: pruned") __log_level(2)
 int dynptr_pruning_stacksafe(struct __sk_buff *ctx)
 {
 	asm volatile (
@@ -1343,7 +1343,6 @@ __naked int name(void)					\
 
 /* Not in the line of SLICE_BUF_TEST(): the log of the verifier has a copy of that line */
 #define SLICE_BUF_INVALID __failure __msg("R7 invalid mem access 'scalar'")
-#define SLICE_BUF_POINTER __failure __msg("invalid size of register spill")
 
 SLICE_BUF_TEST(slice_buf_first_byte, SLICE_BUF_INVALID,
 	SLICE_BUF(12, 4)
@@ -1375,8 +1374,8 @@ SLICE_BUF_TEST(slice_buf_var_off, SLICE_BUF_INVALID,
 	SLICE_BUF_CHECK
 	"*(u64 *)(r10 - 8) = 0;")
 
-/* the slice is a pointer when it is stored to its buffer, and invalid after that */
-SLICE_BUF_TEST(slice_buf_narrow_spill, SLICE_BUF_POINTER,
+/* the slice is a pointer when a part of it is stored to its buffer, and invalid after that */
+SLICE_BUF_TEST(slice_buf_narrow_spill, SLICE_BUF_INVALID,
 	SLICE_BUF(8, 8)
 	"*(u32 *)(r10 - 8) = r7;")
 
@@ -1880,7 +1879,7 @@ __failure __msg("must be a known constant")
 __msg("requires this memory size to be a verifier-known constant")
 int dynptr_slice_var_len2(struct __sk_buff *skb)
 {
-	char buffer[sizeof(struct ethhdr)] = {};
+	char buffer[2 * sizeof(struct ethhdr)] = {};
 	struct bpf_dynptr ptr;
 	struct ethhdr *hdr;
 

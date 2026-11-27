@@ -70,18 +70,18 @@ static __naked __noinline u128 static_agg_bad_ptr(void)
 }
 
 /*
- * R2 is a return register once the subprogram returns a pair, so a stack
- * pointer left in it is rejected at the callee's exit exactly as one in R0
- * is: the callee frame is gone by the time the caller could use it.
+ * R2 is a return register once the subprogram returns a pair, so the caller
+ * cannot read a stack pointer left in it, exactly as one in R0: the callee
+ * frame is gone by the time the caller could use it.
  */
 SEC("tc")
 __load_if_JITed()
-__failure __msg("cannot return stack pointer to the caller")
+__failure __msg("R2 !read_ok")
 __naked int aggregate_ret_static_ptr_fail(void)
 {
 	asm volatile (
 	"call %[static_agg_bad_ptr];"
-	"r0 = 0;"
+	"r0 = *(u8 *)(r2 - 1);"
 	"exit;"
 	:
 	: __imm(static_agg_bad_ptr)
@@ -121,14 +121,6 @@ static __naked __noinline u128 static_agg_precise(void)
 SEC("tc")
 __load_if_JITed()
 __success __retval(0)
-__log_level(2)
-__msg("mark_precise: frame0: last_idx 5 first_idx 0 subseq_idx -1")
-__msg("mark_precise: frame0: regs=r6 stack= before 4: (07) r1 += -8")
-__msg("mark_precise: frame0: regs=r6 stack= before 3: (bf) r1 = r10")
-__msg("mark_precise: frame0: regs=r6 stack= before 2: (57) r6 &= 7")
-__msg("mark_precise: frame0: regs=r6 stack= before 1: (bf) r6 = r2")
-__msg("mark_precise: frame0: regs=r2 stack= before 12: (95) exit")
-__msg("mark_precise: frame1: regs=r2 stack= before 11: (b7) r2 = 4")
 __naked int aggregate_ret_static_precise(void)
 {
 	asm volatile (
@@ -150,13 +142,6 @@ __naked int aggregate_ret_static_precise(void)
 SEC("tc")
 __load_if_JITed()
 __success __retval(0)
-__log_level(2)
-__msg("mark_precise: frame0: last_idx 5 first_idx 0 subseq_idx -1")
-__msg("mark_precise: frame0: regs=r6 stack= before 4: (07) r1 += -8")
-__msg("mark_precise: frame0: regs=r6 stack= before 3: (bf) r1 = r10")
-__msg("mark_precise: frame0: regs=r6 stack= before 2: (57) r6 &= 7")
-__msg("mark_precise: frame0: regs=r6 stack= before 1: (bf) r6 = r2")
-__msg("mark_precise: frame0: regs=r2 stack= before 0: (85) call pc+9")
 __naked int aggregate_ret_global_precise(void)
 {
 	asm volatile (

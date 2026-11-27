@@ -266,26 +266,26 @@ static void test_exceptions_success(void)
 		}), "", 0);
 
 	if (test__start_subtest("non-throwing fexit -> throwing subprog"))
-		/* non-throwing fexit -> throwing subprog : OK */
-		RUN_EXT(0, false, ({
+		/* non-throwing fexit -> throwing subprog : BAD */
+		RUN_EXT(-EINVAL, true, ({
 			prog = eskel->progs.pfexit;
 			bpf_program__set_autoload(prog, true);
 			if (!ASSERT_OK(bpf_program__set_attach_target(prog,
 				       bpf_program__fd(skel->progs.exception_throw_subprog),
 				       "throwing_subprog"), "set_attach_target"))
 				goto done;
-		}), "", 0);
+		}), "Only fentry can attach to throwing_subprog, which can throw", 0);
 
 	if (test__start_subtest("throwing fexit -> throwing subprog"))
-		/* throwing fexit -> throwing subprog : OK */
-		RUN_EXT(0, false, ({
+		/* throwing fexit -> throwing subprog : BAD */
+		RUN_EXT(-EINVAL, true, ({
 			prog = eskel->progs.throwing_fexit;
 			bpf_program__set_autoload(prog, true);
 			if (!ASSERT_OK(bpf_program__set_attach_target(prog,
 				       bpf_program__fd(skel->progs.exception_throw_subprog),
 				       "throwing_subprog"), "set_attach_target"))
 				goto done;
-		}), "", 0);
+		}), "Only fentry can attach to throwing_subprog, which can throw", 0);
 
 	/* fmod_ret not allowed for subprog - Check so we remember to handle its
 	 * throwing specification compatibility with target when supported.

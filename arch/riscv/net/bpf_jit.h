@@ -14,6 +14,8 @@
 
 #define RV_MAX_REG_ARGS		8
 #define RV_EXTRA_STK_ARGS	(RV_MAX_REG_ARGS - MAX_BPF_FUNC_REG_ARGS)
+#define PRIV_STACK_GUARD_SZ	16
+#define PRIV_STACK_GUARD_VAL	0xEB9F12345678eb9fULL
 
 /* verify runtime detection extension status */
 #define rv_ext_enabled(ext) \
@@ -434,6 +436,11 @@ static inline u32 rv_sra(u8 rd, u8 rs1, u8 rs2)
 static inline u32 rv_mul(u8 rd, u8 rs1, u8 rs2)
 {
 	return rv_r_insn(1, rs2, rs1, 0, rd, 0x33);
+}
+
+static inline u32 rv_mulh(u8 rd, u8 rs1, u8 rs2)
+{
+	return rv_r_insn(1, rs2, rs1, 1, rd, 0x33);
 }
 
 static inline u32 rv_mulhu(u8 rd, u8 rs1, u8 rs2)

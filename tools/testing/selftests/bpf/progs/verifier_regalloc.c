@@ -303,7 +303,6 @@ __naked void regalloc_in_callee(void)
 	r7 = r0;					\
 	call %[bpf_get_prandom_u32];			\
 	r1 = r0;					\
-	r2 = r0;					\
 	r3 = r7;					\
 	call regalloc_in_callee__1;			\
 l0_%=:	exit;						\
@@ -318,6 +317,7 @@ static __naked __noinline __attribute__((used))
 void regalloc_in_callee__1(void)
 {
 	asm volatile ("					\
+	r2 = r1;					\
 	if r1 s> 20 goto l0_%=;				\
 	if r2 s< 0 goto l0_%=;				\
 	r3 += r1;					\

@@ -249,6 +249,25 @@ int load_acquire_from_rdonly_untrusted_mem(void *ctx)
 	return 0;
 }
 
+/* struct mm_struct ends with a flexible array of bytes */
+SEC("tp_btf/exit_mmap")
+__description("load-acquire at a far offset of a trusted pointer")
+__failure __msg("BPF_ATOMIC loads from R1 {{.*}} is not allowed")
+__naked void load_acquire_far_offset(void)
+{
+	asm volatile (
+	"r1 = *(u64 *)(r1 + 0);"
+	"r2 = 0x10000000000 ll;"
+	"r1 += r2;"
+	".8byte %[load_acquire_insn];" // w0 = load_acquire((u8 *)(r1 + 0));
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(load_acquire_insn,
+		     BPF_ATOMIC_OP(BPF_B, BPF_LOAD_ACQ, BPF_REG_0, BPF_REG_1, 0))
+	: __clobber_all);
+}
+
 SEC("socket")
 __description("load-acquire with invalid register R15")
 __failure __failure_unpriv __msg("R15 is invalid")

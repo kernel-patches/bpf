@@ -12,6 +12,18 @@ KDIR ?= $(if $(KMOD_O_VALID),$(SRCTREE_KDIR), \
 	    $(if $(wildcard $(SRCTREE_KDIR)/Module.symvers),$(SRCTREE_KDIR), \
 		/lib/modules/$(shell uname -r)/build))
 
+# kbuild runs resolve_btfids with the flags which the config of the kernel asks
+# for, and --fmodret_scan needs a resolve_btfids which is linked with LLVM. The
+# one of the kernel build is. The one of the selftests, which bpf/Makefile passes
+# down, is not. A kernel build directory that comes out of an archive can lack
+# the tool: kbuild makes it again, in its place: not in the OUTPUT of kselftest.
+KMOD_OBJTREE := $(or $(KMOD_O_VALID),$(KDIR))
+KERNEL_RESOLVE_BTFIDS := $(KMOD_OBJTREE)/tools/bpf/resolve_btfids/resolve_btfids
+ifneq ($(shell grep -sx CONFIG_BPF_FMODRET_SCAN=y $(KMOD_OBJTREE)/include/config/auto.conf),)
+MAKEOVERRIDES := $(filter-out RESOLVE_BTFIDS=% OUTPUT=%,$(MAKEOVERRIDES))
+all: $(KERNEL_RESOLVE_BTFIDS)
+endif
+
 ifeq ($(V),1)
 Q =
 else
@@ -37,6 +49,10 @@ else ifneq ("$(wildcard $(KDIR))", "")
 	$(Q)$(MAKE) -C $(KDIR) $(if $(KMOD_O_VALID),O=$(KMOD_O_VALID) KBUILD_OUTPUT=$(KMOD_O_VALID),KBUILD_OUTPUT=) \
 		M=$(TEST_KMOD_DIR) modules
 endif
+
+$(KERNEL_RESOLVE_BTFIDS):
+	$(Q)$(MAKE) -C $(KDIR) $(if $(KMOD_O_VALID),O=$(KMOD_O_VALID) KBUILD_OUTPUT=$(KMOD_O_VALID),KBUILD_OUTPUT=) \
+		tools/bpf/resolve_btfids
 
 clean:
 ifneq ("$(wildcard $(KDIR))", "")

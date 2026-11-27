@@ -2,11 +2,24 @@ hostprogs := resolve_btfids
 
 resolve_btfids-y += main.o
 resolve_btfids-y += btf_colors.o
+resolve_btfids-y += fmodret.o
+resolve_btfids-y += fmodret_scan.o
+resolve_btfids-y += image.o
+resolve_btfids-y += text_flow.o
+resolve_btfids-$(LLVM_MC) += text_mc.o
+resolve_btfids-$(LLVM_MC) += text_mc_$(SRCARCH).o
 resolve_btfids-y += rbtree.o
 resolve_btfids-y += zalloc.o
 resolve_btfids-y += string.o
 resolve_btfids-y += ctype.o
 resolve_btfids-y += str_error_r.o
+
+# The inner loops of --fmodret_scan
+HOSTCFLAGS_fmodret_scan.o += -O2
+HOSTCFLAGS_text_flow.o += -O2
+
+# LLVM's C++ API may have moved on, see Makefile
+$(OUTPUT)text_mc.o: cmd_cxx_o_c += $(or_llvm_mc_help)
 
 $(OUTPUT)%.o: ../../lib/%.c FORCE
 	$(call rule_mkdir)

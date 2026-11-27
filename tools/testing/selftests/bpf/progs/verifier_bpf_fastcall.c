@@ -671,6 +671,39 @@ __naked void helper_zero_size_buffer(void)
 	: __clobber_all);
 }
 
+/* The size is 0 only at the largest offset. The other offsets touch the stack. */
+SEC("raw_tp")
+__arch_x86_64
+__log_level(4)
+__msg("subprog 0 (helper_zero_size_at_max_offset) main {{.*}} stack 128")
+__success
+__naked void helper_zero_size_at_max_offset(void)
+{
+	asm volatile (
+	"call %[bpf_ktime_get_ns];"
+	"r6 = r0;"
+	"if r6 > 128 goto 1f;"
+	"r1 = 1;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"call %[bpf_get_smp_processor_id];"
+	"r1 = *(u64 *)(r10 - 8);"
+	"r1 = r10;"
+	"r1 += -128;"
+	"r1 += r6;"
+	"r2 = 128;"
+	"r2 -= r6;"
+	"r3 = 0;"
+	"call %[bpf_probe_read_kernel];"
+"1:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_get_smp_processor_id),
+	  __imm(bpf_ktime_get_ns),
+	  __imm(bpf_probe_read_kernel)
+	: __clobber_all);
+}
+
 SEC("raw_tp")
 __arch_x86_64
 /* main, not patched */
@@ -915,13 +948,13 @@ __xlated("...")
 /* may_goto expansion starts, r0 and r1 are live */
 __xlated("10: r2 = ")
 __xlated("12: r2 = &(void __percpu *)(r2)")
-__xlated("13: r12 = *(u64 *)(r2 +0)")
-__xlated("14: if r12 == 0x0 goto pc+6")
-__xlated("15: r12 -= 1")
-__xlated("16: if r12 != 0x0 goto pc+2")
-__xlated("17: r12 = r2")
+__xlated("13: r13 = *(u64 *)(r2 +0)")
+__xlated("14: if r13 == 0x0 goto pc+6")
+__xlated("15: r13 -= 1")
+__xlated("16: if r13 != 0x0 goto pc+2")
+__xlated("17: r13 = r2")
 __xlated("18: call unknown")
-__xlated("19: *(u64 *)(r2 +0) = r12")
+__xlated("19: *(u64 *)(r2 +0) = r13")
 /* may_goto expansion ends */
 __xlated("20: *(u64 *)(r10 -8) = r1")
 __xlated("21: exit")
@@ -958,13 +991,13 @@ __xlated("7: call bpf_get_smp_processor_id")
 /* may_goto expansion starts, r0 and r1 are live */
 __xlated("8: r2 = ")
 __xlated("10: r2 = &(void __percpu *)(r2)")
-__xlated("11: r12 = *(u64 *)(r2 +0)")
-__xlated("12: if r12 == 0x0 goto pc+6")
-__xlated("13: r12 -= 1")
-__xlated("14: if r12 != 0x0 goto pc+2")
-__xlated("15: r12 = r2")
+__xlated("11: r13 = *(u64 *)(r2 +0)")
+__xlated("12: if r13 == 0x0 goto pc+6")
+__xlated("13: r13 -= 1")
+__xlated("14: if r13 != 0x0 goto pc+2")
+__xlated("15: r13 = r2")
 __xlated("16: call unknown")
-__xlated("17: *(u64 *)(r2 +0) = r12")
+__xlated("17: *(u64 *)(r2 +0) = r13")
 /* may_goto expansion ends */
 __xlated("18: *(u64 *)(r10 -8) = r1")
 __xlated("19: exit")

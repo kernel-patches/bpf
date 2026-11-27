@@ -1023,7 +1023,7 @@ static void btf_dump_emit_decl_tag(struct btf_dump *d, const struct btf_type *t)
 	const char *name = btf_name_of(d, t->name_off);
 
 	if (btf_kflag(t))
-		btf_dump_printf(d, " __attribute__((%s))", name);
+		btf_dump_printf(d, " %s", name);
 	else
 		btf_dump_printf(d, " __attribute__((btf_decl_tag(\"%s\")))", name);
 }
@@ -1033,10 +1033,11 @@ static void btf_dump_emit_decl_tag(struct btf_dump *d, const struct btf_type *t)
  * tags of one type form a run that binary search finds the start of, in a
  * fixed order so that the same BTF always renders the same C.
  */
-static void btf_dump_emit_decl_tags(struct btf_dump *d, __u32 id, int comp_idx)
+static int btf_dump_emit_decl_tags(struct btf_dump *d, __u32 id, int comp_idx)
 {
 	size_t i, lo = 0, hi = d->decl_tag_cnt, mid;
 	const struct btf_type *t;
+	int cnt = 0;
 
 	/* lower bound on target_id */
 	while (lo < hi) {
@@ -1051,9 +1052,13 @@ static void btf_dump_emit_decl_tags(struct btf_dump *d, __u32 id, int comp_idx)
 	for (i = lo; i < d->decl_tag_cnt && d->decl_tags[i].target_id == id; i++) {
 		t = btf__type_by_id(d->btf, d->decl_tags[i].tag_id);
 
-		if (btf_decl_tag(t)->component_idx == comp_idx)
+		if (btf_decl_tag(t)->component_idx == comp_idx) {
 			btf_dump_emit_decl_tag(d, t);
+			cnt++;
+		}
 	}
+
+	return cnt;
 }
 
 static void btf_dump_emit_struct_def(struct btf_dump *d,
@@ -1592,12 +1597,12 @@ static void btf_dump_emit_type_chain(struct btf_dump *d,
 			break;
 		case BTF_KIND_TYPE_TAG:
 			btf_dump_emit_mods(d, decls);
+			/* decl tags on the type tag are printed in its place */
+			if (btf_dump_emit_decl_tags(d, id, -1))
+				break;
 			name = btf_name_of(d, t->name_off);
 			if (btf_kflag(t))
-				btf_dump_printf(d, " __attribute__((%s))", name);
-			else if (strcmp(name, "arena") == 0)
-				/* the tag denotes a pointer into the BPF arena address space */
-				btf_dump_printf(d, " __attribute__((address_space(1))) __attribute__((btf_type_tag(\"arena\")))");
+				btf_dump_printf(d, " %s", name);
 			else
 				btf_dump_printf(d, " __attribute__((btf_type_tag(\"%s\")))", name);
 			break;
@@ -1874,7 +1879,7 @@ static int btf_dump_get_bitfield_value(struct btf_dump *d,
 		return -E2BIG;
 
 	/* Maximum supported bitfield size is 64 bits */
-	if (t->size > 8) {
+	if (t->size > 8 || nr_bytes > 8) {
 		pr_warn("unexpected bitfield size %u\n", t->size);
 		return -EINVAL;
 	}
@@ -1883,13 +1888,13 @@ static int btf_dump_get_bitfield_value(struct btf_dump *d,
 	 * stored in num, then we left/right shift num to eliminate irrelevant bits.
 	 */
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-	for (i = t->size - 1; i >= 0; i--)
+	for (i = nr_bytes - 1; i >= 0; i--)
 		num = num * 256 + bytes[i];
 	nr_copy_bits = bit_sz + bits_offset;
 #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	for (i = 0; i < t->size; i++)
+	for (i = 0; i < nr_bytes; i++)
 		num = num * 256 + bytes[i];
-	nr_copy_bits = t->size * 8 - bits_offset;
+	nr_copy_bits = nr_bytes * 8 - bits_offset;
 #else
 # error "Unrecognized __BYTE_ORDER__"
 #endif
@@ -2324,16 +2329,11 @@ static int btf_dump_get_enum_value(struct btf_dump *d,
 				   __s64 *value)
 {
 	bool is_signed = btf_kflag(t);
+	char buf[8] __attribute__((aligned(8)));
 
-	if (!ptr_is_aligned(d->btf, id, data)) {
-		__u64 val;
-		int err;
-
-		err = btf_dump_get_bitfield_value(d, t, data, 0, 0, &val);
-		if (err)
-			return err;
-		*value = (__s64)val;
-		return 0;
+	if (!ptr_is_aligned(d->btf, id, data) && t->size <= sizeof(buf)) {
+		memcpy(buf, data, t->size);
+		data = buf;
 	}
 
 	switch (t->size) {
@@ -2373,7 +2373,7 @@ static int btf_dump_enum_data(struct btf_dump *d,
 		const struct btf_enum *e;
 
 		for (i = 0, e = btf_enum(t); i < btf_vlen(t); i++, e++) {
-			if (value != e->val)
+			if ((__u64)value != btf_enum_value(t, e))
 				continue;
 			btf_dump_type_values(d, "%s", btf_name_of(d, e->name_off));
 			return 0;
@@ -2567,13 +2567,15 @@ static int btf_dump_type_data_check_zero(struct btf_dump *d,
 			bit_sz = btf_member_bitfield_size(t, i);
 			err = btf_dump_type_data_check_zero(d, mtype, m->type, data + moffset / 8,
 							    moffset % 8, bit_sz);
-			if (err != ENODATA)
+			if (err != -ENODATA)
 				return err;
 		}
 		return -ENODATA;
 	}
 	case BTF_KIND_ENUM:
 	case BTF_KIND_ENUM64:
+		if (bit_sz)
+			return btf_dump_bitfield_check_zero(d, t, data, bits_offset, bit_sz);
 		err = btf_dump_get_enum_value(d, t, data, id, &value);
 		if (err)
 			return err;
@@ -2660,7 +2662,14 @@ static int btf_dump_dump_type_data(struct btf_dump *d,
 			if (err)
 				break;
 			enum_val = (__s64)print_num;
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 			err = btf_dump_enum_data(d, t, id, &enum_val);
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+			err = btf_dump_enum_data(d, t, id,
+						 (void *)&enum_val + sizeof(enum_val) - t->size);
+#else
+# error "Unrecognized __BYTE_ORDER__"
+#endif
 		} else
 			err = btf_dump_enum_data(d, t, id, data);
 		break;

@@ -41,8 +41,16 @@ struct {
 
 SEC("socket")
 __description("map access: known scalar += value_ptr unknown vs const")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
+/*
+ * r1 is 2 or 3, the values have 16 or 48 bytes. The paths are joined. The mask passes 0..3
+ * and makes 0 of all other numbers, so the read is in the value, also in speculation.
+ */
+#ifdef SPEC_V1
+__xlated_unpriv("w13 = 3")
+__xlated_unpriv("...")
+__xlated_unpriv("r13 &= r1")
+#endif
 __retval(1)
 __naked void value_ptr_unknown_vs_const(void)
 {
@@ -79,8 +87,16 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: known scalar += value_ptr const vs unknown")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
+/*
+ * r1 is 2 or 3, the values have 16 or 48 bytes. The paths are joined. The mask passes 0..3
+ * and makes 0 of all other numbers, so the read is in the value, also in speculation.
+ */
+#ifdef SPEC_V1
+__xlated_unpriv("w13 = 3")
+__xlated_unpriv("...")
+__xlated_unpriv("r13 &= r1")
+#endif
 __retval(1)
 __naked void value_ptr_const_vs_unknown(void)
 {
@@ -117,8 +133,16 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: known scalar += value_ptr const vs const (ne)")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
+/*
+ * r1 is 3 or 5, the values have 16 or 48 bytes. The paths are joined. The mask passes 0..5
+ * and makes 0 of all other numbers, so the read is in the value, also in speculation.
+ */
+#ifdef SPEC_V1
+__xlated_unpriv("w13 = 5")
+__xlated_unpriv("...")
+__xlated_unpriv("r13 &= r1")
+#endif
 __retval(1)
 __naked void ptr_const_vs_const_ne(void)
 {
@@ -225,8 +249,7 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: known scalar += value_ptr unknown vs unknown (lt)")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
 __retval(1)
 __naked void ptr_unknown_vs_unknown_lt(void)
 {
@@ -270,8 +293,7 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: known scalar += value_ptr unknown vs unknown (gt)")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
 __retval(1)
 __naked void ptr_unknown_vs_unknown_gt(void)
 {
@@ -408,8 +430,17 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: mixing value pointer and scalar, 1")
-__success __failure_unpriv
-__msg_unpriv("R2 tried to add from different maps, paths or scalars, pointer arithmetic with it prohibited for !root")
+__success __success_unpriv
+#ifdef SPEC_V1
+__xlated_unpriv("goto pc+2")
+__xlated_unpriv("...")
+__xlated_unpriv("nospec")
+__xlated_unpriv("r2 += r3")
+__xlated_unpriv("...")
+__xlated_unpriv("exit")
+__xlated_unpriv("nospec")
+__xlated_unpriv("r0 = *(u8 *)(r0 +0)")
+#endif
 __retval(0)
 __naked void value_pointer_and_scalar_1(void)
 {
@@ -462,8 +493,17 @@ l4_%=:	/* fake-dead code; targeted from branch A to	\
 
 SEC("socket")
 __description("map access: mixing value pointer and scalar, 2")
-__success __failure_unpriv
-__msg_unpriv("R2 tried to add from different maps, paths or scalars, pointer arithmetic with it prohibited for !root")
+__success __success_unpriv
+#ifdef SPEC_V1
+__xlated_unpriv("goto pc+2")
+__xlated_unpriv("...")
+__xlated_unpriv("nospec")
+__xlated_unpriv("r2 += r3")
+__xlated_unpriv("...")
+__xlated_unpriv("exit")
+__xlated_unpriv("nospec")
+__xlated_unpriv("r0 = *(u8 *)(r0 +0)")
+#endif
 __retval(0)
 __naked void value_pointer_and_scalar_2(void)
 {
@@ -861,6 +901,61 @@ l0_%=:	r0 = 1;						\
 	: __clobber_all);
 }
 
+/*
+ * A list in a map value: it starts at element 0 and goes on with the element that the current one
+ * names. The offset is 0 in front of the loop and [0, 31] after every trip. The second of
+ * these states at the head of the loop stands for all that follow.
+ */
+SEC("tc")
+__description("map access: the offset of a value pointer grows in the first trip of a loop")
+__success
+__naked void loop_offset_settles(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r2 = r10; r2 += -8;"
+	"r1 = %[map_array_48b] ll;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 2f;"
+	"r6 = r0;"
+	"r2 = r6;"
+"1:	r5 = *(u8 *)(r2 + 0);"
+	"r5 &= 31;"
+	"r2 = r6; r2 += r5;"
+	"may_goto 2f;"
+	"goto 1b;"
+"2:	r0 = 0; exit;"
+	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_array_48b)
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("map access: the offset of a value pointer grows in every trip of a loop")
+__failure __msg("invalid access to map value, value_size=48 off=48 size=1")
+__naked void loop_offset_grows(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r2 = r10; r2 += -8;"
+	"r1 = %[map_array_48b] ll;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 2f;"
+	"r2 = r0;"
+"1:	r5 = *(u8 *)(r2 + 0);"
+	"r2 += 1;"
+	"may_goto 2f;"
+	"goto 1b;"
+"2:	r0 = 0; exit;"
+	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_array_48b)
+	: __clobber_all);
+}
+
 SEC("socket")
 __description("map access: value_ptr += known scalar, 4")
 __success __success_unpriv __retval(1)
@@ -1156,8 +1251,8 @@ l0_%=:	r0 = 2;						\
 
 SEC("socket")
 __description("map access: value_ptr += value_ptr")
-__failure __msg("R0 pointer += pointer prohibited")
-__failure_unpriv
+__failure __msg("R0 invalid mem access 'scalar'")
+__failure_unpriv __msg_unpriv("R0 pointer += pointer prohibited")
 __naked void access_value_ptr_value_ptr_1(void)
 {
 	asm volatile ("					\
@@ -1367,8 +1462,8 @@ l0_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: trying to leak tainted dst reg")
-__failure __msg("math between map_value pointer and 4294967295 is not allowed")
-__failure_unpriv
+__success
+__failure_unpriv __msg_unpriv("R2 pointer arithmetic of map value goes out of range")
 __naked void to_leak_tainted_dst_reg(void)
 {
 	asm volatile ("					\

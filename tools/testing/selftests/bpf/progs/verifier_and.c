@@ -38,9 +38,9 @@ __naked void invalid_and_of_negative_number(void)
 	r1 &= -4;					\
 	r1 <<= 2;					\
 	r0 += r1;					\
-l0_%=:	r1 = %[test_val_foo];				\
+	r1 = %[test_val_foo];				\
 	*(u64*)(r0 + 0) = r1;				\
-	exit;						\
+l0_%=:	exit;						\
 "	:
 	: __imm(bpf_map_lookup_elem),
 	  __imm_addr(map_hash_48b),
@@ -90,7 +90,7 @@ __retval(0)
 #ifdef SPEC_V1
 __xlated_unpriv("if w0 < 0x1 goto pc+2")
 __xlated_unpriv("nospec") /* inserted to prevent `R1 !read_ok'` */
-__xlated_unpriv("goto pc-1") /* `r1 = *(u32*)(r1 + 512)`, sanitized dead code */
+__xlated_unpriv("goto pc-2") /* `r1 = *(u32*)(r1 + 512)`, sanitized dead code */
 __xlated_unpriv("r0 = 0")
 #endif
 __naked void known_subreg_with_unknown_reg(void)
@@ -107,6 +107,156 @@ l0_%=:	r0 = 0;						\
 	exit;						\
 "	:
 	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("and that clears no bit")
+__success __log_level(2)
+__msg("(54) w0 &= 255 {{.*}}R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=16")
+__naked void and_clears_no_bit(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r0 &= 15;					\
+	r0 += 1;					\
+	w0 &= 255;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("and that clears no bit of the low half")
+__success __retval(0)
+__naked void and_clears_no_low_bit(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	if w0 < 1 goto l0_%=;				\
+	if w0 > 16 goto l0_%=;				\
+	w0 &= 255;					\
+	if w0 == 0 goto l1_%=;				\
+	call %[bpf_ktime_get_ns];			\
+	if w0 < 1 goto l0_%=;				\
+	if w0 > 16 goto l0_%=;				\
+	r0 &= 255;					\
+	if r0 != 0 goto l0_%=;				\
+l1_%=:	r0 /= 0;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* bit 1 is 0, so r0 is not -1 */
+SEC("socket")
+__description("and that clears no bit gives an unsigned range")
+__success __retval(0)
+__naked void and_clears_no_bit_umax(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	if r0 & 2 goto l0_%=;				\
+	r0 &= -3;					\
+	if r0 s< -1 goto l0_%=;				\
+	if r0 s> 7 goto l0_%=;				\
+	r0 >>= 60;					\
+	if r0 == 0 goto l0_%=;				\
+	r0 /= 0;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/*
+ * r0 is 11 * k + 7, w0 is -1 or 0. Only 0x1ffffffff fits. The AND splits the state.
+ * The part where w0 is 0 has no value. It must keep its range.
+ */
+SEC("socket")
+__description("and splits the state: the step leaves no value")
+__success __retval(0)
+__naked void and_split_step(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r0 >>= 20;					\
+	r0 *= 11;					\
+	r0 += 7;					\
+	if w0 s> 0 goto l0_%=;				\
+	if w0 s< -1 goto l0_%=;				\
+	r1 = 0x1ffffffff ll;				\
+	if r0 < r1 goto l0_%=;				\
+	r1 = 0x5ffffffff ll;				\
+	if r0 > r1 goto l0_%=;				\
+	r0 &= -1;					\
+	r0 += 1;					\
+	r0 >>= 32;					\
+	if r0 <= 6 goto l0_%=;				\
+	r0 /= 0;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* Bit 33 is 1, only -1 fits. The part where w0 is 0 must not take the jump to l1. */
+SEC("socket")
+__description("and splits the state: a known bit leaves no value")
+__success __retval(0)
+__naked void and_split_known_one(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r1 = 0x200000000 ll;				\
+	r0 |= r1;					\
+	if w0 s> 0 goto l0_%=;				\
+	if w0 s< -1 goto l0_%=;				\
+	if r0 s< -1 goto l0_%=;				\
+	r1 = 0x1ffffffff ll;				\
+	if r0 s> r1 goto l0_%=;				\
+	r0 &= -1;					\
+	if w0 > 100 goto l1_%=;				\
+	goto l0_%=;					\
+l1_%=:	r0 &= 1;					\
+	if r0 != 0 goto l0_%=;				\
+	r0 /= 0;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
+/* Bit 40 is 0, only 0 fits. The bit stays 0 in the part where w0 is -1. */
+SEC("socket")
+__description("and splits the state: a known bit stays")
+__success __retval(0)
+__naked void and_split_known_zero(void)
+{
+	asm volatile ("					\
+	call %[bpf_ktime_get_ns];			\
+	r1 = 0x10000000000 ll;				\
+	if r0 & r1 goto l0_%=;				\
+	if w0 s> 0 goto l0_%=;				\
+	if w0 s< -1 goto l0_%=;				\
+	r1 = 0xfffffffdffffffff ll;			\
+	if r0 s< r1 goto l0_%=;				\
+	if r0 s> 0 goto l0_%=;				\
+	r0 &= -1;					\
+	r0 >>= 40;					\
+	r0 &= 1;					\
+	if r0 == 0 goto l0_%=;				\
+	r0 /= 0;					\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_ktime_get_ns)
 	: __clobber_all);
 }
 
