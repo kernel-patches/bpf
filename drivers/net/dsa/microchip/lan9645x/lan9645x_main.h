@@ -7,6 +7,7 @@
 
 #include <linux/dsa/lan9645x.h>
 #include <linux/if_bridge.h>
+#include <linux/if_vlan.h>
 #include <linux/regmap.h>
 #include <net/dsa.h>
 
@@ -36,6 +37,11 @@
  * See QSYS:RES_CTRL[*]:RES_CFG description
  */
 #define QSYS_Q_RSRV			95
+
+/* Reserved VLAN IDs. */
+#define HOST_PVID			0
+#define VLAN_RSV_RANGE_START		4032
+#define VLAN_MAX			(VLAN_RSV_RANGE_START - 1)
 
 /* Port Group Identifiers (PGID) are port-masks applied to all frames.
  *
@@ -159,6 +165,11 @@ enum lan9645x_vlan_port_tag {
 	LAN9645X_TAG_ALL = 3,
 };
 
+struct lan9645x_vlan {
+	u32 portmask: 10, /* ports 0-8 + CPU port module */
+	    untagged: 9; /* ports 0-8 */
+};
+
 struct lan9645x {
 	struct device *dev;
 	struct dsa_switch *ds;
@@ -170,13 +181,23 @@ struct lan9645x {
 	u8 num_phys_ports;
 	struct lan9645x_port **ports;
 
+	/* lock forwarding configuration and vlan table */
+	struct mutex fwd_domain_lock;
+
 	int num_port_dis;
+
+	/* VLAN entries */
+	struct lan9645x_vlan vlans[VLAN_N_VID];
 };
 
 struct lan9645x_port {
 	struct lan9645x *lan9645x;
 
 	u8 chip_port;
+
+	unsigned int bridge_num;
+	bool vlan_aware;
+	u16 pvid;
 
 	bool rx_internal_delay;
 	bool tx_internal_delay;
@@ -224,6 +245,11 @@ static inline struct lan9645x_port *lan9645x_to_port(struct lan9645x *lan9645x,
 						     int port)
 {
 	return lan9645x->ports[port];
+}
+
+static inline bool lan9645x_port_is_bridged(struct lan9645x_port *p)
+{
+	return p->bridge_num;
 }
 
 static inline struct regmap *lan_tgt2rmap(struct lan9645x *lan9645x,
@@ -302,5 +328,16 @@ void lan9645x_port_cpu_init(struct lan9645x *lan9645x);
 void lan9645x_phylink_get_caps(struct lan9645x *lan9645x, int port,
 			       struct phylink_config *c);
 void lan9645x_phylink_port_down(struct lan9645x *lan9645x, int port);
+
+/* VLAN lan9645x_vlan.c */
+int lan9645x_vlan_init(struct lan9645x *lan9645x);
+u16 lan9645x_vlan_unaware_pvid(unsigned int bridge_num);
+void lan9645x_vlan_port_apply(struct lan9645x_port *p);
+void lan9645x_vlan_port_set_bridge_vid(struct lan9645x_port *p, bool member);
+int lan9645x_vlan_port_add_vlan(struct lan9645x_port *p, u16 vid, bool pvid,
+				bool untagged,
+				struct netlink_ext_ack *extack);
+int lan9645x_vlan_port_del_vlan(struct lan9645x_port *p, u16 vid);
+void lan9645x_vlan_set_hostmode(struct lan9645x_port *p);
 
 #endif /* __LAN9645X_MAIN_H__ */
