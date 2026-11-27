@@ -2519,7 +2519,7 @@ void tb_switch_debugfs_init(struct tb_switch *sw)
 		debugfs_dir = debugfs_create_dir(dir_name, sw->debugfs_dir);
 		debugfs_create_file("regs", DEBUGFS_MODE, debugfs_dir,
 				    port, &port_regs_fops);
-		debugfs_create_file("path", 0400, debugfs_dir, port,
+		debugfs_create_file("path", DEBUGFS_MODE, debugfs_dir, port,
 				    &path_fops);
 		if (port->config.counters_support)
 			debugfs_create_file("counters", 0600, debugfs_dir, port,
