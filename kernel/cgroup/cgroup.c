@@ -29,6 +29,7 @@
 
 #include <linux/bpf-cgroup.h>
 #include <linux/cred.h>
+#include <linux/ctype.h>
 #include <linux/errno.h>
 #include <linux/init_task.h>
 #include <linux/kernel.h>
@@ -7541,18 +7542,28 @@ static u64 power_of_ten(int power)
 int cgroup_parse_float(const char *input, unsigned dec_shift, s64 *v)
 {
 	s64 whole, frac = 0;
-	int fstart = 0, fend = 0, flen;
+	int wlen = 0;
+	unsigned int i;
+	const char *p;
 
-	if (!sscanf(input, "%lld.%n%lld%n", &whole, &fstart, &frac, &fend))
-		return -EINVAL;
-	if (frac < 0)
+	if (sscanf(input, "%lld%n", &whole, &wlen) != 1)
 		return -EINVAL;
 
-	flen = fend > fstart ? fend - fstart : 0;
-	if (flen < dec_shift)
-		frac *= power_of_ten(dec_shift - flen);
-	else
-		frac = DIV_ROUND_CLOSEST_ULL(frac, power_of_ten(flen - dec_shift));
+	p = input + wlen;
+	if (*p == '.')
+		p++;
+
+	for (i = 0; i <= dec_shift; i++) {
+		int digit = 0;
+
+		if (isdigit(*p))
+			digit = *p++ - '0';
+
+		if (i < dec_shift)
+			frac = frac * 10 + digit;
+		else if (digit >= 5)
+			frac++;
+	}
 
 	*v = whole * power_of_ten(dec_shift) + frac;
 	return 0;
