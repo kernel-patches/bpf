@@ -227,17 +227,12 @@ int svm_set_efer(struct kvm_vcpu *vcpu, u64 efer)
 	if ((old_efer & EFER_SVME) != (efer & EFER_SVME)) {
 		if (!(efer & EFER_SVME)) {
 			/*
-			 * Architecturally, clearing EFER.SVME while a guest is
-			 * running yields undefined behavior, i.e. KVM can do
-			 * literally anything.  Force the vCPU back into L1 as
-			 * that is the safest option for KVM, but synthesize a
-			 * triple fault (for L1!) so that KVM at least doesn't
-			 * run random L2 code in the context of L1.  Do so if
-			 * and only if the vCPU is actively running, e.g. to
-			 * avoid positives if userspace is stuffing state.
+			 * KVM is supposed to synthesize #GP if L2 attempts to
+			 * clear SVME.
 			 */
-			if (is_guest_mode(vcpu) && vcpu->wants_to_run)
-				kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+			if (KVM_BUG_ON(is_guest_mode(vcpu) &&
+				       vcpu->wants_to_run, vcpu->kvm))
+				return -EIO;
 
 			svm_leave_nested(vcpu);
 			/* #GP intercept is still needed for vmware backdoor */
@@ -1602,7 +1597,7 @@ static void svm_set_vintr(struct vcpu_svm *svm)
 	/*
 	 * The following fields are ignored when AVIC is enabled
 	 */
-	WARN_ON(kvm_vcpu_apicv_activated(&svm->vcpu));
+	WARN_ON_ONCE(kvm_vcpu_apicv_activated(&svm->vcpu));
 
 	svm_set_intercept(svm, INTERCEPT_VINTR);
 
@@ -1637,8 +1632,8 @@ static void svm_clear_vintr(struct vcpu_svm *svm)
 	if (is_guest_mode(&svm->vcpu)) {
 		svm->vmcb01.ptr->control.int_ctl &= ~V_IRQ_INJECTION_BITS_MASK;
 
-		WARN_ON((svm->vmcb->control.int_ctl & V_TPR_MASK) !=
-			(svm->nested.ctl.int_ctl & V_TPR_MASK));
+		WARN_ON_ONCE((svm->vmcb->control.int_ctl & V_TPR_MASK) !=
+			     (svm->nested.ctl.int_ctl & V_TPR_MASK));
 
 		svm->vmcb->control.int_ctl |= svm->nested.ctl.int_ctl &
 			V_IRQ_INJECTION_BITS_MASK;
@@ -2208,7 +2203,6 @@ static int mc_interception(struct kvm_vcpu *vcpu)
 
 static int shutdown_interception(struct kvm_vcpu *vcpu)
 {
-	struct kvm_run *kvm_run = vcpu->run;
 	struct vcpu_svm *svm = to_svm(vcpu);
 
 
@@ -2245,7 +2239,7 @@ static int shutdown_interception(struct kvm_vcpu *vcpu)
 		kvm_vcpu_reset(vcpu, true);
 	}
 
-	kvm_run->exit_reason = KVM_EXIT_SHUTDOWN;
+	kvm_prepare_shutdown_exit(vcpu);
 	return 0;
 }
 
@@ -2683,7 +2677,7 @@ static int cr_interception(struct kvm_vcpu *vcpu)
 			err = kvm_set_cr8(vcpu, val);
 			break;
 		default:
-			WARN(1, "unhandled write to CR%d", cr);
+			WARN_ONCE(1, "unhandled write to CR%d", cr);
 			kvm_queue_exception(vcpu, UD_VECTOR);
 			return 1;
 		}
@@ -2705,7 +2699,7 @@ static int cr_interception(struct kvm_vcpu *vcpu)
 			val = kvm_get_cr8(vcpu);
 			break;
 		default:
-			WARN(1, "unhandled read from CR%d", cr);
+			WARN_ONCE(1, "unhandled read from CR%d", cr);
 			kvm_queue_exception(vcpu, UD_VECTOR);
 			return 1;
 		}
@@ -2742,7 +2736,7 @@ static int cr_trap(struct kvm_vcpu *vcpu)
 		ret = kvm_set_cr8(vcpu, new_value);
 		break;
 	default:
-		WARN(1, "unhandled CR%d write trap", cr);
+		WARN_ONCE(1, "unhandled CR%d write trap", cr);
 		kvm_queue_exception(vcpu, UD_VECTOR);
 		return 1;
 	}
@@ -2967,7 +2961,7 @@ static int svm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		msr_info->data = svm->nested.hsave_msr;
 		break;
 	case MSR_VM_CR:
-		msr_info->data = svm->nested.vm_cr_msr;
+		msr_info->data = SVM_VM_CR_SVM_LOCK_MASK;
 		break;
 	case MSR_IA32_SPEC_CTRL:
 		if (!msr_info->host_initiated &&
@@ -3026,31 +3020,6 @@ static int svm_complete_emulated_msr(struct kvm_vcpu *vcpu, int err)
 
 	svm_vmgexit_inject_exception(svm, X86_TRAP_GP);
 	return 1;
-}
-
-static int svm_set_vm_cr(struct kvm_vcpu *vcpu, u64 data)
-{
-	struct vcpu_svm *svm = to_svm(vcpu);
-	int svm_dis, chg_mask;
-
-	if (data & ~SVM_VM_CR_VALID_MASK)
-		return 1;
-
-	chg_mask = SVM_VM_CR_VALID_MASK;
-
-	if (svm->nested.vm_cr_msr & SVM_VM_CR_SVM_DIS_MASK)
-		chg_mask &= ~(SVM_VM_CR_SVM_LOCK_MASK | SVM_VM_CR_SVM_DIS_MASK);
-
-	svm->nested.vm_cr_msr &= ~chg_mask;
-	svm->nested.vm_cr_msr |= (data & chg_mask);
-
-	svm_dis = svm->nested.vm_cr_msr & SVM_VM_CR_SVM_DIS_MASK;
-
-	/* check for svm_disable while efer.svme is set */
-	if (svm_dis && (vcpu->arch.efer & EFER_SVME))
-		return 1;
-
-	return 0;
 }
 
 static int svm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
@@ -3275,7 +3244,6 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
 		svm->nested.hsave_msr = data & PAGE_MASK;
 		break;
 	case MSR_VM_CR:
-		return svm_set_vm_cr(vcpu, data);
 	case MSR_VM_IGNNE:
 		kvm_pr_unimpl_wrmsr(vcpu, ecx, data);
 		break;
@@ -3933,7 +3901,7 @@ static void svm_inject_nmi(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 
-	svm->vmcb->control.event_inj = SVM_EVTINJ_VALID | SVM_EVTINJ_TYPE_NMI;
+	svm->vmcb->control.event_inj = SVM_EVTINJ_VALID | SVM_EVTINJ_TYPE_NMI | NMI_VECTOR;
 
 	if (svm->nmi_l1_to_l2)
 		return;
