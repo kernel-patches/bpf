@@ -462,6 +462,9 @@
 				 <&sysctrl R9A06G032_CLK_RMII_REF>,
 				 <&sysctrl R9A06G032_HCLK_SWITCH_RG>;
 			clock-names = "mii_ref", "rgmii_ref", "rmii_ref", "hclk";
+			resets = <&sysctrl R9A06G032_RST_TS>,
+				 <&sysctrl R9A06G032_RST_MIIC>;
+			reset-names = "rst_ts", "rst_miic";
 			power-domains = <&sysctrl>;
 			status = "disabled";
 
