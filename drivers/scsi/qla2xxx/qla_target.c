@@ -212,8 +212,9 @@ static void qlt_queue_unknown_atio(scsi_qla_host_t *vha,
 	unsigned long flags;
 	unsigned int add_cdb_len = 0;
 
-	/* atio must be the last member of qla_tgt_sess_op for add_cdb_len */
-	BUILD_BUG_ON(offsetof(struct qla_tgt_sess_op, atio) + sizeof(u->atio) != sizeof(*u));
+	/* atio_u_isp24_fcp_cmnd_add_cdb follows immediately after atio */
+	BUILD_BUG_ON(offsetof(struct qla_tgt_sess_op, atio) + sizeof(struct atio_from_isp) !=
+		     offsetof(struct qla_tgt_sess_op, atio_u_isp24_fcp_cmnd_add_cdb));
 
 	if (tgt->tgt_stop) {
 		ql_dbg(ql_dbg_async, vha, 0x502c,

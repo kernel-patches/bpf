@@ -208,7 +208,7 @@ void scsi_proc_host_add(struct Scsi_Host *shost)
 	const struct scsi_host_template *sht = shost->hostt;
 	struct scsi_proc_entry *e;
 	struct proc_dir_entry *p;
-	char name[10];
+	char name[11];
 
 	if (!sht->show_info)
 		return;
@@ -217,7 +217,7 @@ void scsi_proc_host_add(struct Scsi_Host *shost)
 	if (!e)
 		goto err;
 
-	sprintf(name,"%d", shost->host_no);
+	snprintf(name, sizeof(name), "%u", shost->host_no);
 	p = proc_create_data(name, S_IRUGO | S_IWUSR, e->proc_dir,
 			     &proc_scsi_ops, shost);
 	if (!p)
@@ -238,7 +238,7 @@ void scsi_proc_host_rm(struct Scsi_Host *shost)
 {
 	const struct scsi_host_template *sht = shost->hostt;
 	struct scsi_proc_entry *e;
-	char name[10];
+	char name[11];
 
 	if (!sht->show_info)
 		return;
@@ -247,7 +247,7 @@ void scsi_proc_host_rm(struct Scsi_Host *shost)
 	if (!e)
 		return;
 
-	sprintf(name,"%d", shost->host_no);
+	snprintf(name, sizeof(name), "%u", shost->host_no);
 	remove_proc_entry(name, e->proc_dir);
 }
 /**

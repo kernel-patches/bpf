@@ -266,8 +266,8 @@ int mpi3mr_issue_diag_buf_post(struct mpi3mr_ioc *mrioc,
 	diag_buf_post_req.host_tag = cpu_to_le16(MPI3MR_HOSTTAG_INITCMDS);
 	diag_buf_post_req.function = MPI3_FUNCTION_DIAG_BUFFER_POST;
 	diag_buf_post_req.type = diag_buffer->type;
-	diag_buf_post_req.address = le64_to_cpu(diag_buffer->dma_addr);
-	diag_buf_post_req.length = le32_to_cpu(diag_buffer->size);
+	diag_buf_post_req.address = cpu_to_le64(diag_buffer->dma_addr);
+	diag_buf_post_req.length = cpu_to_le32(diag_buffer->size);
 
 	if (diag_buffer->is_segmented)
 		diag_buf_post_req.msg_flags |= MPI3_DIAG_BUFFER_POST_MSGFLAGS_SEGMENTED;
@@ -1117,6 +1117,7 @@ static long mpi3mr_bsg_upload_hdb(struct mpi3mr_ioc *mrioc,
 	struct diag_buffer_desc *diag_buffer;
 	uint32_t data_out_size;
 	uint32_t data_in_size;
+	u32 end;
 
 	data_out_size = job->request_payload.payload_len;
 	data_in_size = job->reply_payload.payload_len;
@@ -1151,7 +1152,8 @@ static long mpi3mr_bsg_upload_hdb(struct mpi3mr_ioc *mrioc,
 		return -EINVAL;
 	}
 
-	if ((upload_hdb.start_offset + upload_hdb.length) > diag_buffer->size) {
+	if (check_add_overflow(upload_hdb.start_offset, upload_hdb.length, &end) ||
+	    end > diag_buffer->size) {
 		dprint_bsg_err(mrioc,
 		    "%s: invalid start offset %d, length %d for type %d\n",
 		    __func__, upload_hdb.start_offset, upload_hdb.length,
@@ -1307,17 +1309,24 @@ static long mpi3mr_enable_logdata(struct mpi3mr_ioc *mrioc,
 	struct bsg_job *job)
 {
 	struct mpi3mr_logdata_enable logdata_enable;
+	unsigned long flags;
+	u16 entry_sz;
+	u8 *buf;
 
 	if (!mrioc->logdata_buf) {
-		mrioc->logdata_entry_sz =
+		entry_sz =
 		    (mrioc->reply_sz - (sizeof(struct mpi3_event_notification_reply) - 4))
 		    + MPI3MR_BSG_LOGDATA_ENTRY_HEADER_SZ;
-		mrioc->logdata_buf_idx = 0;
-		mrioc->logdata_buf = kcalloc(MPI3MR_BSG_LOGDATA_MAX_ENTRIES,
-		    mrioc->logdata_entry_sz, GFP_KERNEL);
-
-		if (!mrioc->logdata_buf)
+		buf = kcalloc(MPI3MR_BSG_LOGDATA_MAX_ENTRIES, entry_sz,
+			      GFP_KERNEL);
+		if (!buf)
 			return -ENOMEM;
+
+		spin_lock_irqsave(&mrioc->logdata_lock, flags);
+		mrioc->logdata_entry_sz = entry_sz;
+		mrioc->logdata_buf_idx = 0;
+		mrioc->logdata_buf = buf;
+		spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
 	}
 
 	memset(&logdata_enable, 0, sizeof(logdata_enable));
@@ -1344,10 +1353,15 @@ static long mpi3mr_enable_logdata(struct mpi3mr_ioc *mrioc,
 static long mpi3mr_get_logdata(struct mpi3mr_ioc *mrioc,
 	struct bsg_job *job)
 {
-	u16 num_entries, sz, entry_sz = mrioc->logdata_entry_sz;
+	unsigned long flags;
+	u16 entry_sz;
+	u32 num_entries, sz;
+	long rval = -EINVAL;
 
+	spin_lock_irqsave(&mrioc->logdata_lock, flags);
+	entry_sz = mrioc->logdata_entry_sz;
 	if ((!mrioc->logdata_buf) || (job->request_payload.payload_len < entry_sz))
-		return -EINVAL;
+		goto out;
 
 	num_entries = job->request_payload.payload_len / entry_sz;
 	if (num_entries > MPI3MR_BSG_LOGDATA_MAX_ENTRIES)
@@ -1358,9 +1372,11 @@ static long mpi3mr_get_logdata(struct mpi3mr_ioc *mrioc,
 		sg_copy_from_buffer(job->request_payload.sg_list,
 				    job->request_payload.sg_cnt,
 				    mrioc->logdata_buf, sz);
-		return 0;
+		rval = 0;
 	}
-	return -EINVAL;
+out:
+	spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
+	return rval;
 }
 
 /**
@@ -1496,7 +1512,7 @@ static long mpi3mr_get_all_tgt_info(struct mpi3mr_ioc *mrioc,
 	spin_unlock_irqrestore(&mrioc->tgtdev_lock, flags);
 
 	if ((job->request_payload.payload_len <= sizeof(u64)) ||
-		list_empty(&mrioc->tgtdev_list)) {
+		!num_devices) {
 		sg_copy_from_buffer(job->request_payload.sg_list,
 				    job->request_payload.sg_cnt,
 				    &num_devices, sizeof(num_devices));
@@ -1689,6 +1705,13 @@ static long mpi3mr_bsg_process_drv_cmds(struct bsg_job *job)
 	struct mpi3mr_ioc *mrioc = NULL;
 	struct mpi3mr_bsg_packet *bsg_req = NULL;
 	struct mpi3mr_bsg_drv_cmd *drvrcmd = NULL;
+
+	if (job->request_len <
+	    offsetofend(struct mpi3mr_bsg_packet, cmd.drvrcmd.opcode)) {
+		pr_err("%s: invalid BSG driver command length(%u)\n",
+		    MPI3MR_DRIVER_NAME, job->request_len);
+		return -EINVAL;
+	}
 
 	bsg_req = job->request;
 	drvrcmd = &bsg_req->cmd.drvrcmd;
@@ -1943,7 +1966,7 @@ static unsigned int mpi3mr_get_nvme_data_fmt(
 {
 	u8 format = 0;
 
-	format = ((nvme_encap_request->command[0] & 0xc000) >> 14);
+	format = ((le32_to_cpu(nvme_encap_request->command[0]) & 0xc000) >> 14);
 	return format;
 
 }
@@ -1972,10 +1995,10 @@ static int mpi3mr_build_nvme_sgl(struct mpi3mr_ioc *mrioc,
 	u16 available_sges = 0, i;
 	u32 sge_element_size = sizeof(struct mpi3mr_nvme_pt_sge);
 	struct mpi3mr_buf_map *drv_buf_iter = drv_bufs;
-	u64 sgemod_mask = ((u64)((mrioc->facts.sge_mod_mask) <<
-			    mrioc->facts.sge_mod_shift) << 32);
-	u64 sgemod_val = ((u64)(mrioc->facts.sge_mod_value) <<
-			  mrioc->facts.sge_mod_shift) << 32;
+	__le64 sgemod_mask = cpu_to_le64(((u64)((mrioc->facts.sge_mod_mask) <<
+			    mrioc->facts.sge_mod_shift) << 32));
+	__le64 sgemod_val = cpu_to_le64(((u64)(mrioc->facts.sge_mod_value) <<
+			  mrioc->facts.sge_mod_shift) << 32);
 	u32 size;
 
 	nvme_sgl = (struct mpi3mr_nvme_pt_sge *)
@@ -2071,11 +2094,11 @@ static int mpi3mr_build_nvme_prp(struct mpi3mr_ioc *mrioc,
 	size_t length = 0, desc_len;
 	u8 count;
 	struct mpi3mr_buf_map *drv_buf_iter = drv_bufs;
-	u64 sgemod_mask = ((u64)((mrioc->facts.sge_mod_mask) <<
-			    mrioc->facts.sge_mod_shift) << 32);
-	u64 sgemod_val = ((u64)(mrioc->facts.sge_mod_value) <<
-			  mrioc->facts.sge_mod_shift) << 32;
-	u16 dev_handle = nvme_encap_request->dev_handle;
+	__le64 sgemod_mask = cpu_to_le64(((u64)((mrioc->facts.sge_mod_mask) <<
+			    mrioc->facts.sge_mod_shift) << 32));
+	__le64 sgemod_val = cpu_to_le64(((u64)(mrioc->facts.sge_mod_value) <<
+			  mrioc->facts.sge_mod_shift) << 32);
+	u16 dev_handle = le16_to_cpu(nvme_encap_request->dev_handle);
 	struct mpi3mr_tgt_dev *tgtdev;
 	u16 desc_count = 0;
 
@@ -2372,6 +2395,26 @@ static int mpi3mr_map_data_buffer_dma(struct mpi3mr_ioc *mrioc,
 	drv_buf->num_dma_desc = needed_desc;
 	return 0;
 }
+
+/**
+ * mpi3mr_bsg_is_dout_be - Check if a buffer entry uses the data out buffer
+ * @buf_type: Buffer entry type
+ *
+ * Return: true if the entry is taken from the data out buffer and
+ * false if it is taken from the data in buffer.
+ */
+static bool mpi3mr_bsg_is_dout_be(u8 buf_type)
+{
+	switch (buf_type) {
+	case MPI3MR_BSG_BUFTYPE_RAIDMGMT_CMD:
+	case MPI3MR_BSG_BUFTYPE_DATA_OUT:
+	case MPI3MR_BSG_BUFTYPE_MPI_REQUEST:
+		return true;
+	default:
+		return false;
+	}
+}
+
 /**
  * mpi3mr_bsg_process_mpt_cmds - MPI Pass through BSG handler
  * @job: BSG job reference
@@ -2409,16 +2452,31 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	struct mpi3_scsi_task_mgmt_request *tm_req;
 	u32 erbsz = MPI3MR_SENSE_BUF_SZ, tmplen;
 	u16 dev_handle;
-	struct mpi3mr_tgt_dev *tgtdev;
-	struct mpi3mr_stgt_priv_data *stgt_priv = NULL;
+	struct mpi3mr_tgt_dev *tgtdev = NULL;
+	u64 block_seq = 0;
 	struct mpi3mr_bsg_in_reply_buf *bsg_reply_buf = NULL;
 	u32 din_size = 0, dout_size = 0;
 	u8 *din_buf = NULL, *dout_buf = NULL;
 	u8 *sgl_iter = NULL, *sgl_din_iter = NULL, *sgl_dout_iter = NULL;
 	u16 rmc_size  = 0, desc_count = 0;
+	size_t req_min, buf_left;
+	bool prp_owned = false, timed_out = false, completed;
+	unsigned long flags;
+	u16 cmd_state;
 
 	bsg_req = job->request;
 	karg = (struct mpi3mr_bsg_mptcmd *)&bsg_req->cmd.mptcmd;
+
+	req_min = offsetof(struct mpi3mr_bsg_packet,
+	    cmd.mptcmd.buf_entry_list.buf_entry);
+	if (job->request_len >= req_min)
+		req_min += karg->buf_entry_list.num_of_entries *
+		    sizeof(struct mpi3mr_buf_entry);
+	if (job->request_len < req_min) {
+		pr_err("%s: invalid BSG MPT command length(%u), need %zu\n",
+		    MPI3MR_DRIVER_NAME, job->request_len, req_min);
+		return -EINVAL;
+	}
 
 	mrioc = mpi3mr_bsg_verify_adapter(karg->mrioc_id);
 	if (!mrioc)
@@ -2484,6 +2542,19 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	drv_buf_iter = drv_bufs;
 
 	for (count = 0; count < bufcnt; count++, buf_entries++, drv_buf_iter++) {
+		if (mpi3mr_bsg_is_dout_be(buf_entries->buf_type))
+			buf_left = job->request_payload.payload_len -
+			    (sgl_dout_iter - dout_buf);
+		else
+			buf_left = job->reply_payload.payload_len -
+			    (sgl_din_iter - din_buf);
+		if (buf_entries->buf_len > buf_left) {
+			dprint_bsg_err(mrioc, "%s: buffer entry %u exceeds the payload\n",
+			    __func__, count);
+			mutex_unlock(&mrioc->bsg_cmds.mutex);
+			rval = -EINVAL;
+			goto out;
+		}
 
 		switch (buf_entries->buf_type) {
 		case MPI3MR_BSG_BUFTYPE_RAIDMGMT_CMD:
@@ -2549,14 +2620,6 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 				rval = -EINVAL;
 				goto out;
 			}
-			if (sgl_iter + mpi_msg_size >
-			    dout_buf + job->request_payload.payload_len) {
-				dprint_bsg_err(mrioc, "%s: MPI request buf exceeds dout_buf\n",
-					       __func__);
-				mutex_unlock(&mrioc->bsg_cmds.mutex);
-				rval = -EINVAL;
-				goto out;
-			}
 			memcpy(mpi_req, sgl_iter, mpi_msg_size);
 			break;
 		default:
@@ -2566,21 +2629,6 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 		if (invalid_be) {
 			dprint_bsg_err(mrioc, "%s: invalid buffer entries passed\n",
 				__func__);
-			mutex_unlock(&mrioc->bsg_cmds.mutex);
-			rval = -EINVAL;
-			goto out;
-		}
-
-		if (sgl_dout_iter > (dout_buf + job->request_payload.payload_len)) {
-			dprint_bsg_err(mrioc, "%s: data_out buffer length mismatch\n",
-				       __func__);
-			mutex_unlock(&mrioc->bsg_cmds.mutex);
-			rval = -EINVAL;
-			goto out;
-		}
-		if (sgl_din_iter > (din_buf + job->reply_payload.payload_len)) {
-			dprint_bsg_err(mrioc, "%s: data_in buffer length mismatch\n",
-				       __func__);
 			mutex_unlock(&mrioc->bsg_cmds.mutex);
 			rval = -EINVAL;
 			goto out;
@@ -2719,6 +2767,8 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 				mutex_unlock(&mrioc->bsg_cmds.mutex);
 				goto out;
 			}
+			if (mrioc->prp_list_virt)
+				prp_owned = true;
 		} else if (nvme_fmt == MPI3MR_NVME_DATA_FORMAT_SGL1 ||
 			nvme_fmt == MPI3MR_NVME_DATA_FORMAT_SGL2) {
 			if (mpi3mr_build_nvme_sgl(mrioc,
@@ -2750,27 +2800,23 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 		tm_req = (struct mpi3_scsi_task_mgmt_request *)mpi_req;
 		if (tm_req->task_type !=
 		    MPI3_SCSITASKMGMT_TASKTYPE_ABORT_TASK) {
-			dev_handle = tm_req->dev_handle;
+			dev_handle = le16_to_cpu(tm_req->dev_handle);
 			block_io = 1;
 		}
 	}
 	if (block_io) {
 		tgtdev = mpi3mr_get_tgtdev_by_handle(mrioc, dev_handle);
-		if (tgtdev) {
-			if (tgtdev->starget && tgtdev->starget->hostdata) {
-				stgt_priv = (struct mpi3mr_stgt_priv_data *)
-				    tgtdev->starget->hostdata;
-				atomic_inc(&stgt_priv->block_io);
-			}
-			mpi3mr_tgtdev_put(tgtdev);
-		}
+		if (tgtdev)
+			block_seq = mpi3mr_tgtdev_block_io_inc(mrioc, tgtdev);
 	}
 
+	spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
 	mrioc->bsg_cmds.state = MPI3MR_CMD_PENDING;
 	mrioc->bsg_cmds.is_waiting = 1;
 	mrioc->bsg_cmds.callback = NULL;
 	mrioc->bsg_cmds.is_sense = 0;
 	mrioc->bsg_cmds.sensebuf = sense_buff_k;
+	spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
 	memset(mrioc->bsg_cmds.reply, 0, mrioc->reply_sz);
 	mpi_header->host_tag = cpu_to_le16(MPI3MR_HOSTTAG_BSG_CMDS);
 	if (mrioc->logging_level & MPI3_DEBUG_BSG_INFO) {
@@ -2791,22 +2837,34 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 
 
 	if (rval) {
+		spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
 		mrioc->bsg_cmds.is_waiting = 0;
+		spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
 		dprint_bsg_err(mrioc,
 		    "%s: posting bsg request is failed\n", __func__);
 		rval = -EAGAIN;
-		if (block_io && stgt_priv)
-			atomic_dec(&stgt_priv->block_io);
+		if (tgtdev) {
+			mpi3mr_tgtdev_block_io_dec(mrioc, tgtdev, block_seq);
+			mpi3mr_tgtdev_put(tgtdev);
+		}
 		goto out_unlock;
 	}
 	wait_for_completion_timeout(&mrioc->bsg_cmds.done,
 	    (karg->timeout * HZ));
-	if (block_io && stgt_priv)
-		atomic_dec(&stgt_priv->block_io);
-	if (!(mrioc->bsg_cmds.state & MPI3MR_CMD_COMPLETE)) {
+	if (tgtdev) {
+		mpi3mr_tgtdev_block_io_dec(mrioc, tgtdev, block_seq);
+		mpi3mr_tgtdev_put(tgtdev);
+	}
+	spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
+	cmd_state = mrioc->bsg_cmds.state;
+	completed = cmd_state & MPI3MR_CMD_COMPLETE;
+	if (!completed)
 		mrioc->bsg_cmds.is_waiting = 0;
+	spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
+	if (!completed) {
+		timed_out = true;
 		rval = -EAGAIN;
-		if (mrioc->bsg_cmds.state & MPI3MR_CMD_RESET)
+		if (cmd_state & MPI3MR_CMD_RESET)
 			goto out_unlock;
 		if (((mpi_header->function != MPI3_FUNCTION_SCSI_IO) &&
 		    (mpi_header->function != MPI3_FUNCTION_NVME_ENCAPSULATED))
@@ -2828,26 +2886,24 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 			(mpi_header->function == MPI3_BSG_FUNCTION_SCSI_IO)) {
 			dprint_bsg_err(mrioc, "%s: bsg request timedout after %d seconds,\n"
 				"issuing target reset to (0x%04x)\n", __func__,
-				karg->timeout, mpi_header->function_dependent);
+				karg->timeout,
+				le16_to_cpu(mpi_header->function_dependent));
 			mpi3mr_issue_tm(mrioc,
 			    MPI3_SCSITASKMGMT_TASKTYPE_TARGET_RESET,
-			    mpi_header->function_dependent, 0,
+			    le16_to_cpu(mpi_header->function_dependent), 0,
 			    MPI3MR_HOSTTAG_BLK_TMS, MPI3MR_RESETTM_TIMEOUT,
 			    &mrioc->host_tm_cmds, &resp_code, NULL);
 		}
-		if (!(mrioc->bsg_cmds.state & MPI3MR_CMD_COMPLETE) &&
-		    !(mrioc->bsg_cmds.state & MPI3MR_CMD_RESET))
+		spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
+		cmd_state = mrioc->bsg_cmds.state;
+		spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
+		if (!(cmd_state & MPI3MR_CMD_COMPLETE) &&
+		    !(cmd_state & MPI3MR_CMD_RESET))
 			mpi3mr_soft_reset_handler(mrioc,
 			    MPI3MR_RESET_FROM_APP_TIMEOUT, 1);
 		goto out_unlock;
 	}
 	dprint_bsg_info(mrioc, "%s: bsg request is completed\n", __func__);
-
-	if (mrioc->prp_list_virt) {
-		dma_free_coherent(&mrioc->pdev->dev, mrioc->prp_sz,
-		    mrioc->prp_list_virt, mrioc->prp_list_dma);
-		mrioc->prp_list_virt = NULL;
-	}
 
 	if ((mrioc->bsg_cmds.ioc_status & MPI3_IOCSTATUS_STATUS_MASK)
 	     != MPI3_IOCSTATUS_SUCCESS) {
@@ -2879,8 +2935,10 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 				MPI3MR_BSG_MPI_REPLY_BUFTYPE_STATUS;
 			status_desc = (struct mpi3_status_reply_descriptor *)
 			    bsg_reply_buf->reply_buf;
-			status_desc->ioc_status = mrioc->bsg_cmds.ioc_status;
-			status_desc->ioc_log_info = mrioc->bsg_cmds.ioc_loginfo;
+			status_desc->ioc_status =
+			    cpu_to_le16(mrioc->bsg_cmds.ioc_status);
+			status_desc->ioc_log_info =
+			    cpu_to_le32(mrioc->bsg_cmds.ioc_loginfo);
 		}
 		tmplen = min(drv_buf_iter->kern_buf_len,
 			drv_buf_iter->bsg_buf_len);
@@ -2917,15 +2975,34 @@ static long mpi3mr_bsg_process_mpt_cmds(struct bsg_job *job)
 	}
 
 out_unlock:
+	if (prp_owned) {
+		spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
+		cmd_state = mrioc->bsg_cmds.state;
+		spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
+		/*
+		 * Do not free the PRP list if a timed out command may still be
+		 * using it. Leaking it is safer than letting the controller read
+		 * freed memory.
+		 */
+		if (!timed_out ||
+		    (cmd_state & MPI3MR_CMD_COMPLETE) ||
+		    ((cmd_state & MPI3MR_CMD_RESET) &&
+		    !mrioc->unrecoverable))
+			dma_free_coherent(&mrioc->pdev->dev, mrioc->prp_sz,
+			    mrioc->prp_list_virt, mrioc->prp_list_dma);
+		mrioc->prp_list_virt = NULL;
+	}
 	if (din_buf) {
 		job->reply_payload_rcv_len =
 			sg_copy_from_buffer(job->reply_payload.sg_list,
 					    job->reply_payload.sg_cnt,
 					    din_buf, job->reply_payload.payload_len);
 	}
+	spin_lock_irqsave(&mrioc->bsg_cmds.state_lock, flags);
 	mrioc->bsg_cmds.is_sense = 0;
 	mrioc->bsg_cmds.sensebuf = NULL;
 	mrioc->bsg_cmds.state = MPI3MR_CMD_NOTUSED;
+	spin_unlock_irqrestore(&mrioc->bsg_cmds.state_lock, flags);
 	mutex_unlock(&mrioc->bsg_cmds.mutex);
 out:
 	kfree(sense_buff_k);
@@ -2958,13 +3035,18 @@ out:
 void mpi3mr_app_save_logdata_th(struct mpi3mr_ioc *mrioc, char *event_data,
 	u16 event_data_size)
 {
-	u32 index = mrioc->logdata_buf_idx;
+	u32 index;
 	size_t entry_payload_len, sz;
 	struct mpi3mr_logdata_entry *entry;
+	unsigned long flags;
 
-	if (!(mrioc->logdata_buf))
+	spin_lock_irqsave(&mrioc->logdata_lock, flags);
+	if (!(mrioc->logdata_buf)) {
+		spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
 		return;
+	}
 
+	index = mrioc->logdata_buf_idx;
 	entry = (struct mpi3mr_logdata_entry *)
 		(mrioc->logdata_buf + (index * mrioc->logdata_entry_sz));
 	entry->valid_entry = 1;
@@ -2977,6 +3059,7 @@ void mpi3mr_app_save_logdata_th(struct mpi3mr_ioc *mrioc, char *event_data,
 	memcpy(entry->data, event_data, sz);
 	mrioc->logdata_buf_idx =
 		((++index) % MPI3MR_BSG_LOGDATA_MAX_ENTRIES);
+	spin_unlock_irqrestore(&mrioc->logdata_lock, flags);
 	atomic64_inc(&event_counter);
 }
 
@@ -2995,6 +3078,12 @@ static int mpi3mr_bsg_request(struct bsg_job *job)
 
 	struct mpi3mr_bsg_packet *bsg_req = job->request;
 
+	if (job->request_len < offsetofend(struct mpi3mr_bsg_packet, cmd_type)) {
+		pr_err("%s: invalid BSG request length(%u)\n",
+		    MPI3MR_DRIVER_NAME, job->request_len);
+		goto out;
+	}
+
 	switch (bsg_req->cmd_type) {
 	case MPI3MR_DRV_CMD:
 		rval = mpi3mr_bsg_process_drv_cmds(job);
@@ -3008,6 +3097,7 @@ static int mpi3mr_bsg_request(struct bsg_job *job)
 		break;
 	}
 
+out:
 	bsg_job_done(job, rval, reply_payload_rcv_len);
 
 	return 0;

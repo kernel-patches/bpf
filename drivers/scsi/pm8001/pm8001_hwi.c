@@ -3478,7 +3478,12 @@ int pm8001_mpi_task_abort_resp(struct pm8001_hba_info *pm8001_ha, void *piomb)
 		break;
 	case IO_NOT_VALID:
 		pm8001_dbg(pm8001_ha, FAIL, "IO_NOT_VALID for tag %#x\n", tag);
-		ts->resp = TMF_RESP_FUNC_FAILED;
+		ts->resp = SAS_TASK_COMPLETE;
+		ts->stat = TMF_RESP_FUNC_FAILED;
+		break;
+	default:
+		ts->resp = SAS_TASK_COMPLETE;
+		ts->stat = TMF_RESP_FUNC_FAILED;
 		break;
 	}
 	spin_lock_irqsave(&t->task_state_lock, flags);

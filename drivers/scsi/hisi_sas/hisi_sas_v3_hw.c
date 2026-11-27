@@ -5317,8 +5317,8 @@ static int __maybe_unused resume_v3_hw(struct device *device)
 }
 
 static const struct pci_device_id sas_v3_pci_table[] = {
-	{ PCI_VDEVICE(HUAWEI, 0xa230), hip08 },
-	{}
+	{ PCI_VDEVICE(HUAWEI, 0xa230), .driver_data = hip08 },
+	{ }
 };
 MODULE_DEVICE_TABLE(pci, sas_v3_pci_table);
 

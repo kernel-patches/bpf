@@ -2395,10 +2395,8 @@ static void tw_remove(struct pci_dev *pdev)
 
 /* PCI Devices supported by this driver */
 static const struct pci_device_id tw_pci_tbl[] = {
-	{ PCI_VENDOR_ID_3WARE, PCI_DEVICE_ID_3WARE_1000,
-	  PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-	{ PCI_VENDOR_ID_3WARE, PCI_DEVICE_ID_3WARE_7000,
-	  PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_VDEVICE(3WARE, PCI_DEVICE_ID_3WARE_1000) },
+	{ PCI_VDEVICE(3WARE, PCI_DEVICE_ID_3WARE_7000) },
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, tw_pci_tbl);

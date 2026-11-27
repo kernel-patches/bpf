@@ -1176,9 +1176,9 @@ static const struct pci_error_handlers csio_err_handler = {
 #define CH_PCI_DEVICE_ID_FUNCTION	0x6
 
 #define CH_PCI_ID_TABLE_ENTRY(devid) \
-		{ PCI_VDEVICE(CHELSIO, (devid)), 0 }
+		{ PCI_VDEVICE(CHELSIO, (devid)) }
 
-#define CH_PCI_DEVICE_ID_TABLE_DEFINE_END { 0, } }
+#define CH_PCI_DEVICE_ID_TABLE_DEFINE_END { } }
 
 #include "t4_pci_id_tbl.h"
 

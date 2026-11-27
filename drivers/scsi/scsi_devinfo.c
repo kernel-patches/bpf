@@ -688,7 +688,7 @@ static ssize_t proc_scsi_devinfo_write(struct file *file,
 
 	ret = scsi_dev_info_list_add_str(buffer);
 	if (ret)
-		err = ret;
+		return ret;
 
 	return length;
 }

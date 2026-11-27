@@ -742,6 +742,7 @@ enum mpi3mr_dev_state {
  *
  * @list: List pointer
  * @starget: Scsi_target pointer
+ * @stgt_priv: Private data of the scsi_target
  * @dev_handle: FW device handle
  * @parent_handle: FW parent device handle
  * @slot: Slot number
@@ -767,6 +768,7 @@ enum mpi3mr_dev_state {
 struct mpi3mr_tgt_dev {
 	struct list_head list;
 	struct scsi_target *starget;
+	struct mpi3mr_stgt_priv_data *stgt_priv;
 	u16 dev_handle;
 	u16 parent_handle;
 	u16 slot;
@@ -830,6 +832,7 @@ static inline void mpi3mr_tgtdev_put(struct mpi3mr_tgt_dev *s)
  * @perst_id: FW assigned Persistent ID
  * @num_luns: Number of Logical Units
  * @block_io: I/O blocked to the device or not
+ * @seq: Sequence number, unique for every allocated private data
  * @dev_removed: Device removed in the Firmware
  * @dev_removedelay: Device is waiting to be removed in FW
  * @dev_type: Device type
@@ -848,6 +851,7 @@ struct mpi3mr_stgt_priv_data {
 	u16 perst_id;
 	u32 num_luns;
 	atomic_t block_io;
+	u64 seq;
 	u8 dev_removed;
 	u8 dev_removedelay;
 	u8 dev_type;
@@ -882,6 +886,7 @@ struct mpi3mr_sdev_priv_data {
  * struct mpi3mr_drv_cmd - Internal command tracker
  *
  * @mutex: Command mutex
+ * @state_lock: Protects the state, the sense buffer and the callback
  * @done: Completeor for wakeup
  * @reply: Firmware reply for internal commands
  * @sensebuf: Sensebuf for SCSI IO commands
@@ -898,6 +903,7 @@ struct mpi3mr_sdev_priv_data {
  */
 struct mpi3mr_drv_cmd {
 	struct mutex mutex;
+	spinlock_t state_lock;
 	struct completion done;
 	void *reply;
 	u8 *sensebuf;
@@ -1164,6 +1170,7 @@ struct scmd_priv {
  * @logdata_buf: Circular buffer to store log data entries
  * @logdata_buf_idx: Index of entry in buffer to store
  * @logdata_entry_sz: log data entry size
+ * @logdata_lock: Lock for the log data buffer, index and entry size
  * @adm_req_q_bar_writeq_lock: Admin request queue lock
  * @adm_reply_q_bar_writeq_lock: Admin reply queue lock
  * @pend_large_data_sz: Counter to track pending large data
@@ -1373,6 +1380,7 @@ struct mpi3mr_ioc {
 	u8 *logdata_buf;
 	u16 logdata_buf_idx;
 	u16 logdata_entry_sz;
+	spinlock_t logdata_lock;
 	spinlock_t adm_req_q_bar_writeq_lock;
 	spinlock_t adm_reply_q_bar_writeq_lock;
 
@@ -1534,6 +1542,10 @@ int mpi3mr_issue_tm(struct mpi3mr_ioc *mrioc, u8 tm_type,
 	u16 handle, uint lun, u16 htag, ulong timeout,
 	struct mpi3mr_drv_cmd *drv_cmd,
 	u8 *resp_code, struct scsi_cmnd *scmd);
+u64 mpi3mr_tgtdev_block_io_inc(struct mpi3mr_ioc *mrioc,
+			       struct mpi3mr_tgt_dev *tgtdev);
+void mpi3mr_tgtdev_block_io_dec(struct mpi3mr_ioc *mrioc,
+				struct mpi3mr_tgt_dev *tgtdev, u64 seq);
 struct mpi3mr_tgt_dev *mpi3mr_get_tgtdev_by_handle(
 	struct mpi3mr_ioc *mrioc, u16 handle);
 void mpi3mr_pel_get_seqnum_complete(struct mpi3mr_ioc *mrioc,
