@@ -393,7 +393,7 @@ static int _od_suspend_noirq(struct device *dev)
 
 	ret = pm_generic_suspend_noirq(dev);
 
-	if (!ret && !pm_runtime_status_suspended(dev)) {
+	if (!ret && (od->_state == OMAP_DEVICE_STATE_ENABLED)) {
 		if (pm_generic_runtime_suspend(dev) == 0) {
 			omap_device_idle(pdev);
 			od->flags |= OMAP_DEVICE_SUSPENDED;
