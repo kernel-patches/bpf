@@ -30,7 +30,7 @@ void winchip_mcheck_init(struct cpuinfo_x86 *c)
 {
 	struct msr val;
 
-	rdmsrq(MSR_IDT_FCR1, val.q);
+	val.q = rdmsrq(MSR_IDT_FCR1);
 	val.l |= (1<<2);	/* Enable EIERRINT (int 18 MCE) */
 	val.l &= ~(1<<4);	/* Enable MCE */
 	wrmsrq(MSR_IDT_FCR1, val.q);

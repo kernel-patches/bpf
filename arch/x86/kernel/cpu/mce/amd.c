@@ -438,7 +438,7 @@ static void threshold_restart_block(void *_tr)
 	if (!this_cpu_read(threshold_banks) && !tr->set_lvt_off)
 		return;
 
-	rdmsrq(tr->b->address, val.q);
+	val.q = rdmsrq(tr->b->address);
 
 	/*
 	 * Reset error count and overflow bit.
@@ -658,7 +658,7 @@ static void disable_err_thresholding(struct cpuinfo_x86 *c, unsigned int bank)
 		return;
 	}
 
-	rdmsrq(MSR_K7_HWCR, hwcr);
+	hwcr = rdmsrq(MSR_K7_HWCR);
 
 	/* McStatusWrEn has to be set */
 	need_toggle = !(hwcr & BIT(18));

@@ -13,7 +13,7 @@ struct msr {
 };
 
 /*
- * The kernel proper already defines rdmsr()/wrmsr(), but they are not for the
+ * The kernel proper already defines rdmsrq()/wrmsrq(), but they are not for the
  * boot kernel since they rely on tracepoint/exception handling infrastructure
  * that's not available here.
  */

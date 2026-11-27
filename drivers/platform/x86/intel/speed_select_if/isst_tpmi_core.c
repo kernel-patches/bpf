@@ -568,7 +568,7 @@ static bool disable_dynamic_sst_features(void)
 	if (!cpu_feature_enabled(X86_FEATURE_HWP))
 		return true;
 
-	rdmsrq(MSR_PM_ENABLE, value);
+	value = rdmsrq(MSR_PM_ENABLE);
 	return !(value & 0x1);
 }
 

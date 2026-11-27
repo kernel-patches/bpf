@@ -220,7 +220,7 @@ static void change_FID(int fid)
 {
 	union msr_fidvidctl fidvidctl;
 
-	rdmsrq(MSR_K7_FID_VID_CTL, fidvidctl.val);
+	fidvidctl.val = rdmsrq(MSR_K7_FID_VID_CTL);
 	if (fidvidctl.bits.FID != fid) {
 		fidvidctl.bits.SGTC = latency;
 		fidvidctl.bits.FID = fid;
@@ -235,7 +235,7 @@ static void change_VID(int vid)
 {
 	union msr_fidvidctl fidvidctl;
 
-	rdmsrq(MSR_K7_FID_VID_CTL, fidvidctl.val);
+	fidvidctl.val = rdmsrq(MSR_K7_FID_VID_CTL);
 	if (fidvidctl.bits.VID != vid) {
 		fidvidctl.bits.SGTC = latency;
 		fidvidctl.bits.VID = vid;
@@ -261,7 +261,7 @@ static int powernow_target(struct cpufreq_policy *policy, unsigned int index)
 	fid = powernow_table[index].driver_data & 0xFF;
 	vid = (powernow_table[index].driver_data & 0xFF00) >> 8;
 
-	rdmsrq(MSR_K7_FID_VID_STATUS, fidvidstatus.val);
+	fidvidstatus.val = rdmsrq(MSR_K7_FID_VID_STATUS);
 	cfid = fidvidstatus.bits.CFID;
 	freqs.old = fsb * fid_codes[cfid] / 10;
 
@@ -558,7 +558,7 @@ static unsigned int powernow_get(unsigned int cpu)
 
 	if (cpu)
 		return 0;
-	rdmsrq(MSR_K7_FID_VID_STATUS, fidvidstatus.val);
+	fidvidstatus.val = rdmsrq(MSR_K7_FID_VID_STATUS);
 	cfid = fidvidstatus.bits.CFID;
 
 	return fsb * fid_codes[cfid] / 10;
@@ -599,7 +599,7 @@ static int powernow_cpu_init(struct cpufreq_policy *policy)
 	if (policy->cpu != 0)
 		return -ENODEV;
 
-	rdmsrq(MSR_K7_FID_VID_STATUS, fidvidstatus.val);
+	fidvidstatus.val = rdmsrq(MSR_K7_FID_VID_STATUS);
 
 	recalibrate_cpu_khz();
 

@@ -160,7 +160,7 @@ static void knc_pmu_disable_all(void)
 {
 	u64 val;
 
-	rdmsrq(MSR_KNC_IA32_PERF_GLOBAL_CTRL, val);
+	val = rdmsrq(MSR_KNC_IA32_PERF_GLOBAL_CTRL);
 	val &= ~(KNC_ENABLE_COUNTER0|KNC_ENABLE_COUNTER1);
 	wrmsrq(MSR_KNC_IA32_PERF_GLOBAL_CTRL, val);
 }
@@ -169,7 +169,7 @@ static void knc_pmu_enable_all(int added)
 {
 	u64 val;
 
-	rdmsrq(MSR_KNC_IA32_PERF_GLOBAL_CTRL, val);
+	val = rdmsrq(MSR_KNC_IA32_PERF_GLOBAL_CTRL);
 	val |= (KNC_ENABLE_COUNTER0|KNC_ENABLE_COUNTER1);
 	wrmsrq(MSR_KNC_IA32_PERF_GLOBAL_CTRL, val);
 }
@@ -199,11 +199,7 @@ static void knc_pmu_enable_event(struct perf_event *event)
 
 static inline u64 knc_pmu_get_status(void)
 {
-	u64 status;
-
-	rdmsrq(MSR_KNC_IA32_PERF_GLOBAL_STATUS, status);
-
-	return status;
+	return rdmsrq(MSR_KNC_IA32_PERF_GLOBAL_STATUS);
 }
 
 static inline void knc_pmu_ack_status(u64 ack)

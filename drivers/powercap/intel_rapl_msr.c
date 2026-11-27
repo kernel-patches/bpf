@@ -176,7 +176,7 @@ static int rapl_msr_read_raw(int cpu, struct reg_action *ra, bool pmu_ctx)
 	 * from any CPU in the package.
 	 */
 	if (pmu_ctx) {
-		rdmsrq(ra->reg.msr, ra->value);
+		ra->value = rdmsrq(ra->reg.msr);
 		goto out;
 	}
 

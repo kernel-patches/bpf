@@ -670,7 +670,7 @@ int __init mtrr_cleanup(void)
 	if (!cpu_feature_enabled(X86_FEATURE_MTRR) || enable_mtrr_cleanup < 1)
 		return 0;
 
-	rdmsrq(MSR_MTRRdefType, def);
+	def = rdmsrq(MSR_MTRRdefType);
 	def &= 0xff;
 	if (def != MTRR_TYPE_UNCACHABLE)
 		return 0;
@@ -870,7 +870,7 @@ int __init mtrr_trim_uncached_memory(unsigned long end_pfn)
 	if (!cpu_feature_enabled(X86_FEATURE_MTRR) || disable_mtrr_trim)
 		return 0;
 
-	rdmsrq(MSR_MTRRdefType, def);
+	def = rdmsrq(MSR_MTRRdefType);
 	def &= MTRR_DEF_TYPE_TYPE;
 	if (def != MTRR_TYPE_UNCACHABLE)
 		return 0;

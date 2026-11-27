@@ -220,7 +220,7 @@ static inline u32 native_apic_msr_read(u32 reg)
 	if (reg == APIC_DFR)
 		return -1;
 
-	rdmsrq(APIC_BASE_MSR + (reg >> 4), msr);
+	msr = rdmsrq(APIC_BASE_MSR + (reg >> 4));
 	return (u32)msr;
 }
 
@@ -231,10 +231,7 @@ static inline void native_x2apic_icr_write(u32 low, u32 id)
 
 static inline u64 native_x2apic_icr_read(void)
 {
-	unsigned long val;
-
-	rdmsrq(APIC_BASE_MSR + (APIC_ICR >> 4), val);
-	return val;
+	return rdmsrq(APIC_BASE_MSR + (APIC_ICR >> 4));
 }
 
 extern int x2apic_mode;

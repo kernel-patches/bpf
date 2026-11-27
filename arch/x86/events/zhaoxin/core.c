@@ -266,11 +266,7 @@ static void zhaoxin_pmu_enable_all(int added)
 
 static inline u64 zhaoxin_pmu_get_status(void)
 {
-	u64 status;
-
-	rdmsrq(MSR_CORE_PERF_GLOBAL_STATUS, status);
-
-	return status;
+	return rdmsrq(MSR_CORE_PERF_GLOBAL_STATUS);
 }
 
 static inline void zhaoxin_pmu_ack_status(u64 ack)
@@ -295,7 +291,7 @@ static void zhaoxin_pmu_disable_fixed(struct hw_perf_event *hwc)
 
 	mask = 0xfULL << (idx * 4);
 
-	rdmsrq(hwc->config_base, ctrl_val);
+	ctrl_val = rdmsrq(hwc->config_base);
 	ctrl_val &= ~mask;
 	wrmsrq(hwc->config_base, ctrl_val);
 }
@@ -331,7 +327,7 @@ static void zhaoxin_pmu_enable_fixed(struct hw_perf_event *hwc)
 	bits <<= (idx * 4);
 	mask = 0xfULL << (idx * 4);
 
-	rdmsrq(hwc->config_base, ctrl_val);
+	ctrl_val = rdmsrq(hwc->config_base);
 	ctrl_val &= ~mask;
 	ctrl_val |= bits;
 	wrmsrq(hwc->config_base, ctrl_val);

@@ -97,8 +97,8 @@ void __show_regs(struct pt_regs *regs, enum show_regs_mode mode,
 		return;
 
 	if (mode == SHOW_REGS_USER) {
-		rdmsrq(MSR_FS_BASE, fs);
-		rdmsrq(MSR_KERNEL_GS_BASE, shadowgs);
+		fs = rdmsrq(MSR_FS_BASE);
+		shadowgs = rdmsrq(MSR_KERNEL_GS_BASE);
 		printk("%sFS:  %016lx GS:  %016lx\n",
 		       log_lvl, fs, shadowgs);
 		return;
@@ -109,9 +109,9 @@ void __show_regs(struct pt_regs *regs, enum show_regs_mode mode,
 	savesegment(fs, fsindex);
 	savesegment(gs, gsindex);
 
-	rdmsrq(MSR_FS_BASE, fs);
-	rdmsrq(MSR_GS_BASE, gs);
-	rdmsrq(MSR_KERNEL_GS_BASE, shadowgs);
+	fs = rdmsrq(MSR_FS_BASE);
+	gs = rdmsrq(MSR_GS_BASE);
+	shadowgs = rdmsrq(MSR_KERNEL_GS_BASE);
 
 	cr0 = read_cr0();
 	cr2 = read_cr2();
@@ -197,7 +197,7 @@ static noinstr unsigned long __rdgsbase_inactive(void)
 		native_swapgs();
 	} else {
 		instrumentation_begin();
-		rdmsrq(MSR_KERNEL_GS_BASE, gsbase);
+		gsbase = rdmsrq(MSR_KERNEL_GS_BASE);
 		instrumentation_end();
 	}
 
@@ -463,7 +463,7 @@ unsigned long x86_gsbase_read_cpu_inactive(void)
 		gsbase = __rdgsbase_inactive();
 		local_irq_restore(flags);
 	} else {
-		rdmsrq(MSR_KERNEL_GS_BASE, gsbase);
+		gsbase = rdmsrq(MSR_KERNEL_GS_BASE);
 	}
 
 	return gsbase;

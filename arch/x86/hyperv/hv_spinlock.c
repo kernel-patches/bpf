@@ -50,7 +50,7 @@ static void hv_qlock_wait(u8 *byte, u8 val)
 	if (READ_ONCE(*byte) == val) {
 		unsigned long msr_val;
 
-		rdmsrq(HV_X64_MSR_GUEST_IDLE, msr_val);
+		msr_val = rdmsrq(HV_X64_MSR_GUEST_IDLE);
 
 		(void)msr_val;
 	}

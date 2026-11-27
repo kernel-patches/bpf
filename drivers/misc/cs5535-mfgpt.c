@@ -83,7 +83,7 @@ int cs5535_mfgpt_toggle_event(struct cs5535_mfgpt_timer *timer, int cmp,
 		return -EIO;
 	}
 
-	rdmsrq(msr, val.q);
+	val.q = rdmsrq(msr);
 
 	if (enable)
 		val.l |= mask;
@@ -114,7 +114,7 @@ int cs5535_mfgpt_set_irq(struct cs5535_mfgpt_timer *timer, int cmp, int *irq,
 	 * IRQ of the 1st. This can only happen if forcing an IRQ, calling this
 	 * with *irq==0 is safe. Currently there _are_ no 2 drivers.
 	 */
-	rdmsrq(MSR_PIC_ZSEL_LOW, zsel.q);
+	zsel.q = rdmsrq(MSR_PIC_ZSEL_LOW);
 	shift = ((cmp == MFGPT_CMP1 ? 0 : 4) + timer->nr % 4) * 4;
 	if (((zsel.l >> shift) & 0xF) == 2)
 		return -EIO;
@@ -128,7 +128,7 @@ int cs5535_mfgpt_set_irq(struct cs5535_mfgpt_timer *timer, int cmp, int *irq,
 	/* Can't use IRQ if it's 0 (=disabled), 2, or routed to LPC */
 	if (*irq < 1 || *irq == 2 || *irq > 15)
 		return -EIO;
-	rdmsrq(MSR_PIC_IRQM_LPC, lpc.q);
+	lpc.q = rdmsrq(MSR_PIC_IRQM_LPC);
 	if (lpc.l & (1 << *irq))
 		return -EIO;
 

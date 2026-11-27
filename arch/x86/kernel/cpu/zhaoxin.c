@@ -29,7 +29,7 @@ static void init_zhaoxin_cap(struct cpuinfo_x86 *c)
 
 		/* Enable ACE unit, if present and disabled */
 		if ((tmp & (ACE_PRESENT | ACE_ENABLED)) == ACE_PRESENT) {
-			rdmsrq(MSR_ZHAOXIN_FCR57, msr);
+			msr = rdmsrq(MSR_ZHAOXIN_FCR57);
 			/* Enable ACE unit */
 			wrmsrq(MSR_ZHAOXIN_FCR57, msr | ACE_FCR);
 			pr_info("CPU: Enabled ACE h/w crypto\n");
@@ -37,7 +37,7 @@ static void init_zhaoxin_cap(struct cpuinfo_x86 *c)
 
 		/* Enable RNG unit, if present and disabled */
 		if ((tmp & (RNG_PRESENT | RNG_ENABLED)) == RNG_PRESENT) {
-			rdmsrq(MSR_ZHAOXIN_FCR57, msr);
+			msr = rdmsrq(MSR_ZHAOXIN_FCR57);
 			/* Enable RNG unit */
 			wrmsrq(MSR_ZHAOXIN_FCR57, msr | RNG_ENABLE);
 			pr_info("CPU: Enabled h/w RNG\n");

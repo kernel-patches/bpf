@@ -325,7 +325,7 @@ void amd_brs_drain(void)
 		u32 brs_idx = tos - i;
 		u64 from, to;
 
-		rdmsrq(brs_to(brs_idx), to);
+		to = rdmsrq(brs_to(brs_idx));
 
 		/* Entry does not belong to us (as marked by kernel) */
 		if (to == BRS_POISON)
@@ -338,7 +338,7 @@ void amd_brs_drain(void)
 		 */
 		to = (u64)(((s64)to << shift) >> shift);
 
-		rdmsrq(brs_from(brs_idx), from);
+		from = rdmsrq(brs_from(brs_idx));
 
 		if (!amd_brs_match_plm(event, from, to))
 			continue;

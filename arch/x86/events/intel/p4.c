@@ -860,7 +860,7 @@ static inline int p4_pmu_clear_cccr_ovf(struct hw_perf_event *hwc)
 	u64 v;
 
 	/* an official way for overflow indication */
-	rdmsrq(hwc->config_base, v);
+	v = rdmsrq(hwc->config_base);
 	if (v & P4_CCCR_OVF) {
 		wrmsrq(hwc->config_base, v & ~P4_CCCR_OVF);
 		return 1;
@@ -873,7 +873,7 @@ static inline int p4_pmu_clear_cccr_ovf(struct hw_perf_event *hwc)
 	 * the counter has reached zero value and continued counting before
 	 * real NMI signal was received:
 	 */
-	rdmsrq(hwc->event_base, v);
+	v = rdmsrq(hwc->event_base);
 	if (!(v & ARCH_P4_UNFLAGGED_BIT))
 		return 1;
 
@@ -1373,7 +1373,7 @@ __init int p4_pmu_init(void)
 	/* If we get stripped -- indexing fails */
 	BUILD_BUG_ON(ARCH_P4_MAX_CCCR > INTEL_PMC_MAX_GENERIC);
 
-	rdmsrq(MSR_IA32_MISC_ENABLE, misc);
+	misc = rdmsrq(MSR_IA32_MISC_ENABLE);
 	if (!(misc & MSR_IA32_MISC_ENABLE_EMON)) {
 		pr_cont("unsupported Netburst CPU model %d ",
 			boot_cpu_data.x86_model);

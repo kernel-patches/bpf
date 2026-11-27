@@ -1215,7 +1215,7 @@ static __always_inline void kvm_access_xstate_msr(struct kvm_vcpu *vcpu,
 
 	kvm_fpu_get();
 	if (access == MSR_TYPE_R)
-		rdmsrq(msr_info->index, msr_info->data);
+		msr_info->data = rdmsrq(msr_info->index);
 	else
 		wrmsrq(msr_info->index, msr_info->data);
 	kvm_fpu_put();

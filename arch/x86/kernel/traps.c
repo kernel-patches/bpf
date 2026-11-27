@@ -1250,7 +1250,7 @@ static noinstr void exc_debug_kernel(struct pt_regs *regs, unsigned long dr6)
 		 */
 		unsigned long debugctl;
 
-		rdmsrq(MSR_IA32_DEBUGCTLMSR, debugctl);
+		debugctl = rdmsrq(MSR_IA32_DEBUGCTLMSR);
 		debugctl |= DEBUGCTLMSR_BTF;
 		wrmsrq(MSR_IA32_DEBUGCTLMSR, debugctl);
 	}
@@ -1509,7 +1509,7 @@ static bool handle_xfd_event(struct pt_regs *regs)
 	if (!IS_ENABLED(CONFIG_X86_64) || !cpu_feature_enabled(X86_FEATURE_XFD))
 		return false;
 
-	rdmsrq(MSR_IA32_XFD_ERR, xfd_err);
+	xfd_err = rdmsrq(MSR_IA32_XFD_ERR);
 	if (!xfd_err)
 		return false;
 

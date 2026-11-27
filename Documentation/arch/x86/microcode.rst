@@ -151,7 +151,7 @@ are also treated as fatal by the kernel.
 On certain Intel machines, MCEs are also broadcast to all threads in a
 system. If one thread is in the middle of executing WRMSR, a MCE will be
 taken at the end of the flow. Either way, they will wait for the thread
-performing the wrmsr(0x79) to rendezvous in the MCE handler and shutdown
+performing the wrmsrq(0x79) to rendezvous in the MCE handler and shutdown
 eventually if any of the threads in the system fail to check in to the
 MCE rendezvous.
 

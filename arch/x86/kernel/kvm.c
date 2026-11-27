@@ -766,7 +766,7 @@ static int kvm_suspend(void *data)
 
 #ifdef CONFIG_ARCH_CPUIDLE_HALTPOLL
 	if (kvm_para_has_feature(KVM_FEATURE_POLL_CONTROL))
-		rdmsrq(MSR_KVM_POLL_CONTROL, val);
+		val = rdmsrq(MSR_KVM_POLL_CONTROL);
 	has_guest_poll = !(val & 1);
 #endif
 	return 0;

@@ -378,7 +378,7 @@ static int gxfb_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	/* Figure out if this is a TFT or CRT part */
 
-	rdmsrq(MSR_GX_GLD_MSR_CONFIG, val);
+	val = rdmsrq(MSR_GX_GLD_MSR_CONFIG);
 
 	if ((val & MSR_GX_GLD_MSR_CONFIG_FP) == MSR_GX_GLD_MSR_CONFIG_FP)
 		par->enable_crt = 0;
