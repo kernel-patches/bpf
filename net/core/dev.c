@@ -12225,6 +12225,7 @@ void netdev_run_todo(void)
 	if (!list_empty(&list)) {
 		rt_flush_dev(NULL);
 		rt6_uncached_list_flush_dev(NULL);
+		synchronize_net();
 	}
 
 	cnt = 0;
