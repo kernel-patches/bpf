@@ -32,9 +32,7 @@ _head:
 pe_header:
 	__EFI_PE_HEADER
 
-SYM_DATA(kernel_asize, .long _kernel_asize);
-SYM_DATA(kernel_fsize, .long _kernel_fsize);
-
+SYM_FUNC_ALIAS(efi_primary_entry, kernel_entry)
 #endif
 
 	__REF

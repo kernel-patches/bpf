@@ -57,21 +57,10 @@ void efi_virtmap_unload(void);
 /* arch specific definitions used by the stub code */
 
 /*
- * A reasonable upper bound for the uncompressed kernel size is 32 MBytes,
- * so we will reserve that amount of memory. We have no easy way to tell what
- * the actuall size of code + data the uncompressed kernel will use.
- * If this is insufficient, the decompressor will relocate itself out of the
- * way before performing the decompression.
- */
-#define MAX_UNCOMP_KERNEL_SIZE	SZ_32M
-
-/*
  * phys-to-virt patching requires that the physical to virtual offset is a
- * multiple of 2 MiB. However, using an alignment smaller than TEXT_OFFSET
- * here throws off the memory allocation logic, so let's use the lowest power
- * of two greater than 2 MiB and greater than TEXT_OFFSET.
+ * multiple of 2 MiB.
  */
-#define EFI_PHYS_ALIGN		max(UL(SZ_2M), roundup_pow_of_two(TEXT_OFFSET))
+#define EFI_PHYS_ALIGN		SZ_2M
 
 /* on ARM, the initrd should be loaded in a lowmem region */
 static inline unsigned long efi_get_max_initrd_addr(unsigned long image_addr)

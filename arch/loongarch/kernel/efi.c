@@ -72,8 +72,6 @@ bool efi_poweroff_required(void)
 		(acpi_gbl_reduced_hardware || acpi_no_s5);
 }
 
-unsigned long __initdata primary_display_table = EFI_INVALID_TABLE_ADDR;
-
 #if defined(CONFIG_SYSFB) || defined(CONFIG_EFI_EARLYCON)
 struct sysfb_display_info sysfb_primary_display __section(".data");
 EXPORT_SYMBOL_GPL(sysfb_primary_display);
@@ -81,22 +79,10 @@ EXPORT_SYMBOL_GPL(sysfb_primary_display);
 
 static void __init init_primary_display(void)
 {
-	struct sysfb_display_info *dpy;
+	struct screen_info *si = &sysfb_primary_display.screen;
 
-	if (primary_display_table == EFI_INVALID_TABLE_ADDR)
-		return;
-
-	dpy = early_memremap(primary_display_table, sizeof(*dpy));
-	if (!dpy) {
-		pr_err("Could not map primary_display config table\n");
-		return;
-	}
-	sysfb_primary_display = *dpy;
-	memset(dpy, 0, sizeof(*dpy));
-	early_memunmap(dpy, sizeof(*dpy));
-
-	memblock_reserve(__screen_info_lfb_base(&sysfb_primary_display.screen),
-			 sysfb_primary_display.screen.lfb_size);
+	if (si->orig_video_isVGA == VIDEO_TYPE_EFI)
+		memblock_reserve(__screen_info_lfb_base(si), si->lfb_size);
 }
 
 void __init efi_init(void)

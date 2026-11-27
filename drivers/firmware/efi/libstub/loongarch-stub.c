@@ -8,11 +8,6 @@
 #include <asm/efi.h>
 #include <asm/addrspace.h>
 #include "efistub.h"
-#include "loongarch-stub.h"
-
-extern int kernel_asize;
-extern int kernel_fsize;
-extern int kernel_entry;
 
 /**
  * efi_relocate_kernel() - copy memory area
@@ -96,11 +91,12 @@ efi_status_t efi_relocate_kernel(unsigned long *image_addr,
 
 efi_status_t handle_kernel_image(unsigned long *image_addr,
 				 unsigned long *image_size,
-				 unsigned long *reserve_addr,
-				 unsigned long *reserve_size,
 				 efi_loaded_image_t *image,
-				 efi_handle_t image_handle)
+				 efi_handle_t image_handle,
+				 const struct efi_image_info **image_info)
 {
+	int kernel_asize = efistub_kernel_memsize(*image_info);
+	int kernel_fsize = efistub_kernel_size(*image_info);
 	efi_status_t status;
 	unsigned long kernel_addr = 0;
 
@@ -112,13 +108,6 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 	*image_addr = kernel_addr;
 	*image_size = kernel_asize;
 
+	*(unsigned long *)image_info += *image_addr - (unsigned long)image->image_base;
 	return status;
-}
-
-unsigned long kernel_entry_address(unsigned long kernel_addr,
-		efi_loaded_image_t *image)
-{
-	unsigned long base = (unsigned long)image->image_base;
-
-	return (unsigned long)&kernel_entry - base + kernel_addr;
 }
