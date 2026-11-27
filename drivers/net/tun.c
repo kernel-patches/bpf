@@ -1628,10 +1628,10 @@ static void tun_rx_batched(struct tun_struct *tun, struct tun_file *tfile,
 	}
 }
 
-static bool tun_can_build_skb(struct tun_struct *tun, struct tun_file *tfile,
+static bool tun_can_build_skb(unsigned int flags, struct tun_file *tfile,
 			      int len, int noblock, bool zerocopy)
 {
-	if ((tun->flags & TUN_TYPE_MASK) != IFF_TAP)
+	if ((flags & TUN_TYPE_MASK) != IFF_TAP)
 		return false;
 
 	if (tfile->socket.sk->sk_sndbuf != INT_MAX)
@@ -1826,6 +1826,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	bool frags = tun_napi_frags_enabled(tfile);
 	enum skb_drop_reason drop_reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	netdev_features_t features = 0;
+	unsigned int flags;
+
+	flags = READ_ONCE(tun->flags);
 
 	/*
 	 * Keep it easy and always zero the whole buffer, even if the
@@ -1835,7 +1838,7 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	memset(&hdr, 0, sizeof(hdr));
 	gso = (struct virtio_net_hdr *)&hdr;
 
-	if (!(tun->flags & IFF_NO_PI)) {
+	if (!(flags & IFF_NO_PI)) {
 		if (len < sizeof(pi))
 			return -EINVAL;
 		len -= sizeof(pi);
@@ -1844,11 +1847,11 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 			return -EFAULT;
 	}
 
-	if (tun->flags & IFF_VNET_HDR) {
+	if (flags & IFF_VNET_HDR) {
 		int vnet_hdr_sz = READ_ONCE(tun->vnet_hdr_sz);
 
 		features = tun_vnet_hdr_guest_features(vnet_hdr_sz);
-		hdr_len = __tun_vnet_hdr_get(vnet_hdr_sz, tun->flags,
+		hdr_len = __tun_vnet_hdr_get(vnet_hdr_sz, flags,
 					     features, from, gso);
 		if (hdr_len < 0)
 			return hdr_len;
@@ -1856,7 +1859,7 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		len -= vnet_hdr_sz;
 	}
 
-	if ((tun->flags & TUN_TYPE_MASK) == IFF_TAP) {
+	if ((flags & TUN_TYPE_MASK) == IFF_TAP) {
 		align += NET_IP_ALIGN;
 		if (unlikely(len < ETH_HLEN || (hdr_len && hdr_len < ETH_HLEN)))
 			return -EINVAL;
@@ -1879,7 +1882,7 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 			zerocopy = true;
 	}
 
-	if (!frags && tun_can_build_skb(tun, tfile, len, noblock, zerocopy)) {
+	if (!frags && tun_can_build_skb(flags, tfile, len, noblock, zerocopy)) {
 		/* For the packet that is not easy to be processed
 		 * (e.g gso or jumbo packet), we will do it at after
 		 * skb was created with generic XDP routine.
@@ -1933,9 +1936,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	}
 
 	skb->dev = tun->dev;
-	switch (tun->flags & TUN_TYPE_MASK) {
+	switch (flags & TUN_TYPE_MASK) {
 	case IFF_TUN:
-		if (tun->flags & IFF_NO_PI) {
+		if (flags & IFF_NO_PI) {
 			u8 ip_version;
 
 			drop_reason = pskb_may_pull_reason(skb, 1);
@@ -1971,14 +1974,14 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		break;
 	}
 
-	if (tun_vnet_hdr_tnl_to_skb(tun->flags, features, skb, &hdr,
-				    (tun->flags & TUN_TYPE_MASK) == IFF_TAP)) {
+	if (tun_vnet_hdr_tnl_to_skb(flags, features, skb, &hdr,
+				    (flags & TUN_TYPE_MASK) == IFF_TAP)) {
 		atomic_long_inc(&tun->rx_frame_errors);
 		err = -EINVAL;
 		goto free_skb;
 	}
 
-	if ((tun->flags & TUN_TYPE_MASK) == IFF_TAP)
+	if ((flags & TUN_TYPE_MASK) == IFF_TAP)
 		skb->protocol = eth_type_trans(skb, tun->dev);
 
 	/* copy skb_ubuf_info for callback when skb has no error */
