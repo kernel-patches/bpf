@@ -122,11 +122,18 @@ static void string_stream_resource_free_test(struct kunit *test)
 {
 	struct string_stream_test_priv *priv = test->priv;
 	struct kunit *fake_test;
+	struct kunit_attributes *fake_attr;
 
 	fake_test = kunit_kzalloc(test, sizeof(*fake_test), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, fake_test);
 
-	kunit_init_test(fake_test, "string_stream_fake_test", NULL);
+	fake_attr = kunit_kzalloc(test, sizeof(*fake_attr), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, fake_attr);
+
+	fake_attr->speed = KUNIT_SPEED_NORMAL;
+	fake_attr->rust_should_panic = false;
+
+	kunit_init_test(fake_test, "string_stream_fake_test", NULL, fake_attr);
 	fake_test->priv = priv;
 
 	/*

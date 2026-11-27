@@ -87,7 +87,7 @@ the ``/sys/kernel/debug/kunit/<test_suite>/run`` file:
 
 .. code-block :: bash
 
-	echo "any string" > /sys/kernel/debugfs/kunit/<test_suite>/run
+	echo "any string" > /sys/kernel/debug/kunit/<test_suite>/run
 
 As a result, the test suite runs and the results are printed to the kernel
 log.

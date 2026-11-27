@@ -63,6 +63,10 @@ static void of_overlay_apply_kunit_cleanup(struct kunit *test)
 	struct platform_device *pdev;
 	struct device *dev;
 	struct device_node *np;
+	struct kunit_attributes attr = {
+		.speed = KUNIT_SPEED_NORMAL,
+		.rust_should_panic = false,
+	};
 
 	of_root_kunit_skip(test);
 	if (!IS_ENABLED(CONFIG_OF_OVERLAY))
@@ -70,7 +74,7 @@ static void of_overlay_apply_kunit_cleanup(struct kunit *test)
 	if (!IS_ENABLED(CONFIG_OF_EARLY_FLATTREE))
 		kunit_skip(test, "requires CONFIG_OF_EARLY_FLATTREE for root node");
 
-	kunit_init_test(&fake, "fake test", NULL);
+	kunit_init_test(&fake, "fake test", NULL, &attr);
 	KUNIT_ASSERT_EQ(test, fake.status, KUNIT_SUCCESS);
 
 	KUNIT_ASSERT_EQ(test, 0,

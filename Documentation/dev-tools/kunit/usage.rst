@@ -1028,7 +1028,7 @@ with the ``KUNIT_DEFINE_ACTION_WRAPPER()`` macro, for example:
 
 .. code-block:: C
 
-	KUNIT_DEFINE_ACTION_WRAPPER(device_unregister, device_unregister_wrapper, struct device *);
+	KUNIT_DEFINE_ACTION_WRAPPER(device_unregister_wrapper, device_unregister, struct device *);
 	kunit_add_action(test, &device_unregister_wrapper, &dev);
 
 You should do this in preference to manually casting to the ``kunit_action_t`` type,

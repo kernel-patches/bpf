@@ -186,7 +186,7 @@ static void kunit_resource_test_init_resources(struct kunit *test)
 {
 	struct kunit_test_resource_context *ctx = test->priv;
 
-	kunit_init_test(&ctx->test, "testing_test_init_test", NULL);
+	kunit_init_test(&ctx->test, "testing_test_init_test", NULL, ctx->test.attr);
 
 	KUNIT_EXPECT_TRUE(test, list_empty(&ctx->test.resources));
 }
@@ -539,12 +539,19 @@ static void kunit_resource_test_action_ordering(struct kunit *test)
 static int kunit_resource_test_init(struct kunit *test)
 {
 	struct kunit_test_resource_context *ctx = kzalloc_obj(*ctx);
+	struct kunit_attributes *ctx_test_attr;
 
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ctx);
 
 	test->priv = ctx;
 
-	kunit_init_test(&ctx->test, "test_test_context", NULL);
+	ctx_test_attr = kzalloc_obj(*ctx_test_attr, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, ctx_test_attr);
+
+	ctx_test_attr->speed = KUNIT_SPEED_NORMAL;
+	ctx_test_attr->rust_should_panic = false;
+
+	kunit_init_test(&ctx->test, "test_test_context", NULL, ctx_test_attr);
 
 	return 0;
 }
@@ -553,6 +560,7 @@ static void kunit_resource_test_exit(struct kunit *test)
 {
 	struct kunit_test_resource_context *ctx = test->priv;
 
+	kfree(ctx->test.attr);
 	kunit_cleanup(&ctx->test);
 	kfree(ctx);
 }
@@ -666,8 +674,12 @@ static struct kunit_suite kunit_log_test_suite = {
 static void kunit_status_set_failure_test(struct kunit *test)
 {
 	struct kunit fake;
+	struct kunit_attributes attr = {
+		.speed = KUNIT_SPEED_NORMAL,
+		.rust_should_panic = false,
+	};
 
-	kunit_init_test(&fake, "fake test", NULL);
+	kunit_init_test(&fake, "fake test", NULL, &attr);
 
 	KUNIT_EXPECT_EQ(test, fake.status, (enum kunit_status)KUNIT_SUCCESS);
 	kunit_set_failure(&fake);
@@ -677,8 +689,12 @@ static void kunit_status_set_failure_test(struct kunit *test)
 static void kunit_status_mark_skipped_test(struct kunit *test)
 {
 	struct kunit fake;
+	struct kunit_attributes attr = {
+		.speed = KUNIT_SPEED_NORMAL,
+		.rust_should_panic = false,
+	};
 
-	kunit_init_test(&fake, "fake test", NULL);
+	kunit_init_test(&fake, "fake test", NULL, &attr);
 
 	/* Before: Should be SUCCESS with no comment. */
 	KUNIT_EXPECT_EQ(test, fake.status, KUNIT_SUCCESS);
@@ -715,8 +731,12 @@ static void kunit_current_test(struct kunit *test)
 static void kunit_current_fail_test(struct kunit *test)
 {
 	struct kunit fake;
+	struct kunit_attributes attr = {
+		.speed = KUNIT_SPEED_NORMAL,
+		.rust_should_panic = false,
+	};
 
-	kunit_init_test(&fake, "fake test", NULL);
+	kunit_init_test(&fake, "fake test", NULL, &attr);
 	KUNIT_EXPECT_EQ(test, fake.status, KUNIT_SUCCESS);
 
 	/* Set current->kunit_test to fake test. */
@@ -881,8 +901,12 @@ static void kunit_stub_test(struct kunit *test)
 		void *real_fn_addr;
 		void *replacement_addr;
 	} *stub_ctx;
+	struct kunit_attributes attr = {
+		.speed = KUNIT_SPEED_NORMAL,
+		.rust_should_panic = false,
+	};
 
-	kunit_init_test(&fake_test, "kunit_stub_fake_test", NULL);
+	kunit_init_test(&fake_test, "kunit_stub_fake_test", NULL, &attr);
 	KUNIT_ASSERT_EQ(test, fake_test.status, KUNIT_SUCCESS);
 	KUNIT_ASSERT_EQ(test, list_count_nodes(&fake_test.resources), 0);
 

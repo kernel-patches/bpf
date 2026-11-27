@@ -184,11 +184,50 @@ impl ModuleMetadata for LocalModule {
 }
 
 #[cfg(not(testlib))]
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+#[inline]
+fn bug_on_panic(info: &core::panic::PanicInfo<'_>) -> ! {
     pr_emerg!("{}\n", info);
     // SAFETY: FFI call.
     unsafe { bindings::BUG() };
+}
+
+#[cfg(all(not(testlib), not(CONFIG_KUNIT = "y")))]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    bug_on_panic(info);
+}
+
+#[cfg(all(not(testlib), CONFIG_KUNIT = "y"))]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    // SAFETY: This function is safe to call even if CONFIG_KUNIT=n. If a null pointer is returned,
+    // the panic is handled same as if CONFIG_KUNIT=n.
+    let kunit_test = unsafe { ::bindings::kunit_get_current_test() };
+    if kunit_test.is_null() {
+        bug_on_panic(info);
+    } else {
+        // SAFETY: We are in the else branch of kunit_test.is_null() condition, meaning that
+        // `::bindings::kunit_get_current_test()` returned a kunit struct successfully.
+        let test_attributes = unsafe { (*kunit_test).attr };
+        if test_attributes.is_null() {
+            use crate::str::CStrExt as _;
+            // SAFETY: Test name should be set by KUnit framework at this stage.
+            let test_str = unsafe { str::CStr::from_char_ptr((*kunit_test).name.cast()) };
+            pr_emerg!("Test case {} has no attributes\n", test_str);
+            bug_on_panic(info);
+        }
+        // SAFETY: We already tested that test_attributes.is_null() is false, meaning that it is
+        // safe to retrieve its attributes.
+        else if unsafe { (*test_attributes).rust_should_panic } {
+            // SAFETY: We are in the else branch of kunit_test.is_null() condition, meaning that
+            // `::bindings::kunit_get_current_test()` returned a kunit struct successfully.
+            unsafe {
+                bindings::__kunit_abort(kunit_test);
+            };
+        } else {
+            bug_on_panic(info);
+        }
+    }
 }
 
 /// Produces a pointer to an object from a pointer to one of its fields.

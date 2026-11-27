@@ -83,6 +83,7 @@ enum kunit_speed {
 /* Holds attributes for each test case and suite */
 struct kunit_attributes {
 	enum kunit_speed speed;
+	bool rust_should_panic;
 };
 
 /**
@@ -355,6 +356,9 @@ struct kunit {
 	char status_comment[KUNIT_STATUS_COMMENT_SIZE];
 	/* Saves the last seen test. Useful to help with faults. */
 	struct kunit_loc last_seen;
+
+	/* The attributes associated with the test */
+	struct kunit_attributes *attr;
 };
 
 static inline void kunit_set_failure(struct kunit *test)
@@ -369,7 +373,10 @@ const char *kunit_filter_glob(void);
 char *kunit_filter(void);
 char *kunit_filter_action(void);
 
-void kunit_init_test(struct kunit *test, const char *name, struct string_stream *log);
+void kunit_init_test(struct kunit *test,
+		     const char *name,
+		     struct string_stream *log,
+		     struct kunit_attributes *attr);
 
 int kunit_run_tests(struct kunit_suite *suite);
 

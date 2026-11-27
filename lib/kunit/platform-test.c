@@ -71,8 +71,12 @@ static void kunit_platform_device_add_cleans_up(struct kunit *test)
 	const int id = -1;
 	struct kunit fake;
 	struct device *dev;
+	struct kunit_attributes attr = {
+		.speed = KUNIT_SPEED_NORMAL,
+		.rust_should_panic = false,
+	};
 
-	kunit_init_test(&fake, "kunit_platform_device_add_fake_test", NULL);
+	kunit_init_test(&fake, "kunit_platform_device_add_fake_test", NULL, &attr);
 	KUNIT_ASSERT_EQ(test, fake.status, KUNIT_SUCCESS);
 
 	pdev = kunit_platform_device_alloc(&fake, name, id);
