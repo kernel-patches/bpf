@@ -207,8 +207,10 @@
  * Without the NULL test it turns into a mess and the compiler can't help us.
  */
 
-#define DEFINE_FREE(_name, _type, _free) \
-	static __always_inline void __free_##_name(void *p) { _type _T = *(_type *)p; _free; }
+#define DEFINE_FREE(_name, _type, _free)				\
+	static __always_inline void __free_##_name(void *p)		\
+		__context_unsafe(/* _free may release a lock */)	\
+	{ _type _T = *(_type *)p; _free; }
 
 #define __free(_name)	__cleanup(__free_##_name)
 
