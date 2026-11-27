@@ -118,6 +118,8 @@ struct omap2_mcspi_regs {
 
 struct omap2_mcspi {
 	struct completion	txdone;
+	/* serializes the DMAR/DMAW read-modify-write of the cached chconf */
+	spinlock_t		chconf_lock;
 	struct spi_controller	*ctlr;
 	/* Virtual base address of the controller */
 	void __iomem		*base;
@@ -205,8 +207,11 @@ static inline int mcspi_bytes_per_word(int word_len)
 static void omap2_mcspi_set_dma_req(const struct spi_device *spi,
 		int is_read, int enable)
 {
+	struct omap2_mcspi *mcspi = spi_controller_get_devdata(spi->controller);
+	unsigned long flags;
 	u32 l, rw;
 
+	spin_lock_irqsave(&mcspi->chconf_lock, flags);
 	l = mcspi_cached_chconf0(spi);
 
 	if (is_read) /* 1 is read, 0 write */
@@ -220,6 +225,7 @@ static void omap2_mcspi_set_dma_req(const struct spi_device *spi,
 		l &= ~rw;
 
 	mcspi_write_chconf0(spi, l);
+	spin_unlock_irqrestore(&mcspi->chconf_lock, flags);
 }
 
 static void omap2_mcspi_set_enable(const struct spi_device *spi, int enable)
@@ -1632,12 +1638,13 @@ static int omap2_mcspi_probe(struct platform_device *pdev)
 	mcspi->base += regs_offset;
 
 	mcspi->dev = &pdev->dev;
+	spin_lock_init(&mcspi->chconf_lock);
 
 	INIT_LIST_HEAD(&mcspi->ctx.cs);
 
-	mcspi->dma_channels = devm_kcalloc(&pdev->dev, ctlr->num_chipselect,
-					   sizeof(struct omap2_mcspi_dma),
-					   GFP_KERNEL);
+	mcspi->dma_channels = devm_kzalloc_objs(&pdev->dev,
+						struct omap2_mcspi_dma,
+						ctlr->num_chipselect);
 	if (mcspi->dma_channels == NULL)
 		return -ENOMEM;
 
