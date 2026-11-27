@@ -6,6 +6,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kernel.h>
+#include <linux/fs.h>
 #include <linux/module.h>
 #include <linux/spinlock.h>
 #include <linux/skbuff.h>
@@ -168,25 +169,24 @@ static struct nf_logger nf_arp_logger __read_mostly = {
 static void nf_log_dump_sk_uid_gid(struct net *net, struct nf_log_buf *m,
 				   struct sock *sk)
 {
-	const struct socket *sock;
-	const struct file *file;
+	struct socket *sock;
+	struct file *file;
 
 	if (!sk || !sk_fullsock(sk) || !net_eq(net, sock_net(sk)))
 		return;
 
-	/* The sk pointer remains valid as long as the skb is. The sk_socket and
-	 * file pointer may become NULL if the socket is closed. Both structures
-	 * (including file->cred) are RCU freed which means they can be accessed
-	 * within a RCU read section.
-	 */
 	sock = READ_ONCE(sk->sk_socket);
-	file = sock ? READ_ONCE(sock->file) : NULL;
-	if (file) {
-		const struct cred *cred = file->f_cred;
+	if (sock) {
+		file = get_file_active(&sock->file);
+		if (file) {
+			uid_t uid = from_kuid_munged(&init_user_ns,
+						    file->f_cred->fsuid);
+			gid_t gid = from_kgid_munged(&init_user_ns,
+						    file->f_cred->fsgid);
 
-		nf_log_buf_add(m, "UID=%u GID=%u ",
-			       from_kuid_munged(&init_user_ns, cred->fsuid),
-			       from_kgid_munged(&init_user_ns, cred->fsgid));
+			fput(file);
+			nf_log_buf_add(m, "UID=%u GID=%u ", uid, gid);
+		}
 	}
 }
 
