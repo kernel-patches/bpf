@@ -748,6 +748,12 @@ F:	Documentation/filesystems/afs.rst
 F:	fs/afs/
 F:	include/trace/events/afs.h
 
+AGENT RESOURCES
+M:	Sasha Levin <sashal@kernel.org>
+L:	workflows@vger.kernel.org
+S:	Maintained
+F:	agents/
+
 AGPGART DRIVER
 M:	David Airlie <airlied@redhat.com>
 L:	dri-devel@lists.freedesktop.org
