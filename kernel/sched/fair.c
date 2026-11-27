@@ -8294,7 +8294,7 @@ static void dequeue_hierarchy(struct task_struct *p, int flags)
 	struct sched_entity *se = &p->se;
 	bool task_throttled = flags & DEQUEUE_THROTTLE;
 	int h_nr_idle = task_has_idle_policy(p);
-	int h_nr_runnable = 0;
+	int h_nr_runnable = 1;
 	struct cfs_rq *cfs_rq;
 	bool dequeue = true;
 
