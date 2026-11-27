@@ -1755,6 +1755,19 @@ ssize_t generic_write_checks(struct kiocb *iocb, struct iov_iter *from)
 	if (ret)
 		return ret;
 
+	/*
+	 * O_APPEND has moved the position and the file size limits have
+	 * shortened the write by now, so this is the range to validate.  An
+	 * atomic write is all or nothing, so refuse it if it got shorter.
+	 */
+	if (iocb->ki_flags & IOCB_ATOMIC) {
+		if (count != iov_iter_count(from))
+			return -EINVAL;
+		ret = generic_atomic_write_valid(iocb, from);
+		if (ret)
+			return ret;
+	}
+
 	iov_iter_truncate(from, count);
 	return iov_iter_count(from);
 }
