@@ -974,28 +974,6 @@ static __be32 nfsd_proc_link(struct svc_rqst *rqstp)
 	return rpc_success;
 }
 
-static char *nfsd_symlink_target(const struct xdr_buf *to)
-{
-	char *result;
-
-	result = kmalloc(to->len + 1, GFP_KERNEL);
-	if (!result)
-		return ERR_PTR(-ESERVERFAULT);
-	/* The target can span the receive buffer's head, pages, and tail */
-	if (read_bytes_from_xdr_buf(to, 0, result, to->len)) {
-		kfree(result);
-		return ERR_PTR(-ESERVERFAULT);
-	}
-	result[to->len] = '\0';
-
-	/* The VFS rejects a pathname that contains a NUL byte */
-	if (strlen(result) != to->len) {
-		kfree(result);
-		return ERR_PTR(-EINVAL);
-	}
-	return result;
-}
-
 /**
  * nfsd_proc_symlink - SYMLINK: Create a symbolic link
  * @rqstp: RPC transaction context

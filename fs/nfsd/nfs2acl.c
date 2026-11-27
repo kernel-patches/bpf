@@ -22,19 +22,19 @@
  * the behavior of the two versions to diverge if needed.
  */
 static const struct nfsd_access_map nfsd2_regaccess[] = {
-	{ NFS3_ACCESS_READ,	NFSD_MAY_READ				},
-	{ NFS3_ACCESS_EXECUTE,	NFSD_MAY_EXEC				},
-	{ NFS3_ACCESS_MODIFY,	NFSD_MAY_WRITE|NFSD_MAY_TRUNC		},
-	{ NFS3_ACCESS_EXTEND,	NFSD_MAY_WRITE				},
+	{ ACCESS3_READ,		NFSD_MAY_READ				},
+	{ ACCESS3_EXECUTE,	NFSD_MAY_EXEC				},
+	{ ACCESS3_MODIFY,	NFSD_MAY_WRITE | NFSD_MAY_TRUNC		},
+	{ ACCESS3_EXTEND,	NFSD_MAY_WRITE				},
 	{ 0,			0					}
 };
 
 static const struct nfsd_access_map nfsd2_diraccess[] = {
-	{ NFS3_ACCESS_READ,	NFSD_MAY_READ				},
-	{ NFS3_ACCESS_LOOKUP,	NFSD_MAY_EXEC				},
-	{ NFS3_ACCESS_MODIFY,	NFSD_MAY_EXEC|NFSD_MAY_WRITE|NFSD_MAY_TRUNC },
-	{ NFS3_ACCESS_EXTEND,	NFSD_MAY_EXEC|NFSD_MAY_WRITE		},
-	{ NFS3_ACCESS_DELETE,	NFSD_MAY_REMOVE				},
+	{ ACCESS3_READ,		NFSD_MAY_READ				},
+	{ ACCESS3_LOOKUP,	NFSD_MAY_EXEC				},
+	{ ACCESS3_MODIFY,	NFSD_MAY_EXEC | NFSD_MAY_WRITE | NFSD_MAY_TRUNC },
+	{ ACCESS3_EXTEND,	NFSD_MAY_EXEC | NFSD_MAY_WRITE		},
+	{ ACCESS3_DELETE,	NFSD_MAY_REMOVE				},
 	{ 0,			0					}
 };
 
@@ -46,10 +46,10 @@ static const struct nfsd_access_map nfsd2_diraccess[] = {
  * filesystem checks.
  */
 static const struct nfsd_access_map nfsd2_otheraccess[] = {
-	{ NFS3_ACCESS_READ,	NFSD_MAY_READ				},
-	{ NFS3_ACCESS_EXECUTE,	NFSD_MAY_EXEC				},
-	{ NFS3_ACCESS_MODIFY,	NFSD_MAY_WRITE|NFSD_MAY_LOCAL_ACCESS	},
-	{ NFS3_ACCESS_EXTEND,	NFSD_MAY_WRITE|NFSD_MAY_LOCAL_ACCESS	},
+	{ ACCESS3_READ,		NFSD_MAY_READ				},
+	{ ACCESS3_EXECUTE,	NFSD_MAY_EXEC				},
+	{ ACCESS3_MODIFY,	NFSD_MAY_WRITE | NFSD_MAY_LOCAL_ACCESS	},
+	{ ACCESS3_EXTEND,	NFSD_MAY_WRITE | NFSD_MAY_LOCAL_ACCESS	},
 	{ 0,			0					}
 };
 
@@ -452,10 +452,23 @@ static const struct svc_procedure nfsd_acl_procedures2[5] = {
 	},
 };
 
+/*
+ * Storage requirements for XDR arguments and results.
+ */
+union nfsd_acl2_xdrstore {
+	struct nfsd3_getaclargs		getaclargs;
+	struct nfsd3_setaclargs		setaclargs;
+	struct nfsd3_accessargs		accessargs;
+	struct nfsd_fhandle		fhandle;
+	struct nfsd3_getaclres		getaclres;
+	struct nfsd_attrstat		attrstat;
+	struct nfsd3_accessres		accessres;
+};
+
 const struct svc_version nfsd_acl_version2 = {
 	.vs_vers	= 2,
 	.vs_nproc	= ARRAY_SIZE(nfsd_acl_procedures2),
 	.vs_proc	= nfsd_acl_procedures2,
 	.vs_dispatch	= nfsd_dispatch,
-	.vs_xdrsize	= NFS3_SVC_XDRSIZE,
+	.vs_xdrsize	= sizeof(union nfsd_acl2_xdrstore),
 };

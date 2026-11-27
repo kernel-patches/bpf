@@ -35,7 +35,6 @@
 #ifndef _NFSD4_STATE_H
 #define _NFSD4_STATE_H
 
-#include <crypto/md5.h>
 
 #include <linux/filelock.h>
 #include <linux/idr.h>
@@ -63,6 +62,7 @@
 #define	NFS4_CLIENTS_PER_GB		1024
 #define NFSD_DELEGRETURN_TIMEOUT	(HZ / 34)	/* 30ms */
 #define	NFSD_CB_GETATTR_TIMEOUT		NFSD_DELEGRETURN_TIMEOUT
+#define	NFSD_LAYOUTRETURN_TIMEOUT	NFSD_DELEGRETURN_TIMEOUT
 
 typedef struct {
 	u32             cl_boot;
@@ -148,10 +148,9 @@ struct nfs4_stid {
 /*
  * nn->deleg_lock protects sc_status for hashed delegation stateids.
  * ->cl_lock protects the bits set as one is disposed of
- * (SC_STATUS_CLOSED, SC_STATUS_FREEABLE, SC_STATUS_FREED) and
- * sc_status for open and lock stateids. ->st_mutex also protects
- * sc_status for open stateids. ->ls_lock protects sc_status for
- * layout stateids.
+ * (SC_STATUS_CLOSED, SC_STATUS_FREEABLE, SC_STATUS_FREED) and sc_status for
+ * open, lock, and layout stateids. ->st_mutex also protects sc_status for
+ * open stateids.
  */
 /*
  * For an open stateid kept around *only* to process close replays.
@@ -162,6 +161,7 @@ struct nfs4_stid {
 #define SC_STATUS_REVOKED	BIT(1)
 #define SC_STATUS_ADMIN_REVOKED	BIT(2)
 #define SC_STATUS_FREEABLE	BIT(3)
+/* Disposal has begun. References may still be in flight. */
 #define SC_STATUS_FREED		BIT(4)
 	unsigned short		sc_status;
 
@@ -500,9 +500,6 @@ struct nfsd4_sessionid {
 	u32		reserved;
 };
 
-/* Length of MD5 digest as hex, plus terminating '\0' */
-#define HEXDIR_LEN	(2 * MD5_DIGEST_SIZE + 1)
-
 /*
  *       State                Meaning                  Where set
  * --------------------------------------------------------------------------
@@ -588,7 +585,6 @@ struct nfs4_client {
 #define NFSD4_CLIENT_STABLE		(2)	/* client on stable storage */
 #define NFSD4_CLIENT_RECLAIM_COMPLETE	(3)	/* reclaim_complete done */
 #define NFSD4_CLIENT_CONFIRMED		(4)	/* client is confirmed */
-#define NFSD4_CLIENT_UPCALL_LOCK	(5)	/* upcall serialization */
 #define NFSD4_CLIENT_CB_FLAG_MASK	(1 << NFSD4_CLIENT_CB_UPDATE | \
 					 1 << NFSD4_CLIENT_CB_KILL)
 	unsigned long		cl_flags;
@@ -652,7 +648,7 @@ struct nfs4_client {
 struct nfs4_client_reclaim {
 	struct list_head	cr_strhash;	/* hash by cr_name */
 	struct nfs4_client	*cr_clp;	/* pointer to associated clp */
-	struct xdr_netobj	cr_name;	/* recovery dir name */
+	struct xdr_netobj	cr_name;	/* client name from nfsdcld */
 	struct xdr_netobj	cr_princhash;
 };
 
@@ -847,6 +843,8 @@ static inline struct nfs4_ol_stateid *openlockstateid(struct nfs4_stid *s)
 	return container_of(s, struct nfs4_ol_stateid, st_stid);
 }
 
+struct nfsd4_fence_script;
+
 struct nfs4_layout_stateid {
 	struct nfs4_stid		ls_stid;
 	struct list_head		ls_perclnt;
@@ -857,13 +855,20 @@ struct nfs4_layout_stateid {
 	struct nfsd_file		*ls_file;
 	struct nfsd4_callback		ls_recall;
 	stateid_t			ls_recall_sid;
+	ktime_t				ls_recall_start;
+	/* The client has answered NFS4_OK to the recall */
+	bool				ls_recall_accepted;
 	bool				ls_recalled;
 	struct mutex			ls_mutex;
 
 	struct delayed_work		ls_fence_work;
+	struct mutex			ls_fence_mutex; /* serializes fence shutdown */
 	unsigned int			ls_fence_delay;
+	/* Set once a lease break's fence worker is done */
 	bool				ls_fenced;
 	bool				ls_fence_inflight;
+	bool				ls_fence_stopped;
+	struct nfsd4_fence_script	*ls_fence_script;
 };
 
 static inline struct nfs4_layout_stateid *layoutstateid(struct nfs4_stid *s)
@@ -917,6 +922,10 @@ extern __be32 nfs4_preprocess_stateid_op(struct svc_rqst *rqstp,
 		struct nfsd4_compound_state *cstate, struct svc_fh *fhp,
 		stateid_t *stateid, int flags, struct nfsd_file **filp,
 		struct nfs4_stid **cstid);
+__be32 nfs4_preprocess_cpntf_stateid(struct svc_rqst *rqstp,
+				     struct nfsd4_compound_state *cstate,
+				     struct svc_fh *fhp, stateid_t *stateid,
+				     struct nfsd_file **nfp);
 __be32 nfsd4_lookup_stateid(struct nfsd4_compound_state *cstate,
 			    stateid_t *stateid, unsigned short typemask,
 			    unsigned short statusmask,
@@ -952,13 +961,13 @@ static inline void nfsd4_try_run_cb(struct nfsd4_callback *cb)
 
 extern void nfsd4_shutdown_callback(struct nfs4_client *);
 extern void nfsd4_shutdown_copy(struct nfs4_client *clp);
+void nfsd4_get_client(struct nfs4_client *clp);
 void nfsd4_put_client(struct nfs4_client *clp);
 void nfsd4_async_copy_reaper(struct nfsd_net *nn);
 bool nfsd4_has_active_async_copies(struct nfs4_client *clp);
 void nfsd_update_cmtime_attr(struct file *f, unsigned int flags);
 extern struct nfs4_client_reclaim *nfs4_client_to_reclaim(struct xdr_netobj name,
 				struct xdr_netobj princhash, struct nfsd_net *nn);
-extern bool nfs4_has_reclaimed_state(struct xdr_netobj name, struct nfsd_net *nn);
 int nfsd_handle_dir_event(u32 mask, const struct inode *dir, const void *data,
 			  int data_type, const struct qstr *name);
 

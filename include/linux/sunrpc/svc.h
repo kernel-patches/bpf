@@ -89,6 +89,8 @@ struct svc_serv {
 	bool			sv_is_pooled;	/* is this a pooled service? */
 	/* Caller registers with rpcbind itself. Set before svc_bind(). */
 	bool			sv_no_rpcbind;
+	/* Service implements RPC-with-TLS; offer STARTTLS to AUTH_TLS probes. */
+	bool			sv_tls;
 	struct svc_pool *	sv_pools;	/* array of thread pools */
 	int			(*sv_threadfn)(void *data);
 
@@ -360,6 +362,7 @@ static inline void svc_thread_init_status(struct svc_rqst *rqstp, int err)
 
 struct svc_deferred_req {
 	u32			prot;	/* protocol (UDP or TCP) */
+	bool			secure;	/* RQ_SECURE of the original request */
 	struct svc_xprt		*xprt;
 	struct sockaddr_storage	addr;	/* where reply must go */
 	size_t			addrlen;
@@ -489,9 +492,6 @@ const char *	   svc_proc_name(const struct svc_rqst *rqstp);
 int		   svc_encode_result_payload(struct svc_rqst *rqstp,
 					     unsigned int offset,
 					     unsigned int length);
-char		  *svc_fill_symlink_pathname(struct svc_rqst *rqstp,
-					     struct kvec *first, void *p,
-					     size_t total);
 __be32		   svc_generic_init_request(struct svc_rqst *rqstp,
 					    const struct svc_program *progp,
 					    struct svc_process_info *procinfo);

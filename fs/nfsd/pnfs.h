@@ -72,12 +72,20 @@ int nfsd4_set_deviceid(struct nfsd4_deviceid *id, const struct svc_fh *fhp,
 struct nfsd4_deviceid_map *nfsd4_find_devid_map(int idx);
 #endif /* CONFIG_NFSD_V4 */
 
+/* The mask that nfsd4_layout_holders() returns */
+#define NFSD_LAYOUTS_OWN	0x1
+#define NFSD_LAYOUTS_OTHER	0x2
+#define NFSD_LAYOUTS_IDLE	0x4
+
 #ifdef CONFIG_NFSD_PNFS
 void nfsd4_setup_layout_type(struct svc_export *exp);
 void nfsd4_return_all_client_layouts(struct nfs4_client *);
+void nfsd4_return_revoked_layout(struct nfs4_layout_stateid *ls);
 void nfsd4_return_all_file_layouts(struct nfs4_client *clp,
 		struct nfs4_file *fp);
 void nfsd4_close_layout(struct nfs4_layout_stateid *ls);
+unsigned int nfsd4_layout_holders(struct inode *inode);
+void nfsd4_stop_layout_fence(struct nfs4_layout_stateid *ls);
 int nfsd4_init_pnfs(void);
 void nfsd4_exit_pnfs(void);
 #else
@@ -92,11 +100,25 @@ static inline void nfsd4_setup_layout_type(struct svc_export *exp)
 static inline void nfsd4_return_all_client_layouts(struct nfs4_client *clp)
 {
 }
+
+static inline void nfsd4_return_revoked_layout(struct nfs4_layout_stateid *ls)
+{
+}
+
 static inline void nfsd4_return_all_file_layouts(struct nfs4_client *clp,
 		struct nfs4_file *fp)
 {
 }
 static inline void nfsd4_close_layout(struct nfs4_layout_stateid *ls)
+{
+}
+
+static inline unsigned int nfsd4_layout_holders(struct inode *inode)
+{
+	return 0;
+}
+
+static inline void nfsd4_stop_layout_fence(struct nfs4_layout_stateid *ls)
 {
 }
 static inline void nfsd4_exit_pnfs(void)
