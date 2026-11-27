@@ -1748,6 +1748,30 @@ static void ieee80211_assign_chanctx(struct ieee80211_local *local,
 	}
 }
 
+static void ieee80211_reconfig_monitors(struct ieee80211_local *local)
+{
+	struct ieee80211_sub_if_data *sdata;
+
+	lockdep_assert_wiphy(local->hw.wiphy);
+
+	list_for_each_entry(sdata, &local->interfaces, list) {
+		struct ieee80211_chan_req chanreq = sdata->vif.bss_conf.chanreq;
+
+		if (sdata->vif.type != NL80211_IFTYPE_MONITOR ||
+		    !chanreq.oper.chan ||
+		    rcu_access_pointer(sdata->deflink.conf->chanctx_conf))
+			continue;
+
+		if (!ieee80211_link_use_channel(&sdata->deflink, &chanreq,
+						IEEE80211_CHANCTX_SHARED))
+			continue;
+
+		sdata_info(sdata, "failed to restore monitor channel\n");
+		memset(&sdata->vif.bss_conf.chanreq, 0,
+		       sizeof(sdata->vif.bss_conf.chanreq));
+	}
+}
+
 static void ieee80211_reconfig_stations(struct ieee80211_sub_if_data *sdata)
 {
 	struct ieee80211_local *local = sdata->local;
@@ -1800,7 +1824,7 @@ ieee80211_reconfig_nan_offload_de(struct ieee80211_sub_if_data *sdata)
 	}
 
 	kfree(funcs);
-	return res;
+	return 0;
 }
 
 static int ieee80211_reconfig_nan(struct ieee80211_sub_if_data *sdata)
@@ -2381,6 +2405,8 @@ int ieee80211_reconfig(struct ieee80211_local *local)
 	if (local->virt_monitors > 0 &&
 	    local->virt_monitors == local->open_count)
 		ieee80211_add_virtual_monitor(local, NULL);
+
+	ieee80211_reconfig_monitors(local);
 
 	if (!suspended)
 		return 0;

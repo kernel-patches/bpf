@@ -162,6 +162,15 @@ static int ieee80211_set_mon_options(struct ieee80211_sub_if_data *sdata,
 	return 0;
 }
 
+static void ieee80211_clear_ap_mbssid_options(struct ieee80211_bss_conf *link_conf)
+{
+	RCU_INIT_POINTER(link_conf->tx_bss_conf, NULL);
+	link_conf->bssid_index = 0;
+	link_conf->nontransmitted = false;
+	link_conf->ema_ap = false;
+	link_conf->bssid_indicator = 0;
+}
+
 static int ieee80211_set_ap_mbssid_options(struct ieee80211_sub_if_data *sdata,
 					   struct cfg80211_mbssid_config *params,
 					   struct ieee80211_bss_conf *link_conf)
@@ -986,9 +995,9 @@ static int ieee80211_config_default_beacon_key(struct wiphy *wiphy,
 	return 0;
 }
 
-void sta_set_rate_info_tx(struct sta_info *sta,
-			  const struct ieee80211_tx_rate *rate,
-			  struct rate_info *rinfo)
+void sta_set_rate_info_tx(const struct ieee80211_tx_rate *rate,
+			  struct rate_info *rinfo,
+			  const struct ieee80211_supported_band *sband)
 {
 	rinfo->flags = 0;
 	if (rate->flags & IEEE80211_TX_RC_MCS) {
@@ -999,9 +1008,6 @@ void sta_set_rate_info_tx(struct sta_info *sta,
 		rinfo->mcs = ieee80211_rate_get_vht_mcs(rate);
 		rinfo->nss = ieee80211_rate_get_vht_nss(rate);
 	} else {
-		struct ieee80211_supported_band *sband;
-
-		sband = ieee80211_get_sband(sta->sdata);
 		WARN_ON_ONCE(sband && !sband->bitrates);
 		if (sband && sband->bitrates)
 			rinfo->legacy = sband->bitrates[rate->idx].bitrate;
@@ -1155,6 +1161,10 @@ static int ieee80211_set_monitor_channel(struct wiphy *wiphy,
 		sdata = wiphy_dereference(wiphy, local->monitor_sdata);
 		if (!sdata)
 			goto done;
+	} else if (!dev) {
+		return -EOPNOTSUPP;
+	} else if (!ieee80211_sdata_running(sdata)) {
+		return -ENETDOWN;
 	}
 
 	if (rcu_access_pointer(sdata->deflink.conf->chanctx_conf) &&
@@ -1165,8 +1175,11 @@ static int ieee80211_set_monitor_channel(struct wiphy *wiphy,
 	ieee80211_link_release_channel(&sdata->deflink);
 	ret = ieee80211_link_use_channel(&sdata->deflink, &chanreq,
 					 IEEE80211_CHANCTX_SHARED);
-	if (ret)
+	if (ret) {
+		memset(&sdata->vif.bss_conf.chanreq, 0,
+		       sizeof(sdata->vif.bss_conf.chanreq));
 		return ret;
+	}
 done:
 	local->monitor_chanreq = chanreq;
 	return 0;
@@ -1937,6 +1950,7 @@ static int ieee80211_start_ap(struct wiphy *wiphy, struct net_device *dev,
 		ieee80211_link_copy_chanctx_to_vlans(link, false);
 	if (err) {
 		link_conf->beacon_int = prev_beacon_int;
+		ieee80211_clear_ap_mbssid_options(link_conf);
 		return err;
 	}
 
@@ -2055,6 +2069,7 @@ error:
 	link_conf->beacon_int = prev_beacon_int;
 	sdata->vif.cfg.ssid_len = 0;
 	ieee80211_link_release_channel(link);
+	ieee80211_clear_ap_mbssid_options(link_conf);
 
 	return err;
 }

@@ -1336,12 +1336,6 @@ int nxpwifi_scan_networks(struct nxpwifi_private *priv,
 	u8 scan_current_chan_only;
 	u8 max_chan_per_scan;
 
-	if (adapter->scan_processing) {
-		nxpwifi_dbg(adapter, WARN,
-			    "cmd: Scan already in process...\n");
-		return -EBUSY;
-	}
-
 	if (priv->scan_block) {
 		nxpwifi_dbg(adapter, WARN,
 			    "cmd: Scan is blocked during association...\n");
@@ -1356,6 +1350,12 @@ int nxpwifi_scan_networks(struct nxpwifi_private *priv,
 	}
 
 	spin_lock_bh(&adapter->nxpwifi_cmd_lock);
+	if (adapter->scan_processing) {
+		spin_unlock_bh(&adapter->nxpwifi_cmd_lock);
+		nxpwifi_dbg(adapter, WARN,
+			    "cmd: Scan already in process...\n");
+		return -EBUSY;
+	}
 	adapter->scan_processing = true;
 	spin_unlock_bh(&adapter->nxpwifi_cmd_lock);
 

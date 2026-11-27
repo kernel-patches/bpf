@@ -19670,6 +19670,9 @@ static int nl80211_add_link(struct sk_buff *skb, struct genl_info *info)
 		return -EINVAL;
 	}
 
+	if (wdev->valid_links & BIT(link_id))
+		return -EALREADY;
+
 	if (!info->attrs[NL80211_ATTR_MAC] ||
 	    !is_valid_ether_addr(nla_data(info->attrs[NL80211_ATTR_MAC])))
 		return -EINVAL;

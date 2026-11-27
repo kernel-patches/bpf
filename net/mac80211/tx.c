@@ -1573,6 +1573,13 @@ void ieee80211_txq_init(struct ieee80211_sub_if_data *sdata,
 	INIT_LIST_HEAD(&txqi->schedule_order);
 
 	txqi->txq.vif = &sdata->vif;
+	if (sta && sdata->vif.type == NL80211_IFTYPE_AP_VLAN) {
+		struct ieee80211_sub_if_data *ap;
+
+		ap = container_of(sdata->bss,
+				  struct ieee80211_sub_if_data, u.ap);
+		txqi->txq.vif = &ap->vif;
+	}
 
 	if (!sta) {
 		txqi->txq.tid = tid;

@@ -267,7 +267,8 @@ void ieee80211s_update_metric(struct ieee80211_local *local,
 	if (st->n_rates)
 		rinfo = sta->deflink.tx_stats.last_rate_info;
 	else
-		sta_set_rate_info_tx(sta, &sta->deflink.tx_stats.last_rate, &rinfo);
+		sta_set_rate_info_tx(&sta->deflink.tx_stats.last_rate,
+				     &rinfo, ieee80211_get_sband(sta->sdata));
 
 	ewma_mesh_tx_rate_avg_add(&sta->mesh->tx_rate_avg,
 				  cfg80211_calculate_bitrate(&rinfo));

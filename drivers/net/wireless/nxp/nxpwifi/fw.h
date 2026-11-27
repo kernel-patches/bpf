@@ -2375,6 +2375,15 @@ struct host_cmd_twt_cfg {
 	u8 val[];
 } __packed;
 
+#define NXPWIFI_CFG_TYPE_CAL	0x2
+
+struct host_cmd_ds_802_11_cfg_data {
+	__le16 action;
+	__le16 type;
+	__le16 data_len;
+	u8 data[];
+} __packed;
+
 struct host_cmd_ds_command {
 	__le16 command;
 	__le16 size;
@@ -2382,6 +2391,7 @@ struct host_cmd_ds_command {
 	__le16 result;
 	union {
 		struct host_cmd_ds_get_hw_spec hw_spec;
+		struct host_cmd_ds_802_11_cfg_data cfg_data;
 		struct host_cmd_ds_mac_control mac_ctrl;
 		struct host_cmd_ds_802_11_mac_address mac_addr;
 		struct host_cmd_ds_mac_multicast_adr mc_addr;

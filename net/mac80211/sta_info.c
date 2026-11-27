@@ -3015,8 +3015,9 @@ static int sta_set_link_sinfo(struct sta_info *sta,
 
 	if (!(link_sinfo->filled & BIT_ULL(NL80211_STA_INFO_TX_BITRATE)) &&
 	    ieee80211_rate_valid(&link_sta_info->tx_stats.last_rate)) {
-		sta_set_rate_info_tx(sta, &link_sta_info->tx_stats.last_rate,
-				     &link_sinfo->txrate);
+		sta_set_rate_info_tx(&link_sta_info->tx_stats.last_rate,
+				     &link_sinfo->txrate,
+				     ieee80211_get_link_sband(link));
 		link_sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
 	}
 
@@ -3252,8 +3253,9 @@ int __sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo,
 	if (!(sinfo->filled & BIT_ULL(NL80211_STA_INFO_TX_BITRATE)) &&
 	    !sta->sta.valid_links &&
 	    ieee80211_rate_valid(&sta->deflink.tx_stats.last_rate)) {
-		sta_set_rate_info_tx(sta, &sta->deflink.tx_stats.last_rate,
-				     &sinfo->txrate);
+		sta_set_rate_info_tx(&sta->deflink.tx_stats.last_rate,
+				     &sinfo->txrate,
+				     ieee80211_get_sband(sdata));
 		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
 	}
 

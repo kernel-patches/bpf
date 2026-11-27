@@ -1740,7 +1740,7 @@ drv_can_neg_ttlm(struct ieee80211_local *local,
 
 	might_sleep();
 	if (!check_sdata_in_driver(sdata))
-		return -EIO;
+		return NEG_TTLM_RES_REJECT;
 
 	trace_drv_can_neg_ttlm(local, sdata, neg_ttlm);
 	if (local->ops->can_neg_ttlm)
