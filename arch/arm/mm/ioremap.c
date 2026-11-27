@@ -39,7 +39,6 @@
 #include <asm/system_info.h>
 
 #include <asm/mach/map.h>
-#include <asm/mach/pci.h>
 #include "mm.h"
 
 

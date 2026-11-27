@@ -79,7 +79,7 @@
 	pcie_3v3: regulator-3v3-pcie {
 		compatible = "regulator-fixed";
 		enable-active-high;
-		gpios = <&gpio4 RK_PA1 GPIO_ACTIVE_HIGH>;
+		gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_HIGH>;
 		pinctrl-0 = <&pcie2_0_pow>;
 		pinctrl-names = "default";
 		regulator-name = "pcie_3v3";
@@ -319,6 +319,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pcie2_0_rst>;
 	reset-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&pcie_3v3>;
 	status = "okay";
 
 	pcie@0,0 {
@@ -373,7 +374,7 @@
 		};
 
 		pcie2_0_pow: pcie2-0-pow {
-			rockchip,pins = <4 RK_PA1 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <3 RK_PD5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 

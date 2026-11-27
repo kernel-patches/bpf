@@ -3,9 +3,6 @@ dtb-$(CONFIG_ARCH_INTEGRATOR) += \
 	integratorap.dtb \
 	integratorap-im-pd1.dtb \
 	integratorcp.dtb
-dtb-$(CONFIG_ARCH_MPS2) += \
-	mps2-an385.dtb \
-	mps2-an399.dtb
 dtb-$(CONFIG_ARCH_REALVIEW) += \
 	arm-realview-pb1176.dtb \
 	arm-realview-pb11mp.dtb \

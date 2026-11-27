@@ -43,13 +43,4 @@
 #define IRQ_ORION5X_XOR0		(1 + 30)
 #define IRQ_ORION5X_XOR1		(1 + 31)
 
-/*
- * Orion General Purpose Pins
- */
-#define IRQ_ORION5X_GPIO_START	33
-#define NR_GPIO_IRQS		32
-
-#define ORION5X_NR_IRQS		(IRQ_ORION5X_GPIO_START + NR_GPIO_IRQS)
-
-
 #endif
