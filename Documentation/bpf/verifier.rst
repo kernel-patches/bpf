@@ -1292,7 +1292,7 @@ can go past the jump that a proof needs:
                                    full `Limits`_
 ``CAP_PERFMON``                    trip count, reads of stack that is not
                                    written, pointers as numbers, access to BTF
-                                   objects, arena
+                                   objects, arena, recursion
 ``CAP_PERFMON`` or no mitigations  equations of pointers, equations that a join
                                    makes from constants, the end of infeasible
                                    states, skipped first trips, stack access

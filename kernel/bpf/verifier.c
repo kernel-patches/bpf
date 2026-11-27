@@ -5477,6 +5477,7 @@ enum {
 	CG_ARENA_SP	= BIT(5), /* subprogs that get to r12 */
 	CG_CB		= BIT(6),
 	CG_GLOBAL	= BIT(7),
+	CG_THROW	= BIT(8), /* subprogs that get to bpf_throw() */
 };
 
 #define for_each_marked_subprog(cg, s, mark) \
@@ -5520,10 +5521,13 @@ static int build_call_graph(struct bpf_verifier_env *env, struct bpf_call_graph 
 				(si[s].is_async_cb ? CG_IN_ASYNC_CB : 0) |
 				(bpf_call_graph_recursive(cg, s) ? CG_IN_RECURSION : 0) |
 				(si[s].has_tail_call ? CG_TAIL_CALL : 0) |
+				(si[s].throws ? CG_THROW : 0) |
 				(si[s].uses_arena_sp ? CG_ARENA_SP : 0) |
 				(bpf_subprog_is_global(env, s) ? CG_GLOBAL : 0);
 	bpf_call_graph_mark_callees(cg, CG_IN_CB | CG_IN_ASYNC_CB | CG_IN_RECURSION);
-	bpf_call_graph_mark_callers(cg, CG_TAIL_CALL, 0);
+	bpf_call_graph_mark_callers(cg, CG_TAIL_CALL | CG_THROW, 0);
+	for_each_marked_subprog(cg, s, CG_THROW)
+		si[s].throws = true;
 	return 0;
 }
 
@@ -5712,10 +5716,11 @@ struct bpf_subprog_call_depth_info {
 static int subprog_stack_size(struct bpf_verifier_env *env, int s)
 {
 	struct bpf_subprog_info *sub = &env->subprog_info[s];
+	int args = (sub->stack_arg_cnt - bpf_in_stack_arg_cnt(sub)) * BPF_REG_SIZE;
 
 	if (sub->priv_stack_mode == PRIV_STACK_ADAPTIVE)
-		return 0;
-	return round_up_stack_depth(env, sub->stack_depth);
+		return args;
+	return round_up_stack_depth(env, sub->stack_depth + args);
 }
 
 static void max_call_depth(struct bpf_subprog_call_depth_info *to,
@@ -5912,7 +5917,6 @@ static int check_call_depth(struct bpf_verifier_env *env, struct bpf_call_graph 
 					s, depth);
 				goto out;
 			}
-			continue;
 		}
 		depth = dinfo[s].depth + subprog_stack_size(env, s);
 		if (depth > env->max_stack_depth)
@@ -12708,10 +12712,26 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	return 0;
 }
 
+static bool st_ops_returns_ptr(const struct bpf_prog *prog)
+{
+	const struct bpf_prog_aux *aux = prog->aux;
+
+	return prog->type == BPF_PROG_TYPE_STRUCT_OPS &&
+	       btf_type_resolve_ptr(aux->attach_btf, aux->attach_func_proto->type, NULL);
+}
+
+/* What leaves frame 0 gets to the caller of the program */
+static bool returns_to_kernel(const struct bpf_verifier_state *state)
+{
+	const struct bpf_func_state *frame = state->frame[0];
+
+	return !frame->in_async_callback_fn &&
+	       (!state->callers_unknown || frame->in_exception_callback_fn);
+}
+
 static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exit)
 {
 	struct bpf_verifier_state *state = env->cur_state;
-	enum bpf_prog_type type = resolve_prog_type(env->prog);
 	struct bpf_reg_state *reg = reg_state(env, BPF_REG_0);
 	bool refs_lingering = false;
 	int i;
@@ -12725,8 +12745,9 @@ static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exi
 		/* Allow struct_ops programs to return a referenced kptr back to
 		 * kernel. Type checks are performed later in check_return_code.
 		 */
-		if (type == BPF_PROG_TYPE_STRUCT_OPS && !exception_exit &&
-		    reg->id == state->refs[i].id)
+		if (!exception_exit && reg->id == state->refs[i].id &&
+		    env->prog->insnsi[env->insn_idx].code == (BPF_JMP | BPF_EXIT) &&
+		    st_ops_returns_ptr(env->prog) && returns_to_kernel(state))
 			continue;
 		verbose(env, "Unreleased reference id=%d alloc_insn=%d\n",
 			state->refs[i].id, state->refs[i].insn_idx);
@@ -13463,6 +13484,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		 */
 		if (env->fmodret_retvals) {
 			verbose(env, "tail calls are not allowed in fmod_ret programs with restricted return values\n");
+			return -EINVAL;
+		}
+		/* It can return a reference. The caller of a subprog takes r0 for a scalar. */
+		if (st_ops_returns_ptr(env->prog) &&
+		    (env->cur_state->curframe || !returns_to_kernel(env->cur_state))) {
+			verbose(env, "tail_call in a subprog would lead to reference leak\n");
 			return -EINVAL;
 		}
 		if (env->cur_state->curframe) {
@@ -16045,6 +16072,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return -ENOTSUPP;
 		}
 		env->seen_exception = true;
+		env->subprog_info[cur_func(env)->subprogno].throws = true;
 
 		/* In the case of the default callback, the cookie value passed
 		 * to bpf_throw becomes the return value of the program.
@@ -24389,6 +24417,12 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		if (tgt_can_unwind && !prog_extension &&
 		    prog->expected_attach_type != BPF_TRACE_FENTRY) {
 			bpf_log(log, "Only fentry can attach to %s, which can unwind\n", tname);
+			return -EINVAL;
+		}
+		/* bpf_throw() would have to skip the trampoline that called the target */
+		if (subprog && aux->func && aux->func[subprog]->aux->might_throw &&
+		    !prog_extension && prog->expected_attach_type != BPF_TRACE_FENTRY) {
+			bpf_log(log, "Only fentry can attach to %s, which can throw\n", tname);
 			return -EINVAL;
 		}
 		/* What it takes of the stack is not counted, see bpf_insert_recursion_checks() */
