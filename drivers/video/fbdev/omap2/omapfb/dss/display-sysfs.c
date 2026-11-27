@@ -304,6 +304,13 @@ static const struct sysfs_ops display_sysfs_ops = {
 };
 
 static struct kobj_type display_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix):
+	 * display_uninit_sysfs() calls kobject_put(&dssdev->kobj) and
+	 * immediately zeroes dssdev->kobj with memset(), corrupting any
+	 * in-flight or delayed (CONFIG_DEBUG_KOBJECT_RELEASE) kobject cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &display_sysfs_ops,
 	.default_groups = display_sysfs_groups,
 };

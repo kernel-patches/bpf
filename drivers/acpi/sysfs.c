@@ -1042,6 +1042,13 @@ static struct attribute *hotplug_profile_attrs[] = {
 ATTRIBUTE_GROUPS(hotplug_profile);
 
 static const struct kobj_type acpi_hotplug_profile_ktype = {
+	/*
+	 * Omitting release() violates the kobject API contract, but lifetime
+	 * is safe: hotplug->kobj is only embedded in static built-in
+	 * struct acpi_scan_handler instances that are never unregistered or
+	 * freed.
+	 */
+	.release = NULL,
 	.sysfs_ops = &kobj_sysfs_ops,
 	.default_groups = hotplug_profile_groups,
 };

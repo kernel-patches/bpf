@@ -29,6 +29,9 @@
 // To be determined.
 #![feature(used_with_arg)]
 //
+// For documentation purpose only.
+#![feature(doc_notable_trait)]
+//
 // `feature(file_with_nul)` is stable since Rust 1.92.0. Before Rust 1.89.0, it did not exist, so
 // enable it conditionally.
 #![cfg_attr(CONFIG_RUSTC_HAS_FILE_WITH_NUL, feature(file_with_nul))]

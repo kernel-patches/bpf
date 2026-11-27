@@ -2539,6 +2539,14 @@ static struct attribute *ab8500_fg_attrs[] = {
 ATTRIBUTE_GROUPS(ab8500_fg);
 
 static const struct kobj_type ab8500_fg_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): fg_kobject is
+	 * embedded in devm-allocated struct ab8500_fg; ab8500_fg_sysfs_exit()
+	 * only calls kobject_del() (never kobject_put()) before devm frees the
+	 * struct on unbind, and on ab8500_fg_sysfs_init() failure kobject_put()
+	 * races with devm freeing the struct on probe failure.
+	 */
+	.release = NULL,
 	.sysfs_ops = &ab8500_fg_sysfs_ops,
 	.default_groups = ab8500_fg_groups,
 };

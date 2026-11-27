@@ -25,10 +25,8 @@ use crate::{
 };
 
 /// The GSP firmware image, its signatures, and the GSP bootloader.
-#[pin_data]
 pub(crate) struct GspFirmware<'a> {
     /// The firmware image and the radix3 table that maps it.
-    #[pin]
     radix3: Radix3<'a>,
     /// Device-mapped GSP signatures matching the GPU's [`Chipset`].
     pub(crate) signatures: Coherent<'a, [u8]>,
@@ -42,8 +40,8 @@ impl<'a> GspFirmware<'a> {
     pub(crate) fn new(
         dev: &'a device::Device<device::Bound>,
         chipset: Chipset,
-    ) -> impl PinInit<Self, Error> + 'a {
-        pin_init::pin_init_scope(move || {
+    ) -> impl Init<Self, Error> + 'a {
+        pin_init::init_scope(move || {
             let firmware = request_tlv(dev, chipset, "gsp")?;
             let tlv = Tlv::new(firmware.data())?;
             dev_dbg!(dev, "loaded gsp firmware v{}\n", tlv.get_string(b"VERS")?);
@@ -58,7 +56,7 @@ impl<'a> GspFirmware<'a> {
 
             let signatures = Coherent::from_slice(dev, tlv.get_bytes(b"SIGN")?, GFP_KERNEL)?;
 
-            Ok(try_pin_init!(Self {
+            Ok(try_init!(Self {
                 radix3 <- Radix3::new(dev, fw_vvec),
                 signatures,
                 bootloader: {

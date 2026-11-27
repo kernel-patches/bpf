@@ -496,6 +496,14 @@ static const struct sysfs_ops manager_sysfs_ops = {
 };
 
 static struct kobj_type manager_ktype = {
+	/*
+	 * FIXME: Broken kobject lifetime (needs follow-up fix): mgr->kobj is
+	 * embedded in dynamically allocated managers[], zeroed in
+	 * dss_manager_kobj_uninit() right after kobject_put(), and freed in
+	 * dss_uninit_overlay_managers() without waiting for final kobject
+	 * cleanup.
+	 */
+	.release = NULL,
 	.sysfs_ops = &manager_sysfs_ops,
 	.default_groups = manager_sysfs_groups,
 };

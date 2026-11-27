@@ -273,9 +273,10 @@ static const struct software_node platform_device_test_swnode = { };
 /*
  * Check that reusing a software node works correctly. If the call to
  * platform_device_register_full() fails after adding the secondary firmware
- * node, the software node must be unregistered in the device's release()
+ * node, the software node must be removed in the device's release()
  * callback or the subsequent call to platform_device_register_full() will fail
- * with -EBUSY due to the software node already having been registered.
+ * with -EBUSY due to the primary firmware node still pointing at the
+ * secondary software node.
  */
 static void platform_device_swnode_add_twice(struct kunit *test)
 {

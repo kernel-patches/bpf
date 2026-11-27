@@ -850,6 +850,7 @@ static void software_node_release(struct kobject *kobj)
 	if (swnode->parent) {
 		ida_free(&swnode->parent->child_ids, swnode->id);
 		list_del(&swnode->entry);
+		swnode_put(swnode->parent);
 	} else {
 		ida_free(&swnode_root_ids, swnode->id);
 	}
@@ -886,7 +887,7 @@ swnode_register(const struct software_node *node, struct swnode *parent,
 
 	swnode->id = ret;
 	swnode->node = node;
-	swnode->parent = parent;
+	swnode->parent = parent ? swnode_get(parent) : NULL;
 	swnode->kobj.kset = swnode_kset;
 	fwnode_init(&swnode->fwnode, &software_node_ops);
 
@@ -954,14 +955,7 @@ EXPORT_SYMBOL_GPL(software_node_register_node_group);
  * software_node_unregister_node_group - Unregister a group of software nodes
  * @node_group: NULL terminated array of software node pointers to be unregistered
  *
- * Unregister multiple software nodes at once. If parent pointers are set up
- * in any of the software nodes then the array **must** be ordered such that
- * parents come before their children.
- *
- * NOTE: If you are uncertain whether the array is ordered such that
- * parents will be unregistered before their children, it is wiser to
- * remove the nodes individually, in the correct order (child before
- * parent).
+ * Unregister multiple software nodes at once.
  */
 void software_node_unregister_node_group(const struct software_node * const *node_group)
 {
@@ -1055,9 +1049,8 @@ EXPORT_SYMBOL_GPL(fwnode_remove_software_node);
  * @dev: The device the software node is meant for.
  * @node: The software node.
  *
- * This function will make @node the secondary firmware node pointer of @dev. If
- * @dev has no primary node, then @node will become the primary node. The
- * function will register @node automatically if it wasn't already registered.
+ * Register @node if it was not already registered and make it the secondary
+ * firmware node of @dev.
  */
 int device_add_software_node(struct device *dev, const struct software_node *node)
 {
@@ -1098,7 +1091,8 @@ EXPORT_SYMBOL_GPL(device_add_software_node);
  * device_remove_software_node - Remove device's software node
  * @dev: The device with the software node.
  *
- * This function will unregister the software node of @dev.
+ * Remove a software node added by device_add_software_node() and
+ * deregister it if this is the last reference.
  */
 void device_remove_software_node(struct device *dev)
 {
@@ -1106,6 +1100,9 @@ void device_remove_software_node(struct device *dev)
 
 	swnode = dev_to_swnode(dev);
 	if (!swnode)
+		return;
+
+	if (fwnode_is_primary(&swnode->fwnode))
 		return;
 
 	if (device_is_registered(dev))
@@ -1166,8 +1163,8 @@ void software_node_notify(struct device *dev)
 		return;
 
 	/*
-	 * When the software node is the device's secondary firmware node,
-	 * the core only records the owning device on the primary fwnode
+	 * When a device has both a primary and a secondary firmware node the
+	 * core only records the owning device in the primary node
 	 * (see device_add()). fw_devlink resolves a supplier device through
 	 * fwnode->dev, so without this a consumer referencing the software
 	 * node could never find the supplier device and would defer forever.
@@ -1177,6 +1174,8 @@ void software_node_notify(struct device *dev)
 		swnode->fwnode.dev = dev;
 
 	swnode_get(swnode);
+	dev_set_swnode_notified(dev);
+
 	ret = sysfs_create_link(&dev->kobj, &swnode->kobj, "software_node");
 	if (ret)
 		return;
@@ -1200,14 +1199,14 @@ void software_node_notify_remove(struct device *dev)
 	sysfs_remove_link(&dev->kobj, "software_node");
 
 	/*
-	 * Drop the device pointer mirrored onto a secondary software node in
-	 * software_node_notify(). For a primary software node the core owns
-	 * fwnode->dev and clears it in device_del().
+	 * Clear any device pointer set in a secondary software node in
+	 * software_node_notify().
 	 */
 	if (!device_match_fwnode(dev, &swnode->fwnode) && swnode->fwnode.dev == dev)
 		swnode->fwnode.dev = NULL;
 
-	swnode_put(swnode);
+	if (dev_test_and_clear_swnode_notified(dev))
+		swnode_put(swnode);
 
 	if (swnode->owner == dev) {
 		set_secondary_fwnode(dev, NULL);

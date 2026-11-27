@@ -31,12 +31,10 @@ use kernel::{
 
 struct DmaSampleDriver;
 
-#[pin_data(PinnedDrop)]
 struct DmaSampleData<'bound> {
     pdev: &'bound pci::Device<Bound>,
     ca: Coherent<'bound, [MyStruct]>,
-    #[pin]
-    sgt: SGTable<Owned<VVec<u8>>>,
+    sgt: SGTable<Owned<'bound, VVec<u8>>>,
 }
 
 const TEST_VALUES: [(u32, u32); 5] = [
@@ -79,32 +77,26 @@ impl pci::Driver for DmaSampleDriver {
         pdev: &'bound pci::Device<Core<'_>>,
         _info: Option<&'bound Self::IdInfo>,
     ) -> impl PinInit<Self::Data<'bound>, Error> + 'bound {
-        pin_init::pin_init_scope(move || {
-            dev_info!(pdev, "Probe DMA test driver.\n");
+        dev_info!(pdev, "Probe DMA test driver.\n");
 
-            let mask = DmaMask::new::<64>();
+        let mask = DmaMask::new::<64>();
 
-            // SAFETY: There are no concurrent calls to DMA allocation and mapping primitives.
-            unsafe { pdev.dma_set_mask_and_coherent(mask)? };
+        // SAFETY: There are no concurrent calls to DMA allocation and mapping primitives.
+        unsafe { pdev.dma_set_mask_and_coherent(mask)? };
 
-            let ca: Coherent<'_, [MyStruct]> =
-                Coherent::zeroed_slice(pdev.as_ref(), TEST_VALUES.len(), GFP_KERNEL)?;
+        let ca: Coherent<'_, [MyStruct]> =
+            Coherent::zeroed_slice(pdev.as_ref(), TEST_VALUES.len(), GFP_KERNEL)?;
 
-            for (i, value) in TEST_VALUES.into_iter().enumerate() {
-                io_project!(ca, [panic: i]).copy_write(MyStruct::new(value.0, value.1));
-            }
+        for (i, value) in TEST_VALUES.into_iter().enumerate() {
+            io_project!(ca, [panic: i]).copy_write(MyStruct::new(value.0, value.1));
+        }
 
-            let size = 4 * page::PAGE_SIZE;
-            let pages = VVec::with_capacity(size, GFP_KERNEL)?;
+        let size = 4 * page::PAGE_SIZE;
+        let pages = VVec::with_capacity(size, GFP_KERNEL)?;
 
-            let sgt = SGTable::new(pdev.as_ref(), pages, DataDirection::ToDevice, GFP_KERNEL);
+        let sgt = SGTable::new(pdev.as_ref(), pages, DataDirection::ToDevice, GFP_KERNEL)?;
 
-            Ok(try_pin_init!(Self::Data {
-                pdev,
-                ca,
-                sgt <- sgt,
-            }))
-        })
+        Ok(Self::Data { pdev, ca, sgt })
     }
 }
 
@@ -120,9 +112,8 @@ impl DmaSampleData<'_> {
     }
 }
 
-#[pinned_drop]
-impl PinnedDrop for DmaSampleData<'_> {
-    fn drop(self: Pin<&mut Self>) {
+impl Drop for DmaSampleData<'_> {
+    fn drop(&mut self) {
         dev_info!(self.pdev, "Unload DMA test driver.\n");
 
         self.check_dma();
@@ -130,7 +121,7 @@ impl PinnedDrop for DmaSampleData<'_> {
         for (i, entry) in self.sgt.iter().enumerate() {
             dev_info!(
                 self.pdev,
-                "Entry[{}]: DMA address: {:#x}",
+                "Entry[{}]: DMA address: {:#x}\n",
                 i,
                 entry.dma_address(),
             );
