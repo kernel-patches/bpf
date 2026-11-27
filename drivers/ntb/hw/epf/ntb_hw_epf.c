@@ -102,6 +102,7 @@ struct ntb_epf_dev {
 	struct device *dev;
 	/* Mutex to protect providing commands to NTB EPF */
 	struct mutex cmd_lock;
+	bool cmd_status_unreliable;
 
 	const enum pci_barno *barno_map;
 
@@ -123,15 +124,14 @@ struct ntb_epf_dev {
 
 #define ntb_ndev(__ntb) container_of(__ntb, struct ntb_epf_dev, ntb)
 
-static int ntb_epf_send_command(struct ntb_epf_dev *ndev, u32 command,
-				u32 argument)
+static int ntb_epf_send_command_locked(struct ntb_epf_dev *ndev, u32 command,
+				       u32 argument)
 {
 	ktime_t timeout;
 	bool timedout;
 	int ret = 0;
 	u32 status;
 
-	mutex_lock(&ndev->cmd_lock);
 	writel(argument, ndev->ctrl_reg + NTB_EPF_ARGUMENT);
 	writel(command, ndev->ctrl_reg + NTB_EPF_COMMAND);
 
@@ -149,6 +149,7 @@ static int ntb_epf_send_command(struct ntb_epf_dev *ndev, u32 command,
 			break;
 
 		if (WARN_ON(timedout)) {
+			ndev->cmd_status_unreliable = true;
 			ret = -ETIMEDOUT;
 			break;
 		}
@@ -157,6 +158,24 @@ static int ntb_epf_send_command(struct ntb_epf_dev *ndev, u32 command,
 	}
 
 	writew(0, ndev->ctrl_reg + NTB_EPF_CMD_STATUS);
+	/*
+	 * After a timeout, a status may refer to an earlier command.
+	 * MW callers may free buffers on error, so retain old semantics.
+	 */
+	if (ndev->cmd_status_unreliable &&
+	    (command == CMD_CONFIGURE_MW || command == CMD_TEARDOWN_MW))
+		ret = 0;
+
+	return ret;
+}
+
+static int ntb_epf_send_command(struct ntb_epf_dev *ndev, u32 command,
+				u32 argument)
+{
+	int ret;
+
+	mutex_lock(&ndev->cmd_lock);
+	ret = ntb_epf_send_command_locked(ndev, command, argument);
 	mutex_unlock(&ndev->cmd_lock);
 
 	return ret;
@@ -273,12 +292,12 @@ static u32 ntb_epf_peer_spad_read(struct ntb_dev *ntb, int pidx, int idx)
 
 	if (pidx != NTB_DEF_PEER_IDX) {
 		dev_err(dev, "Unsupported Peer ID %d\n", pidx);
-		return -EINVAL;
+		return 0;
 	}
 
 	if (idx < 0 || idx >= ndev->spad_count) {
 		dev_err(dev, "WRITE: Invalid Peer ScratchPad Index %d\n", idx);
-		return -EINVAL;
+		return 0;
 	}
 
 	offset = (idx << 2);
@@ -475,7 +494,7 @@ static int ntb_epf_mw_set_trans(struct ntb_dev *ntb, int pidx, int idx,
 	struct ntb_epf_dev *ndev = ntb_ndev(ntb);
 	struct device *dev = ndev->dev;
 	resource_size_t mw_size;
-	int bar;
+	int bar, ret;
 
 	if (pidx != NTB_DEF_PEER_IDX) {
 		dev_err(dev, "Unsupported Peer ID %d\n", pidx);
@@ -494,22 +513,24 @@ static int ntb_epf_mw_set_trans(struct ntb_dev *ntb, int pidx, int idx,
 		return -EINVAL;
 	}
 
+	mutex_lock(&ndev->cmd_lock);
 	writel(lower_32_bits(addr), ndev->ctrl_reg + NTB_EPF_LOWER_ADDR);
 	writel(upper_32_bits(addr), ndev->ctrl_reg + NTB_EPF_UPPER_ADDR);
 	writel(lower_32_bits(size), ndev->ctrl_reg + NTB_EPF_LOWER_SIZE);
 	writel(upper_32_bits(size), ndev->ctrl_reg + NTB_EPF_UPPER_SIZE);
-	ntb_epf_send_command(ndev, CMD_CONFIGURE_MW, idx);
+	ret = ntb_epf_send_command_locked(ndev, CMD_CONFIGURE_MW, idx);
+	mutex_unlock(&ndev->cmd_lock);
 
-	return 0;
+	return ret;
 }
 
 static int ntb_epf_mw_clear_trans(struct ntb_dev *ntb, int pidx, int idx)
 {
 	struct ntb_epf_dev *ndev = ntb_ndev(ntb);
 	struct device *dev = ndev->dev;
-	int ret = 0;
+	int ret;
 
-	ntb_epf_send_command(ndev, CMD_TEARDOWN_MW, idx);
+	ret = ntb_epf_send_command(ndev, CMD_TEARDOWN_MW, idx);
 	if (ret)
 		dev_err(dev, "Failed to teardown memory window\n");
 
