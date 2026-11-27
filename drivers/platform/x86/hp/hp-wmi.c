@@ -634,6 +634,13 @@ static const struct dmi_system_id hp_wmi_charge_control_quirks[] __initconst = {
 			DMI_MATCH(DMI_BOARD_NAME, "8C15"),
 		},
 	},
+	{
+		/* HP OmniBook 7 14-fr0xxx */
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "HP"),
+			DMI_MATCH(DMI_BOARD_NAME, "8E3B"),
+		},
+	},
 	{}
 };
 #endif

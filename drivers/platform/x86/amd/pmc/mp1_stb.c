@@ -266,7 +266,7 @@ static bool amd_is_stb_supported(struct amd_pmc_dev *dev)
 	switch (dev->cpu_id) {
 	case AMD_CPU_ID_YC:
 	case AMD_CPU_ID_CB:
-		if (boot_cpu_data.x86_model == 0x44)
+		if (cpu_feature_enabled(X86_FEATURE_ZEN5) && boot_cpu_data.x86_model == 0x44)
 			dev->stb_arg.s2d_msg_id = 0x9B;
 		else
 			dev->stb_arg.s2d_msg_id = 0xBE;

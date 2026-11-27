@@ -10,7 +10,9 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/input.h>
+#include <linux/leds.h>
 #include <linux/platform_device.h>
+#include <linux/pm.h>
 #include <linux/acpi.h>
 #include <acpi/acpi_bus.h>
 
@@ -25,6 +27,9 @@ MODULE_ALIAS("acpi*:LGEX0815:*");
 struct wl_button {
 	struct input_dev *input_dev;
 	char phys[32];
+	acpi_handle handle;
+	struct led_classdev led;
+	bool has_led;
 };
 
 static const struct acpi_device_id wl_ids[] = {
@@ -87,6 +92,41 @@ static void wl_notify(acpi_handle handle, u32 event, void *data)
 	input_sync(button->input_dev);
 }
 
+/*
+ * HP's HPQ6001 device has a WLED method for the airplane mode LED (1: radios
+ * on, 0: airplane mode). HP's Windows driver calls it from the Wireless Radio
+ * LED output report of its radio management HID collection, so drive it from
+ * the rfkill-any trigger, which follows the same state.
+ */
+static int wireless_led_set(struct led_classdev *led, enum led_brightness value)
+{
+	struct wl_button *button = container_of(led, struct wl_button, led);
+	acpi_status status;
+
+	status = acpi_execute_simple_method(button->handle, "WLED", value ? 1 : 0);
+	return ACPI_SUCCESS(status) ? 0 : -EIO;
+}
+
+static int wireless_led_setup(struct device *dev)
+{
+	struct wl_button *button = dev_get_drvdata(dev);
+	int err;
+
+	if (!acpi_has_method(button->handle, "WLED"))
+		return 0;
+
+	button->led.name = "platform::wlan";
+	button->led.max_brightness = 1;
+	button->led.brightness_set_blocking = wireless_led_set;
+	button->led.default_trigger = "rfkill-any";
+	err = led_classdev_register(dev, &button->led);
+	if (err)
+		return err;
+
+	button->has_led = true;
+	return 0;
+}
+
 static int wl_probe(struct platform_device *pdev)
 {
 	struct acpi_device *adev;
@@ -102,6 +142,7 @@ static int wl_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	platform_set_drvdata(pdev, button);
+	button->handle = adev->handle;
 
 	err = wireless_input_setup(&pdev->dev);
 	if (err) {
@@ -114,17 +155,38 @@ static int wl_probe(struct platform_device *pdev)
 	if (err) {
 		pr_err("Failed to install ACPI notify handler\n");
 		wireless_input_destroy(&pdev->dev);
+		return err;
 	}
 
-	return err;
+	err = wireless_led_setup(&pdev->dev);
+	if (err)
+		dev_warn(&pdev->dev, "Failed to register the airplane mode LED: %d\n", err);
+
+	return 0;
 }
 
 static void wl_remove(struct platform_device *pdev)
 {
+	struct wl_button *button = platform_get_drvdata(pdev);
+
+	if (button->has_led)
+		led_classdev_unregister(&button->led);
 	acpi_dev_remove_notify_handler(ACPI_COMPANION(&pdev->dev),
 				       ACPI_DEVICE_NOTIFY, wl_notify);
 	wireless_input_destroy(&pdev->dev);
 }
+
+/* The firmware does not keep the LED state across suspend. */
+static int wl_resume(struct device *dev)
+{
+	struct wl_button *button = dev_get_drvdata(dev);
+
+	if (button->has_led)
+		wireless_led_set(&button->led, button->led.brightness);
+	return 0;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(wl_pm_ops, NULL, wl_resume);
 
 static struct platform_driver wl_driver = {
 	.probe = wl_probe,
@@ -132,6 +194,7 @@ static struct platform_driver wl_driver = {
 	.driver = {
 		.name = "wireless-hotkey",
 		.acpi_match_table = wl_ids,
+		.pm = pm_sleep_ptr(&wl_pm_ops),
 	},
 };
 

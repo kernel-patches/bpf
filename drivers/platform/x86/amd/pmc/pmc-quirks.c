@@ -386,6 +386,15 @@ static const struct dmi_system_id fwbug_list[] = {
 			DMI_MATCH(DMI_BOARD_NAME, "WUJIE Series-X5SP4NAG"),
 		}
 	},
+	/* https://gitlab.freedesktop.org/drm/amd/-/issues/6021 */
+	{
+		.ident = "LG Ultra PC 16U70Q",
+		.driver_data = &quirk_s2idle_spurious_8042,
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "LG Electronics"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "16U70Q"),
+		}
+	},
 	{}
 };
 

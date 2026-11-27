@@ -16,6 +16,7 @@ config IDEAPAD_LAPTOP
 	select INPUT_SPARSEKMAP
 	select NEW_LEDS
 	select LEDS_CLASS
+	select LEDS_TRIGGERS
 	help
 	  This is a driver for Lenovo IdeaPad netbooks contains drivers for
 	  rfkill switch, hotkey, fan control and backlight control.
@@ -160,6 +161,9 @@ config THINKPAD_ACPI_UNSAFE_LEDS
 	  Users that know what they are doing can enable this option
 	  and the driver will allow control of every LED, including
 	  the ones on the dock stations.
+
+	  This is also configurable via the "unrestricted_leds" module
+	  parameter.
 
 	  Never enable this option on a distribution kernel.
 
