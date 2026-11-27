@@ -18,14 +18,12 @@ test_cgrp2_sock2
 test_current_task_under_cgroup
 test_lru_dist
 test_probe_write_user
-trace_event
 trace_output
 tracex1
 tracex2
 tracex3
 tracex4
 tracex5
-tracex6
 tracex7
 testfile.img
 hbm_out.log
