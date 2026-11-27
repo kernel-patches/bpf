@@ -411,15 +411,16 @@ static int hibmc_load(struct drm_device *dev)
 		goto err;
 	}
 
-	/* reset all the states of crtc/plane/encoder/connector */
-	drm_mode_config_reset(dev);
+	/* Create all the states of crtc/plane/encoder/connector */
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		goto err;
 
 	drmm_kms_helper_poll_init(dev);
 
 	return 0;
 
 err:
-	hibmc_unload(dev);
 	drm_err(dev, "failed to initialize drm driver: %d\n", ret);
 	return ret;
 }

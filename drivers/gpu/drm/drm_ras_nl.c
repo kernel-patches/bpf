@@ -41,12 +41,30 @@ static const struct nla_policy drm_ras_set_error_threshold_nl_policy[DRM_RAS_A_E
 	[DRM_RAS_A_ERROR_COUNTER_ATTRS_ERROR_THRESHOLD] = { .type = NLA_U32, },
 };
 
+/* DRM_RAS_CMD_TELEMETRY_GET - do */
+static const struct nla_policy drm_ras_telemetry_get_nl_policy[DRM_RAS_A_TELEMETRY_ATTRS_FIELD + 1] = {
+	[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID] = { .type = NLA_U32, },
+	[DRM_RAS_A_TELEMETRY_ATTRS_FIELD] = { .type = NLA_UINT, },
+};
+
+/* DRM_RAS_CMD_TELEMETRY_SET - do */
+static const struct nla_policy drm_ras_telemetry_set_nl_policy[DRM_RAS_A_TELEMETRY_ATTRS_VALUE + 1] = {
+	[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID] = { .type = NLA_U32, },
+	[DRM_RAS_A_TELEMETRY_ATTRS_FIELD] = { .type = NLA_UINT, },
+	[DRM_RAS_A_TELEMETRY_ATTRS_VALUE] = { .type = NLA_SINT, },
+};
+
+/* DRM_RAS_CMD_TELEMETRY_LIST_FIELDS - dump */
+static const struct nla_policy drm_ras_telemetry_list_fields_nl_policy[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID + 1] = {
+	[DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID] = { .type = NLA_U32, },
+};
+
 /* Ops table for drm_ras */
 static const struct genl_split_ops drm_ras_nl_ops[] = {
 	{
 		.cmd	= DRM_RAS_CMD_LIST_NODES,
 		.dumpit	= drm_ras_nl_list_nodes_dumpit,
-		.flags	= GENL_ADMIN_PERM | GENL_CMD_CAP_DUMP,
+		.flags	= GENL_CMD_CAP_DUMP,
 	},
 	{
 		.cmd		= DRM_RAS_CMD_GET_ERROR_COUNTER,
@@ -82,6 +100,31 @@ static const struct genl_split_ops drm_ras_nl_ops[] = {
 		.policy		= drm_ras_set_error_threshold_nl_policy,
 		.maxattr	= DRM_RAS_A_ERROR_COUNTER_ATTRS_ERROR_THRESHOLD,
 		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd		= DRM_RAS_CMD_TELEMETRY_GET,
+		.pre_doit	= drm_ras_nl_pre_telemetry,
+		.doit		= drm_ras_nl_telemetry_get_doit,
+		.post_doit	= drm_ras_nl_post_telemetry,
+		.policy		= drm_ras_telemetry_get_nl_policy,
+		.maxattr	= DRM_RAS_A_TELEMETRY_ATTRS_FIELD,
+		.flags		= GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd		= DRM_RAS_CMD_TELEMETRY_SET,
+		.pre_doit	= drm_ras_nl_pre_telemetry,
+		.doit		= drm_ras_nl_telemetry_set_doit,
+		.post_doit	= drm_ras_nl_post_telemetry,
+		.policy		= drm_ras_telemetry_set_nl_policy,
+		.maxattr	= DRM_RAS_A_TELEMETRY_ATTRS_VALUE,
+		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd		= DRM_RAS_CMD_TELEMETRY_LIST_FIELDS,
+		.dumpit		= drm_ras_nl_telemetry_list_fields_dumpit,
+		.policy		= drm_ras_telemetry_list_fields_nl_policy,
+		.maxattr	= DRM_RAS_A_TELEMETRY_ATTRS_NODE_ID,
+		.flags		= GENL_CMD_CAP_DUMP,
 	},
 };
 

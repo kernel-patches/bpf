@@ -198,8 +198,7 @@ static int kmb_setup_mode_config(struct drm_device *drm)
 		return ret;
 	}
 
-	drm_mode_config_reset(drm);
-	return 0;
+	return drm_mode_config_create_initial_state(drm);
 }
 
 static irqreturn_t handle_lcd_irq(struct drm_device *dev)

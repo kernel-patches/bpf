@@ -777,6 +777,8 @@ struct drm_connector *
 drm_atomic_get_new_connector_for_encoder(const struct drm_atomic_commit *state,
 					 struct drm_encoder *encoder);
 struct drm_connector *
+drm_atomic_get_connector_for_encoder_locked(const struct drm_encoder *encoder);
+struct drm_connector *
 drm_atomic_get_connector_for_encoder(const struct drm_encoder *encoder,
 				     struct drm_modeset_acquire_ctx *ctx);
 

@@ -877,7 +877,10 @@ int vbox_mode_init(struct vbox_private *vbox)
 			goto err_drm_mode_cleanup;
 	}
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		goto err_drm_mode_cleanup;
+
 	return 0;
 
 err_drm_mode_cleanup:

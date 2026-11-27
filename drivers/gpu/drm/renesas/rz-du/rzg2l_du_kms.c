@@ -471,7 +471,9 @@ int rzg2l_du_modeset_init(struct rzg2l_du_device *rcdu)
 		encoder->possible_clones = (1 << num_encoders) - 1;
 	}
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ret;
 
 	drm_kms_helper_poll_init(dev);
 

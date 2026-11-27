@@ -593,12 +593,12 @@ static int tc_pllupdate(struct tc_data *tc, unsigned int pllctrl)
 static int tc_pxl_pll_calc(struct tc_data *tc, u32 refclk, u32 pixelclock,
 			   int *out_best_pixelclock, u32 *out_pxl_pllparam)
 {
+	static const int ext_div[] = { 1, 2, 3, 5, 7 };
 	int i_pre, best_pre = 1;
 	int i_post, best_post = 1;
 	int div, best_div = 1;
 	int mul, best_mul = 1;
 	int delta, best_delta;
-	int ext_div[] = {1, 2, 3, 5, 7};
 	int clk_min, clk_max;
 	int best_pixelclock = 0;
 	int vco_hi = 0;

@@ -86,7 +86,7 @@ static struct host1x_bo_mapping *tegra_bo_pin(struct device *dev, struct host1x_
 			goto free;
 		}
 
-		map->sgt = dma_buf_map_attachment_unlocked(map->attach, direction);
+		map->sgt = dma_buf_map_sgt_unlocked(map->attach, direction);
 		if (IS_ERR(map->sgt)) {
 			dma_buf_detach(buf, map->attach);
 			err = PTR_ERR(map->sgt);
@@ -162,8 +162,8 @@ free:
 static void tegra_bo_unpin(struct host1x_bo_mapping *map)
 {
 	if (map->attach) {
-		dma_buf_unmap_attachment_unlocked(map->attach, map->sgt,
-						  map->direction);
+		dma_buf_unmap_sgt_unlocked(map->attach, map->sgt,
+					   map->direction);
 		dma_buf_detach(map->attach->dmabuf, map->attach);
 	} else {
 		dma_unmap_sgtable(map->dev, map->sgt, map->direction, 0);
@@ -479,7 +479,7 @@ static struct tegra_bo *tegra_bo_import(struct drm_device *drm,
 			goto free;
 		}
 
-		bo->sgt = dma_buf_map_attachment_unlocked(attach, DMA_TO_DEVICE);
+		bo->sgt = dma_buf_map_sgt_unlocked(attach, DMA_TO_DEVICE);
 		if (IS_ERR(bo->sgt)) {
 			err = PTR_ERR(bo->sgt);
 			goto detach;
@@ -499,7 +499,7 @@ static struct tegra_bo *tegra_bo_import(struct drm_device *drm,
 
 detach:
 	if (!IS_ERR_OR_NULL(bo->sgt))
-		dma_buf_unmap_attachment_unlocked(attach, bo->sgt, DMA_TO_DEVICE);
+		dma_buf_unmap_sgt_unlocked(attach, bo->sgt, DMA_TO_DEVICE);
 
 	dma_buf_detach(buf, attach);
 	dma_buf_put(buf);
@@ -520,8 +520,8 @@ void tegra_bo_free_object(struct drm_gem_object *gem)
 		tegra_bo_iommu_unmap(tegra, bo);
 
 		if (drm_gem_is_imported(gem)) {
-			dma_buf_unmap_attachment_unlocked(gem->import_attach, bo->sgt,
-							  DMA_TO_DEVICE);
+			dma_buf_unmap_sgt_unlocked(gem->import_attach, bo->sgt,
+						   DMA_TO_DEVICE);
 			dma_buf_detach(gem->import_attach->dmabuf, gem->import_attach);
 		}
 	}

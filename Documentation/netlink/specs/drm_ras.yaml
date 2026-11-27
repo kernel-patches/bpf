@@ -16,11 +16,16 @@ definitions:
     type: enum
     name: node-type
     value-start: 1
-    entries: [error-counter]
+    entries: [error-counter, telemetry]
     doc: >-
-         Type of the node. Currently, only error-counter nodes are
-         supported, which expose reliability counters for a hardware/software
-         component.
+         Type of the node. The error-counter nodes expose reliability counters
+         for a hardware/software component, and telemetry nodes expose an
+         interface for reading and writing telemetry values to a device.
+  -
+    type: flags
+    name: telemetry-field-mode
+    entries: [read, write]
+    doc: Bitmask of access modes supported by a telemetry field.
 
 attribute-sets:
   -
@@ -100,6 +105,41 @@ attribute-sets:
         name: error-value
         type: u32
         doc: Current value of the error counter.
+  -
+    name: telemetry-attrs
+    attributes:
+      -
+        name: node-id
+        type: u32
+        doc: >-
+             Unique identifier for the node.
+             Assigned dynamically by the DRM RAS core upon registration.
+      -
+        name: field
+        type: uint
+        doc:  Telemetry field to be read/written, e.g., SoC temp.
+      -
+        name: field-name
+        type: string
+        doc:  Name of the telemetry field defined by the device's uAPI.
+      -
+        name: value
+        type: sint
+        doc: Value of telemetry field that was read/written.
+      -
+        name: status
+        type: sint
+        doc: >-
+             Status of the telemetry operation.
+             Populated by the device in response to the performed
+             telemetry operation. Errors may be hardware specific.
+      -
+        name: mode
+        type: uint
+        enum: telemetry-field-mode
+        doc: >-
+             Bitmask of access modes (read/write) supported by the
+             telemetry field.
 
 operations:
   list:
@@ -112,7 +152,6 @@ operations:
            the node IDs. These IDs are required for all subsequent
            operations on nodes, such as querying error counters.
       attribute-set: node-attrs
-      flags: [admin-perm]
       dump:
         reply:
           attributes:
@@ -199,6 +238,55 @@ operations:
             - node-id
             - error-id
             - error-threshold
+    -
+      name: telemetry-get
+      doc: Perform a read of the specified telemetry field.
+      attribute-set: telemetry-attrs
+      do:
+        pre: drm-ras-nl-pre-telemetry
+        post: drm-ras-nl-post-telemetry
+        request:
+          attributes:
+            - node-id
+            - field
+        reply:
+          attributes:
+            - value
+            - status
+    -
+      name: telemetry-set
+      doc: >-
+           Perform a write of the specified telemetry field.
+           Telemetry writes are device specific, and may be used to set
+           device limits or other capacities, for example.
+      attribute-set: telemetry-attrs
+      flags: [admin-perm]
+      do:
+        pre: drm-ras-nl-pre-telemetry
+        post: drm-ras-nl-post-telemetry
+        request:
+          attributes:
+            - node-id
+            - field
+            - value
+        reply:
+          attributes:
+            - status
+    -
+      name: telemetry-list-fields
+      doc: >-
+           Enumerate the telemetry fields exposed by a node, reporting each
+           field's value, name, and supported access modes (read/write).
+      attribute-set: telemetry-attrs
+      dump:
+        request:
+          attributes:
+            - node-id
+        reply:
+          attributes:
+            - field
+            - field-name
+            - mode
 
 mcast-groups:
   list:

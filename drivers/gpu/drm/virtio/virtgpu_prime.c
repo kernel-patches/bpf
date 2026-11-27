@@ -161,13 +161,13 @@ int virtgpu_dma_buf_import_sgt(struct virtio_gpu_mem_entry **ents,
 	if (ret <= 0)
 		return ret < 0 ? ret : -ETIMEDOUT;
 
-	sgt = dma_buf_map_attachment(attach, DMA_BIDIRECTIONAL);
+	sgt = dma_buf_map_sgt(attach, DMA_BIDIRECTIONAL);
 	if (IS_ERR(sgt))
 		return PTR_ERR(sgt);
 
 	*ents = kvmalloc_objs(struct virtio_gpu_mem_entry, sgt->nents);
 	if (!(*ents)) {
-		dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
+		dma_buf_unmap_sgt(attach, sgt, DMA_BIDIRECTIONAL);
 		return -ENOMEM;
 	}
 
@@ -192,8 +192,8 @@ static void virtgpu_dma_buf_unmap(struct virtio_gpu_object *bo)
 		virtio_gpu_detach_object_fenced(bo);
 
 		if (bo->sgt)
-			dma_buf_unmap_attachment(attach, bo->sgt,
-						 DMA_BIDIRECTIONAL);
+			dma_buf_unmap_sgt(attach, bo->sgt,
+					  DMA_BIDIRECTIONAL);
 
 		bo->sgt = NULL;
 	}

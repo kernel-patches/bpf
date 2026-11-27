@@ -361,7 +361,9 @@ static int amdgpu_vkms_output_init(struct drm_device *dev, struct
 		goto err_attach;
 	}
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		goto err_attach;
 
 	return 0;
 

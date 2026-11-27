@@ -396,8 +396,7 @@ int virtio_gpu_modeset_init(struct virtio_gpu_device *vgdev)
 	if (ret)
 		return ret;
 
-	drm_mode_config_reset(vgdev->ddev);
-	return 0;
+	return drm_mode_config_create_initial_state(vgdev->ddev);
 }
 
 void virtio_gpu_modeset_fini(struct virtio_gpu_device *vgdev)

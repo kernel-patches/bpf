@@ -17,6 +17,7 @@
 #include <linux/workqueue.h>
 #include <drm/drm_device.h>
 #include <drm/drm_gem.h>
+#include <drm/drm_ras.h>
 
 #define QAIC_DBC_BASE		SZ_128K
 #define QAIC_DBC_SIZE		SZ_4K
@@ -204,6 +205,24 @@ struct qaic_device {
 	void			*ssr_mhi_buf;
 	/* DBC which is under SSR. Sentinel U32_MAX would mean that no SSR in progress */
 	u32			ssr_dbc;
+	/* MHI telemetry channel device */
+	struct mhi_device	*tele_ch;
+	/* Head in list of requests queued in MHI telemetry device */
+	struct list_head	tele_xfer_list;
+	/* Req. ID of request that will be queued next in MHI telemetry device */
+	u32			tele_next_seq_num;
+	/* Synchronizes MHI telemetry device transactions and its xfer list */
+	struct mutex		tele_mutex;
+	/*
+	 * TRUE: A tx MHI transaction has failed and a rx buffer is still queued
+	 * in telemetry device. Such a buffer is considered lost rx buffer
+	 * FALSE: No rx buffer is lost in telemetry device
+	 */
+	bool			tele_lost_buf;
+	/* Work queue for tasks related to MHI telemetry device */
+	struct workqueue_struct	*tele_wq;
+	/* Netlink telemetry node */
+	struct drm_ras_node *ras_node;
 	/* Array of DBC struct of this device */
 	struct dma_bridge_chan	dbc[] __counted_by(num_dbc);
 };

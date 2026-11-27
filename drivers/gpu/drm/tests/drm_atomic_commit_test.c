@@ -134,7 +134,8 @@ drm_atomic_test_init_drm_components(struct kunit *test, bool has_connectors)
 	}
 
 done:
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
 
 	return priv;
 }

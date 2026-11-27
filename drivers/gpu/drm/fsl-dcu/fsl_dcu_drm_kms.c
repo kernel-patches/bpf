@@ -42,7 +42,9 @@ int fsl_dcu_drm_modeset_init(struct fsl_dcu_drm_device *fsl_dev)
 	if (ret)
 		goto err;
 
-	drm_mode_config_reset(fsl_dev->drm);
+	ret = drm_mode_config_create_initial_state(fsl_dev->drm);
+	if (ret)
+		goto err;
 	drm_kms_helper_poll_init(fsl_dev->drm);
 
 	return 0;

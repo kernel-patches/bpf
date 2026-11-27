@@ -4,33 +4,11 @@
  * Copyright (c) 2012-2013 David Herrmann <dh.herrmann@gmail.com>
  */
 
-/*
- * Simple-Framebuffer support
- * Create a platform-device for any available boot framebuffer. The
- * simple-framebuffer platform device is already available on DT systems, so
- * this module parses the global "screen_info" object and creates a suitable
- * platform device compatible with the "simple-framebuffer" DT object. If
- * the framebuffer is incompatible, we instead create a legacy
- * "vesa-framebuffer", "efi-framebuffer" or "platform-framebuffer" device and
- * pass the screen_info as platform_data. This allows legacy drivers
- * to pick these devices up without messing with simple-framebuffer drivers.
- * The global "screen_info" is still valid at all times.
- *
- * If CONFIG_SYSFB_SIMPLEFB is not selected, never register "simple-framebuffer"
- * platform devices, but only use legacy framebuffer devices for
- * backwards compatibility.
- *
- * TODO: We set the dev_id field of all platform-devices to 0. This allows
- * other OF/DT parsers to create such devices, too. However, they must
- * start at offset 1 for this to work.
- */
-
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/pci.h>
-#include <linux/platform_data/simplefb.h>
 #include <linux/platform_device.h>
 #include <linux/screen_info.h>
 #include <linux/sysfb.h>
@@ -145,9 +123,7 @@ static __init int sysfb_init(void)
 	struct screen_info *si = &dpy->screen;
 	struct device *parent;
 	unsigned int type;
-	struct simplefb_platform_data mode;
 	const char *name;
-	bool compatible;
 	int ret = 0;
 
 	screen_info_apply_fixups();
@@ -164,17 +140,8 @@ static __init int sysfb_init(void)
 		goto unlock_mutex;
 	}
 
-	/* try to create a simple-framebuffer device */
-	compatible = sysfb_parse_mode(si, &mode);
-	if (compatible) {
-		pd = sysfb_create_simplefb(si, &mode, parent);
-		if (!IS_ERR(pd))
-			goto put_device;
-	}
-
 	type = screen_info_video_type(si);
 
-	/* if the FB is incompatible, create a legacy framebuffer device */
 	switch (type) {
 	case VIDEO_TYPE_EGAC:
 		name = "ega-framebuffer";

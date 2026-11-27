@@ -73,8 +73,8 @@ net_devmem_dmabuf_binding_unmap(struct net_devmem_dmabuf_binding *binding)
 	mutex_lock(&binding->lock);
 	if (binding->sgt) {
 		dma_resv_lock(binding->dmabuf->resv, NULL);
-		dma_buf_unmap_attachment(binding->attachment, binding->sgt,
-					 binding->direction);
+		dma_buf_unmap_sgt(binding->attachment, binding->sgt,
+				  binding->direction);
 		dma_buf_unpin(binding->attachment);
 		dma_resv_unlock(binding->dmabuf->resv);
 		dma_buf_detach(binding->dmabuf, binding->attachment);
@@ -385,7 +385,7 @@ net_devmem_bind_dmabuf(struct net_device *dev, void *vdev,
 		goto err_unlock;
 	}
 
-	binding->sgt = dma_buf_map_attachment(binding->attachment, direction);
+	binding->sgt = dma_buf_map_sgt(binding->attachment, direction);
 	if (IS_ERR(binding->sgt)) {
 		err = PTR_ERR(binding->sgt);
 		NL_SET_ERR_MSG(extack, "Failed to map dmabuf attachment");
@@ -504,7 +504,7 @@ err_free_freelist:
 	kvfree(binding->tx_vec);
 err_unmap:
 	dma_resv_lock(dmabuf->resv, NULL);
-	dma_buf_unmap_attachment(binding->attachment, binding->sgt, direction);
+	dma_buf_unmap_sgt(binding->attachment, binding->sgt, direction);
 err_unpin:
 	dma_buf_unpin(binding->attachment);
 err_unlock:

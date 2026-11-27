@@ -297,7 +297,8 @@ __connector_hdmi_init(struct kunit *test,
 	drm_connector_helper_add(conn, &dummy_connector_helper_funcs);
 	drm_connector_attach_encoder(conn, enc);
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
 
 	if (edid_data && edid_len) {
 		ret = set_connector_edid(test, &priv->connector, edid_data, edid_len);

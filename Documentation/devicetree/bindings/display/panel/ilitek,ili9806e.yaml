@@ -33,7 +33,6 @@ required:
   - vdd-supply
   - reset-gpios
   - backlight
-  - port
 
 if:
   properties:
@@ -44,6 +43,7 @@ if:
 then:
   $ref: /schemas/spi/spi-peripheral-props.yaml#
   required:
+    - port
     - spi-max-frequency
 else:
   required:

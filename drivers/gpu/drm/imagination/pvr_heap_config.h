@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only OR MIT */
 /* Copyright (c) 2023 Imagination Technologies Ltd. */
 
-#ifndef PVR_ROGUE_HEAP_CONFIG_H
-#define PVR_ROGUE_HEAP_CONFIG_H
+#ifndef PVR_HEAP_CONFIG_H
+#define PVR_HEAP_CONFIG_H
 
 #include <linux/sizes.h>
 
@@ -14,7 +14,7 @@
  * fits into this, but the firmware heap is only ever created in the
  * kernel driver and never exposed to userspace.
  *
- * ROGUE_PDSCODEDATA_HEAP_BASE and ROGUE_USCCODE_HEAP_BASE will be programmed,
+ * PVR_PDSCODEDATA_HEAP_BASE and PVR_USCCODE_HEAP_BASE will be programmed,
  * on a global basis, into ROGUE_CR_PDS_EXEC_BASE and ROGUE_CR_USC_CODE_BASE_*
  * respectively. Therefore if client drivers use multiple configs they must
  * still be consistent with their definitions for these heaps.
@@ -38,9 +38,9 @@
 /* 0x80_0000_0000 ************************************************************/
 
 /* 0x80_0000_0000 - 0x9F_FFFF_FFFF **/
-/* 512 GiB to 640 GiB, size of 128 GiB : GENERAL_HEAP */
-#define ROGUE_GENERAL_HEAP_BASE 0x8000000000ull
-#define ROGUE_GENERAL_HEAP_SIZE SZ_128G
+/* 512 GiB to 640 GiB, size of 128 GiB : GENERAL_HEAP **/
+#define PVR_GENERAL_HEAP_BASE 0x8000000000ull
+#define PVR_GENERAL_HEAP_SIZE SZ_128G
 
 /* 0xA0_0000_0000 - 0xAF_FFFF_FFFF */
 /* 640 GiB to 704 GiB, size of 64 GiB : FREE */
@@ -58,8 +58,8 @@
 
 /* 0xDA_0000_0000 - 0xDA_FFFF_FFFF */
 /* 872 GiB to 876 GiB, size of 4 GiB : PDSCODEDATA_HEAP */
-#define ROGUE_PDSCODEDATA_HEAP_BASE 0xDA00000000ull
-#define ROGUE_PDSCODEDATA_HEAP_SIZE SZ_4G
+#define PVR_PDSCODEDATA_HEAP_BASE 0xDA00000000ull
+#define PVR_PDSCODEDATA_HEAP_SIZE SZ_4G
 
 /* 0xDB_0000_0000 - 0xDB_FFFF_FFFF */
 /* 876 GiB to 880 GiB, size of 256 MiB (reserved 4GiB) : BRN */
@@ -76,8 +76,8 @@
 
 /* 0xE0_0000_0000 - 0xE0_FFFF_FFFF */
 /* 896 GiB to 900 GiB, size of 4 GiB : USCCODE_HEAP */
-#define ROGUE_USCCODE_HEAP_BASE 0xE000000000ull
-#define ROGUE_USCCODE_HEAP_SIZE SZ_4G
+#define PVR_USCCODE_HEAP_BASE 0xE000000000ull
+#define PVR_USCCODE_HEAP_SIZE SZ_4G
 
 /* 0xE1_0000_0000 - 0xE1_BFFF_FFFF */
 /* 900 GiB to 903 GiB, size of 3 GiB : RESERVED */
@@ -99,8 +99,8 @@
 
 /* 0xF2_0000_0000 - 0xF2_001F_FFFF **/
 /* 968 GiB to 969 GiB, size of 2 MiB : VISTEST_HEAP */
-#define ROGUE_VISTEST_HEAP_BASE 0xF200000000ull
-#define ROGUE_VISTEST_HEAP_SIZE SZ_2M
+#define PVR_VISTEST_HEAP_BASE 0xF200000000ull
+#define PVR_VISTEST_HEAP_SIZE SZ_2M
 
 /* 0xF2_4000_0000 - 0xF2_FFFF_FFFF */
 /* 969 GiB to 972 GiB, size of 3 GiB : FREE */
@@ -110,4 +110,4 @@
 
 /* 0xFF_FFFF_FFFF ************************************************************/
 
-#endif /* PVR_ROGUE_HEAP_CONFIG_H */
+#endif /* PVR_HEAP_CONFIG_H */

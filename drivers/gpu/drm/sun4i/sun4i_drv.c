@@ -104,7 +104,9 @@ static int sun4i_drv_bind(struct device *dev)
 	if (ret)
 		goto unbind_all;
 
-	sun4i_framebuffer_init(drm);
+	ret = sun4i_framebuffer_init(drm);
+	if (ret)
+		goto unbind_all;
 
 	/* Enable connectors polling */
 	drm_kms_helper_poll_init(drm);

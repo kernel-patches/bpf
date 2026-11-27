@@ -19,6 +19,7 @@
 #include <linux/of.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
+#include <linux/string_choices.h>
 
 #include <drm/bridge/analogix_dp.h>
 #include <drm/display/drm_dp_aux_bus.h>
@@ -745,7 +746,7 @@ static int analogix_dp_fast_link_train_detection(struct analogix_dp_device *dp)
 	}
 	dp->fast_train_enable = !!(spread & DP_NO_AUX_HANDSHAKE_LINK_TRAINING);
 	dev_dbg(dp->dev, "fast link training %s\n",
-		dp->fast_train_enable ? "supported" : "unsupported");
+		str_supported_unsupported(dp->fast_train_enable));
 	return 0;
 }
 

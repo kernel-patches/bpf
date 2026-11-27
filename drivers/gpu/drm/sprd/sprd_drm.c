@@ -95,8 +95,10 @@ static int sprd_drm_bind(struct device *dev)
 		goto err_unbind_all;
 	}
 
-	/* reset all the states of crtc/plane/encoder/connector */
-	drm_mode_config_reset(drm);
+	/* Create the states of crtc/plane/encoder/connector */
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		goto err_unbind_all;
 
 	/* init kms poll for handling hpd */
 	drm_kms_helper_poll_init(drm);

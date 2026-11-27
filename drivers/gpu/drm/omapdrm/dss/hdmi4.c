@@ -439,7 +439,7 @@ static void hdmi4_bridge_hpd_notify(struct drm_bridge *bridge,
 		if (hdmi_runtime_get(hdmi))
 			return;
 
-		hdmi4_cec_set_phys_addr(&hdmi->core, CEC_PHYS_ADDR_INVALID);
+		hdmi4_cec_phys_addr_invalidate(&hdmi->core);
 		hdmi_runtime_put(hdmi);
 	}
 }
@@ -487,11 +487,10 @@ done:
 		unsigned int len = (edid->extensions + 1) * EDID_LENGTH;
 
 		cec_addr = cec_get_edid_phys_addr((u8 *)edid, len, NULL);
+		hdmi4_cec_set_phys_addr(&hdmi->core, cec_addr);
 	} else {
-		cec_addr = CEC_PHYS_ADDR_INVALID;
+		hdmi4_cec_phys_addr_invalidate(&hdmi->core);
 	}
-
-	hdmi4_cec_set_phys_addr(&hdmi->core, cec_addr);
 
 	if (need_enable)
 		hdmi4_core_disable(&hdmi->core);

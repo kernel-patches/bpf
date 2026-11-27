@@ -1118,7 +1118,9 @@ static int pixpaper_probe(struct spi_device *spi)
 				 &pixpaper_connector_helper_funcs);
 	drm_connector_attach_encoder(&panel->connector, &panel->encoder);
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		return ret;
 
 	ret = drm_dev_register(drm, 0);
 	if (ret)

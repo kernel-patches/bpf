@@ -198,7 +198,9 @@ struct mga_device *mgag200_g200eh5_device_create(struct pci_dev *pdev,
 	if (ret)
 		return ERR_PTR(ret);
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ERR_PTR(ret);
 	drm_kms_helper_poll_init(dev);
 
 	return mdev;

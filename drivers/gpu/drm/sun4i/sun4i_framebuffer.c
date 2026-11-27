@@ -24,14 +24,14 @@ static const struct drm_mode_config_helper_funcs sun4i_de_mode_config_helpers = 
 	.atomic_commit_tail	= drm_atomic_helper_commit_tail_rpm,
 };
 
-void sun4i_framebuffer_init(struct drm_device *drm)
+int sun4i_framebuffer_init(struct drm_device *drm)
 {
-	drm_mode_config_reset(drm);
-
 	drm->mode_config.max_width = 8192;
 	drm->mode_config.max_height = 8192;
 	drm->mode_config.normalize_zpos = true;
 
 	drm->mode_config.funcs = &sun4i_de_mode_config_funcs;
 	drm->mode_config.helper_private = &sun4i_de_mode_config_helpers;
+
+	return drm_mode_config_create_initial_state(drm);
 }

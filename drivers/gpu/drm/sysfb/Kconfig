@@ -25,7 +25,7 @@ config DRM_COREBOOTDRM
 
 config DRM_EFIDRM
 	tristate "EFI framebuffer driver"
-	depends on DRM && MMU && EFI && (!SYSFB_SIMPLEFB || COMPILE_TEST)
+	depends on DRM && MMU && EFI
 	select APERTURE_HELPERS
 	select DRM_CLIENT_SELECTION
 	select DRM_GEM_SHMEM_HELPER
@@ -72,7 +72,7 @@ config DRM_SIMPLEDRM
 
 config DRM_VESADRM
 	tristate "VESA framebuffer driver"
-	depends on DRM && MMU && X86 && (!SYSFB_SIMPLEFB || COMPILE_TEST)
+	depends on DRM && MMU && X86
 	select APERTURE_HELPERS
 	select DRM_CLIENT_SELECTION
 	select DRM_GEM_SHMEM_HELPER

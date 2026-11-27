@@ -867,7 +867,9 @@ struct st7571_device *st7571_probe(struct device *dev,
 		return ERR_PTR(ret);
 	}
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		return ERR_PTR(ret);
 
 	ret = drm_dev_register(drm, 0);
 	if (ret) {

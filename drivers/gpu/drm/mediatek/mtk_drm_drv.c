@@ -579,9 +579,15 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 		goto err_component_unbind;
 
 	drm_kms_helper_poll_init(drm);
-	drm_mode_config_reset(drm);
+
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		goto err_fini_poll;
 
 	return 0;
+
+err_fini_poll:
+	drm_kms_helper_poll_fini(drm);
 
 err_component_unbind:
 	for (i = 0; i < private->data->mmsys_dev_num; i++)

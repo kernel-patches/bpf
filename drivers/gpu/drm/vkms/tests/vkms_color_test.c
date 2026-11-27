@@ -8,11 +8,9 @@
 #include "../vkms_drv.h"
 #include "../vkms_luts.h"
 
-#define TEST_LUT_SIZE 16
-
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 
-static struct drm_color_lut test_linear_array[TEST_LUT_SIZE] = {
+static struct drm_color_lut test_linear_array[] = {
 	{ 0x0, 0x0, 0x0, 0 },
 	{ 0x1111, 0x1111, 0x1111, 0 },
 	{ 0x2222, 0x2222, 0x2222, 0 },
@@ -83,36 +81,23 @@ static const struct vkms_color_test_lerp_params color_test_lerp_cases[] = {
 };
 
 static const struct vkms_color_lut test_linear_lut = {
-	.base = test_linear_array,
-	.lut_length = TEST_LUT_SIZE,
+	.y = test_linear_array,
+	.lut_length = ARRAY_SIZE(test_linear_array),
 	.channel_value2index_ratio = 0xf000fll
 };
 
-static void vkms_color_test_get_lut_index(struct kunit *test)
+static void vkms_color_test_get_uniform_lut_index(struct kunit *test)
 {
 	s64 lut_index;
 	int i;
 
-	lut_index = get_lut_index(&test_linear_lut, test_linear_array[0].red);
+	lut_index = get_uniform_lut_index(&test_linear_lut, test_linear_array[0].red);
 	KUNIT_EXPECT_EQ(test, drm_fixp2int(lut_index), 0);
 
-	for (i = 0; i < TEST_LUT_SIZE; i++) {
-		lut_index = get_lut_index(&test_linear_lut, test_linear_array[i].red);
+	for (i = 0; i < test_linear_lut.lut_length; i++) {
+		lut_index = get_uniform_lut_index(&test_linear_lut, test_linear_array[i].red);
 		KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(lut_index), i);
 	}
-
-	KUNIT_EXPECT_EQ(test, drm_fixp2int(get_lut_index(&srgb_eotf, 0x0)), 0x0);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0x0)), 0x0);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0x101)), 0x1);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0x202)), 0x2);
-
-	KUNIT_EXPECT_EQ(test, drm_fixp2int(get_lut_index(&srgb_inv_eotf, 0x0)), 0x0);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_inv_eotf, 0x0)), 0x0);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_inv_eotf, 0x101)), 0x1);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_inv_eotf, 0x202)), 0x2);
-
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0xfefe)), 0xfe);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0xffff)), 0xff);
 }
 
 static void vkms_color_test_lerp(struct kunit *test)
@@ -128,23 +113,26 @@ static void vkms_color_test_lerp(struct kunit *test)
 
 static void vkms_color_test_linear(struct kunit *test)
 {
-	for (int i = 0; i < LUT_SIZE; i++) {
-		int linear = apply_lut_to_channel_value(&linear_eotf, i * 0x101, LUT_RED);
+	for (int i = 0; i < test_linear_lut.lut_length; i++) {
+		int linear = apply_lut_to_channel_value(&test_linear_lut, i * 0x1111, LUT_RED);
 
-		KUNIT_EXPECT_EQ(test, DIV_ROUND_CLOSEST(linear, 0x101), i);
+		KUNIT_EXPECT_EQ(test, DIV_ROUND_CLOSEST(linear, 0x1111), i);
 	}
 }
 
 static void vkms_color_srgb_inv_srgb(struct kunit *test)
 {
 	u16 srgb, final;
+	u16 tolerance = 11;
+	u32 x;
 
-	for (int i = 0; i < LUT_SIZE; i++) {
-		srgb = apply_lut_to_channel_value(&srgb_eotf, i * 0x101, LUT_RED);
+	for (u32 i = 0; i <= 4095; i++) {
+		x = i * U16_MAX / 4095;
+		srgb = apply_lut_to_channel_value(&srgb_eotf, x, LUT_RED);
 		final = apply_lut_to_channel_value(&srgb_inv_eotf, srgb, LUT_RED);
 
-		KUNIT_EXPECT_GE(test, final / 0x101, i - 1);
-		KUNIT_EXPECT_LE(test, final / 0x101, i + 1);
+		KUNIT_EXPECT_GE(test, final, (int)x - tolerance);
+		KUNIT_EXPECT_LE(test, final, (int)x + tolerance);
 	}
 }
 
@@ -394,7 +382,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 }
 
 static struct kunit_case vkms_color_test_cases[] = {
-	KUNIT_CASE(vkms_color_test_get_lut_index),
+	KUNIT_CASE(vkms_color_test_get_uniform_lut_index),
 	KUNIT_CASE(vkms_color_test_lerp),
 	KUNIT_CASE(vkms_color_test_linear),
 	KUNIT_CASE(vkms_color_srgb_inv_srgb),

@@ -25,7 +25,7 @@
 
 #define NUM_OVERLAY_PLANES 8
 
-#define VKMS_LUT_SIZE 256
+#define VKMS_GAMMA_LUT_SIZE 256
 
 /**
  * struct vkms_frame_info - Structure to store the state of a frame
@@ -158,8 +158,17 @@ struct vkms_plane {
 	struct drm_plane base;
 };
 
+/**
+ * struct vkms_color_lut - Driver specific color LUT representation
+ * @x: LUT x-values, must be non-decreasing and may be non-uniformly spaced.
+ *     Only required for non-uniform LUTs.
+ * @y: LUT y-values.
+ * @lut_length: The LUT length.
+ * @channel_value2index_ratio: helper for uniform LUTs (no x-values).
+ */
 struct vkms_color_lut {
-	struct drm_color_lut *base;
+	u16 *x;
+	struct drm_color_lut *y;
 	size_t lut_length;
 	s64 channel_value2index_ratio;
 };
@@ -216,7 +225,7 @@ struct vkms_crtc_state {
  */
 struct vkms_output {
 	struct drm_crtc crtc;
-	struct drm_writeback_connector wb_connector;
+	struct drm_connector wb_connector;
 	struct drm_encoder wb_encoder;
 	struct workqueue_struct *composer_workq;
 	spinlock_t lock;

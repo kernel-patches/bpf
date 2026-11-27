@@ -676,7 +676,7 @@ err_alloc_file:
  *
  * 3. Once the buffer is attached to all devices userspace can initiate DMA
  *    access to the shared buffer. In the kernel this is done by calling
- *    dma_buf_map_attachment() and dma_buf_unmap_attachment().
+ *    dma_buf_map_sgt() and dma_buf_unmap_sgt().
  *
  * 4. Once a driver is done with a shared buffer it needs to call
  *    dma_buf_detach() (after cleaning up any mappings) and then release the
@@ -966,8 +966,8 @@ dma_buf_pin_on_map(struct dma_buf_attachment *attach)
  *
  *     - dma_buf_pin()
  *     - dma_buf_unpin()
- *     - dma_buf_map_attachment()
- *     - dma_buf_unmap_attachment()
+ *     - dma_buf_map_sgt()
+ *     - dma_buf_unmap_sgt()
  *     - dma_buf_vmap()
  *     - dma_buf_vunmap()
  *
@@ -984,8 +984,8 @@ dma_buf_pin_on_map(struct dma_buf_attachment *attach)
  *     - dma_buf_mmap()
  *     - dma_buf_begin_cpu_access()
  *     - dma_buf_end_cpu_access()
- *     - dma_buf_map_attachment_unlocked()
- *     - dma_buf_unmap_attachment_unlocked()
+ *     - dma_buf_map_sgt_unlocked()
+ *     - dma_buf_unmap_sgt_unlocked()
  *     - dma_buf_vmap_unlocked()
  *     - dma_buf_vunmap_unlocked()
  *
@@ -1176,7 +1176,7 @@ void dma_buf_unpin(struct dma_buf_attachment *attach)
 EXPORT_SYMBOL_NS_GPL(dma_buf_unpin, "DMA_BUF");
 
 /**
- * dma_buf_map_attachment - Returns the scatterlist table of the attachment;
+ * dma_buf_map_sgt - Returns the scatterlist table of the attachment;
  * mapped into _device_ address space. Is a wrapper for map_dma_buf() of the
  * dma_buf_ops.
  * @attach:	[in]	attachment whose scatterlist is to be returned
@@ -1188,7 +1188,7 @@ EXPORT_SYMBOL_NS_GPL(dma_buf_unpin, "DMA_BUF");
  * On success, the DMA addresses and lengths in the returned scatterlist are
  * PAGE_SIZE aligned.
  *
- * A mapping must be unmapped by using dma_buf_unmap_attachment(). Note that
+ * A mapping must be unmapped by using dma_buf_unmap_sgt(). Note that
  * the underlying backing storage is pinned for as long as a mapping exists,
  * therefore users/importers should not hold onto a mapping for undue amounts of
  * time.
@@ -1196,8 +1196,8 @@ EXPORT_SYMBOL_NS_GPL(dma_buf_unpin, "DMA_BUF");
  * Important: Dynamic importers must wait for the exclusive fence of the struct
  * dma_resv attached to the DMA-BUF first.
  */
-struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *attach,
-					enum dma_data_direction direction)
+struct sg_table *dma_buf_map_sgt(struct dma_buf_attachment *attach,
+				 enum dma_data_direction direction)
 {
 	struct sg_table *sg_table;
 	signed long ret;
@@ -1268,20 +1268,20 @@ error_unpin:
 
 	return sg_table;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_map_attachment, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_map_sgt, "DMA_BUF");
 
 /**
- * dma_buf_map_attachment_unlocked - Returns the scatterlist table of the attachment;
+ * dma_buf_map_sgt_unlocked - Returns the scatterlist table of the attachment;
  * mapped into _device_ address space. Is a wrapper for map_dma_buf() of the
  * dma_buf_ops.
  * @attach:	[in]	attachment whose scatterlist is to be returned
  * @direction:	[in]	direction of DMA transfer
  *
- * Unlocked variant of dma_buf_map_attachment().
+ * Unlocked variant of dma_buf_map_sgt().
  */
 struct sg_table *
-dma_buf_map_attachment_unlocked(struct dma_buf_attachment *attach,
-				enum dma_data_direction direction)
+dma_buf_map_sgt_unlocked(struct dma_buf_attachment *attach,
+			 enum dma_data_direction direction)
 {
 	struct sg_table *sg_table;
 
@@ -1291,24 +1291,24 @@ dma_buf_map_attachment_unlocked(struct dma_buf_attachment *attach,
 		return ERR_PTR(-EINVAL);
 
 	dma_resv_lock(attach->dmabuf->resv, NULL);
-	sg_table = dma_buf_map_attachment(attach, direction);
+	sg_table = dma_buf_map_sgt(attach, direction);
 	dma_resv_unlock(attach->dmabuf->resv);
 
 	return sg_table;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_map_attachment_unlocked, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_map_sgt_unlocked, "DMA_BUF");
 
 /**
- * dma_buf_unmap_attachment - unmaps and decreases usecount of the buffer;might
+ * dma_buf_unmap_sgt - unmaps and decreases usecount of the buffer;might
  * deallocate the scatterlist associated. Is a wrapper for unmap_dma_buf() of
  * dma_buf_ops.
  * @attach:	[in]	attachment to unmap buffer from
  * @sg_table:	[in]	scatterlist info of the buffer to unmap
  * @direction:  [in]    direction of DMA transfer
  *
- * This unmaps a DMA mapping for @attached obtained by dma_buf_map_attachment().
+ * This unmaps a DMA mapping for @attached obtained by dma_buf_map_sgt().
  */
-void dma_buf_unmap_attachment(struct dma_buf_attachment *attach,
+void dma_buf_unmap_sgt(struct dma_buf_attachment *attach,
 				struct sg_table *sg_table,
 				enum dma_data_direction direction)
 {
@@ -1325,21 +1325,21 @@ void dma_buf_unmap_attachment(struct dma_buf_attachment *attach,
 	if (dma_buf_pin_on_map(attach))
 		attach->dmabuf->ops->unpin(attach);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_unmap_attachment, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_unmap_sgt, "DMA_BUF");
 
 /**
- * dma_buf_unmap_attachment_unlocked - unmaps and decreases usecount of the buffer;might
+ * dma_buf_unmap_sgt_unlocked - unmaps and decreases usecount of the buffer;might
  * deallocate the scatterlist associated. Is a wrapper for unmap_dma_buf() of
  * dma_buf_ops.
  * @attach:	[in]	attachment to unmap buffer from
  * @sg_table:	[in]	scatterlist info of the buffer to unmap
  * @direction:	[in]	direction of DMA transfer
  *
- * Unlocked variant of dma_buf_unmap_attachment().
+ * Unlocked variant of dma_buf_unmap_sgt().
  */
-void dma_buf_unmap_attachment_unlocked(struct dma_buf_attachment *attach,
-				       struct sg_table *sg_table,
-				       enum dma_data_direction direction)
+void dma_buf_unmap_sgt_unlocked(struct dma_buf_attachment *attach,
+				struct sg_table *sg_table,
+				enum dma_data_direction direction)
 {
 	might_sleep();
 
@@ -1347,10 +1347,10 @@ void dma_buf_unmap_attachment_unlocked(struct dma_buf_attachment *attach,
 		return;
 
 	dma_resv_lock(attach->dmabuf->resv, NULL);
-	dma_buf_unmap_attachment(attach, sg_table, direction);
+	dma_buf_unmap_sgt(attach, sg_table, direction);
 	dma_resv_unlock(attach->dmabuf->resv);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_unmap_attachment_unlocked, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_unmap_sgt_unlocked, "DMA_BUF");
 
 /**
  * dma_buf_attach_revocable - check if a DMA-buf importer implements

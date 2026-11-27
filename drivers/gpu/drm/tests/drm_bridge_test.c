@@ -422,7 +422,9 @@ drm_test_bridge_init(struct kunit *test, const struct drm_bridge_funcs *funcs)
 	if (IS_ERR(priv->connector))
 		return ERR_CAST(priv->connector);
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		return ERR_PTR(ret);
 
 	return priv;
 }
@@ -520,7 +522,9 @@ drm_test_bridge_chain_init(struct kunit *test, unsigned int num_bridges,
 
 	drm_connector_attach_encoder(priv->connector, enc);
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		return ERR_PTR(ret);
 
 	if (!has_hdmi)
 		return priv;
@@ -612,7 +616,9 @@ drm_test_bridge_hdmi_init(struct kunit *test, const struct drm_bridge_funcs *fun
 
 	drm_connector_attach_encoder(priv->connector, enc);
 
-	drm_mode_config_reset(drm);
+	ret = drm_mode_config_create_initial_state(drm);
+	if (ret)
+		return ERR_PTR(ret);
 
 	return priv;
 }

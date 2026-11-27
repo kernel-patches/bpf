@@ -623,7 +623,9 @@ static int cirrus_pci_probe(struct pci_dev *pdev,
 	if (ret < 0)
 		return ret;
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ret;
 
 	pci_set_drvdata(pdev, dev);
 	ret = drm_dev_register(dev, 0);

@@ -535,7 +535,9 @@ static int omap_modeset_init(struct drm_device *dev)
 	dev->mode_config.funcs = &omap_mode_config_funcs;
 	dev->mode_config.helper_private = &omap_mode_config_helper_funcs;
 
-	drm_mode_config_reset(dev);
+	ret = drm_mode_config_create_initial_state(dev);
+	if (ret)
+		return ret;
 
 	omap_drm_irq_install(dev);
 

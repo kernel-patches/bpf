@@ -3,10 +3,8 @@
 
 #include "pvr_device.h"
 #include "pvr_fw.h"
-#include "pvr_fw_meta.h"
 #include "pvr_fw_startstop.h"
 #include "pvr_rogue_cr_defs.h"
-#include "pvr_rogue_meta.h"
 #include "pvr_vm.h"
 
 #include <linux/compiler.h>
@@ -180,6 +178,30 @@ err_reset:
 	return err;
 }
 
+static inline bool layout_is_mars(struct pvr_device *pvr_dev)
+{
+	u64 layout_mars_value = 0;
+
+	if (PVR_FEATURE_VALUE(pvr_dev, layout_mars, &layout_mars_value))
+		return false;
+
+	return layout_mars_value > 0;
+}
+
+static inline int must_wait_fw_idle_before_stop(struct pvr_device *pvr_dev)
+{
+	bool wait_fw_idle = true;
+	int err;
+
+	if (pvr_dev->fw_dev.defs->must_wait_fw_idle) {
+		err = pvr_dev->fw_dev.defs->must_wait_fw_idle(pvr_dev, &wait_fw_idle);
+		if (err)
+			return err;
+	}
+
+	return wait_fw_idle;
+}
+
 /**
  * pvr_fw_stop() - Stop FW processor
  * @pvr_dev: Target PowerVR device.
@@ -195,15 +217,9 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 				       ~(ROGUE_CR_SIDEKICK_IDLE_GARTEN_EN |
 					 ROGUE_CR_SIDEKICK_IDLE_SOCIF_EN |
 					 ROGUE_CR_SIDEKICK_IDLE_HOSTIF_EN);
-	bool skip_garten_idle = false;
-	u64 layout_mars_value = 0;
-	bool layout_mars = false;
-	bool meta_fw = pvr_dev->fw_dev.processor_type == PVR_FW_PROCESSOR_TYPE_META;
-	u32 reg_value;
-	int err;
 
-	if (PVR_FEATURE_VALUE(pvr_dev, layout_mars, &layout_mars_value) == 0)
-		layout_mars = layout_mars_value > 0;
+	bool layout_mars = layout_is_mars(pvr_dev);
+	int err;
 
 	/*
 	 * For cores with the LAYOUT_MARS feature, SIDEKICK and SLC would have been
@@ -231,7 +247,7 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 		       ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC_MASKFULL &
 		       ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC_DM_ASSOC_CLRMSK);
 
-	if (meta_fw) {
+	if (pvr_dev->fw_dev.defs->multi_dm_thread_assoc) {
 		pvr_cr_write32(pvr_dev, ROGUE_CR_MTS_INTCTX_THREAD1_DM_ASSOC,
 			       ROGUE_CR_MTS_INTCTX_THREAD1_DM_ASSOC_MASKFULL &
 			       ROGUE_CR_MTS_INTCTX_THREAD1_DM_ASSOC_DM_ASSOC_CLRMSK);
@@ -278,6 +294,8 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 	 * powered down by the FW.
 	 */
 	if (!layout_mars) {
+		int wait_fw_idle;
+
 		/* Wait for SLC to signal IDLE. */
 		err = pvr_cr_poll_reg32(pvr_dev, ROGUE_CR_SLC_IDLE,
 					ROGUE_CR_SLC_IDLE_MASKFULL,
@@ -290,24 +308,12 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 					sidekick_idle_mask, POLL_TIMEOUT_USEC);
 		if (err)
 			return err;
-	}
 
-	if (meta_fw) {
-		err = pvr_meta_cr_read32(pvr_dev, META_CR_TxVECINT_BHALT, &reg_value);
-		if (err)
-			return err;
+		wait_fw_idle = must_wait_fw_idle_before_stop(pvr_dev);
+		if (wait_fw_idle < 0)
+			return wait_fw_idle;
 
-		/*
-		 * Wait for Sidekick/Jones to signal IDLE including the Garten
-		 * Wrapper if there is no debugger attached (TxVECINT_BHALT =
-		 * 0x0).
-		 */
-		if (reg_value)
-			skip_garten_idle = true;
-	}
-
-	if (meta_fw || !layout_mars) {
-		if (!skip_garten_idle) {
+		if (wait_fw_idle) {
 			err = pvr_cr_poll_reg32(pvr_dev, ROGUE_CR_SIDEKICK_IDLE,
 						ROGUE_CR_SIDEKICK_IDLE_GARTEN_EN,
 						ROGUE_CR_SIDEKICK_IDLE_GARTEN_EN,
@@ -327,7 +333,6 @@ pvr_fw_stop(struct pvr_device *pvr_dev)
 					ROGUE_CR_MARS_IDLE_CPU_EN |
 					ROGUE_CR_MARS_IDLE_MH_SYSARB0_EN,
 					POLL_TIMEOUT_USEC);
-
 		if (err)
 			return err;
 	}

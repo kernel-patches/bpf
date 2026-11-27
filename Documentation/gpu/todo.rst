@@ -475,9 +475,7 @@ not needed anymore. Its APIs are just accessing the embedded drm_bridge
 transparently, and the are deprecated.
 
 The funcions to remove are:
- - drm_panel_bridge_add_typed()
  - devm_drm_of_get_bridge()
- - drmm_of_get_bridge()
  - drm_panel_bridge_remove()
  - drmm_drm_panel_bridge_release()
  - devm_drm_panel_bridge_release()

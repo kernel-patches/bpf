@@ -1115,9 +1115,6 @@ static bool dma_fence_flags_valid(unsigned long flags)
  * refcount after committing with this fence, but it will need to hold a
  * refcount again if &dma_fence_ops.enable_signaling gets called.
  *
- * context and seqno are used for easy comparison between fences, allowing
- * to check which fence is later by simply using dma_fence_later().
- *
  * External locks are a relic of legacy use cases that needed a shared lock
  * to serialize signaling when no out-of-order signaling was possible through
  * &dma_fence_ops.signaled. Drivers have abandoned this concept since the

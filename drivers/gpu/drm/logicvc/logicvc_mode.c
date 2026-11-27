@@ -61,7 +61,9 @@ int logicvc_mode_init(struct logicvc_drm *logicvc)
 	mode_config->preferred_depth = preferred_depth;
 	mode_config->funcs = &logicvc_mode_config_funcs;
 
-	drm_mode_config_reset(drm_dev);
+	ret = drm_mode_config_create_initial_state(drm_dev);
+	if (ret)
+		return ret;
 
 	drm_kms_helper_poll_init(drm_dev);
 

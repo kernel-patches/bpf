@@ -7191,7 +7191,7 @@ static void dm_test_create_validate_stream_writeback(struct kunit *test)
 	wbcon = drmm_kzalloc(drm, sizeof(*wbcon), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, wbcon);
 	KUNIT_ASSERT_EQ(test,
-			drmm_connector_init(drm, &wbcon->base.base,
+			drmm_connector_init(drm, &wbcon->base,
 			&dm_test_connector_funcs,
 			DRM_MODE_CONNECTOR_WRITEBACK, NULL), 0);
 
@@ -7205,7 +7205,7 @@ static void dm_test_create_validate_stream_writeback(struct kunit *test)
 
 	dm_state = kunit_kzalloc(test, sizeof(*dm_state), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, dm_state);
-	dm_state->base.connector = &wbcon->base.base;
+	dm_state->base.connector = &wbcon->base;
 	dm_state->scaling = RMX_OFF;
 
 	mode = kunit_kzalloc(test, sizeof(*mode), GFP_KERNEL);
@@ -7214,7 +7214,7 @@ static void dm_test_create_validate_stream_writeback(struct kunit *test)
 	mode->vdisplay = 1080;
 	mode->clock = 148500;
 
-	stream = amdgpu_dm_create_validate_stream_for_sink(&wbcon->base.base,
+	stream = amdgpu_dm_create_validate_stream_for_sink(&wbcon->base,
 							   mode, dm_state, NULL);
 	KUNIT_ASSERT_NOT_NULL(test, stream);
 	dc_stream_release(stream);
@@ -10320,7 +10320,8 @@ dm_test_force_ctx_alloc(struct kunit *test, const struct drm_connector_funcs *fu
 	encoder->crtc = crtc;
 	ctx->aconnector->base.encoder = encoder;
 
-	drm_mode_config_reset(ctx->drm);
+	KUNIT_ASSERT_EQ(test,
+			drm_mode_config_create_initial_state(ctx->drm), 0);
 
 	drm_modeset_acquire_init(&ctx->acquire_ctx, 0);
 	ctx->drm->mode_config.acquire_ctx = &ctx->acquire_ctx;

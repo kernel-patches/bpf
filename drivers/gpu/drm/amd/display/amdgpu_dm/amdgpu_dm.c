@@ -4451,7 +4451,7 @@ bool amdgpu_dm_crtc_complete_writeback(struct amdgpu_crtc *acrtc)
 	if (!pending)
 		return false;
 
-	drm_writeback_signal_completion(acrtc->wb_conn, 0);
+	drm_writeback_signal_completion(drm_writeback_to_connector(acrtc->wb_conn), 0);
 	drm_crtc_vblank_put(&acrtc->base);
 
 	return true;
@@ -4947,7 +4947,7 @@ dm_set_writeback(struct amdgpu_display_manager *dm,
 		 struct drm_connector *connector,
 		 struct drm_connector_state *new_con_state)
 {
-	struct drm_writeback_connector *wb_conn = drm_connector_to_writeback(connector);
+	struct drm_writeback_connector *wb_conn = &connector->writeback;
 	struct amdgpu_device *adev = dm->adev;
 	struct amdgpu_crtc *acrtc;
 	struct dc_writeback_info *wb_info;
@@ -4961,7 +4961,7 @@ dm_set_writeback(struct amdgpu_display_manager *dm,
 		goto cleanup;
 	}
 
-	acrtc = to_amdgpu_crtc(wb_conn->encoder.crtc);
+	acrtc = to_amdgpu_crtc(to_amdgpu_dm_wb_connector(connector)->encoder.crtc);
 	if (!acrtc) {
 		drm_err(adev_to_drm(adev), "no amdgpu_crtc found\n");
 		goto cleanup;
@@ -5040,7 +5040,7 @@ dm_set_writeback(struct amdgpu_display_manager *dm,
 	dc_stream_add_writeback(dm->dc, crtc_state->stream, wb_info);
 
 	acrtc->wb_conn = wb_conn;
-	drm_writeback_queue_job(wb_conn, new_con_state);
+	drm_writeback_queue_job(connector, new_con_state);
 
 	/*
 	 * Writeback completion is detected in the CRTC vblank IRQ
