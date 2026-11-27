@@ -228,7 +228,7 @@ err:
 
 static int rxe_check_invalidate_mw(struct rxe_qp *qp, struct rxe_mw *mw)
 {
-	if (unlikely(mw->state == RXE_MW_STATE_INVALID))
+	if (unlikely(mw->state != RXE_MW_STATE_VALID))
 		return -EINVAL;
 
 	/* o10-37.2.26 */

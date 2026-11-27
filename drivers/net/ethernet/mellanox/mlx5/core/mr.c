@@ -35,6 +35,38 @@
 #include <linux/mlx5/qp.h>
 #include "mlx5_core.h"
 
+/**
+ * mlx5_core_mkey_set_ordering - Set ordering flags in mkey context
+ * @dev: MLX5 core device
+ * @mkc: Memory key context buffer
+ * @order: Requested ordering level
+ *
+ * Sets the ordering fields in @mkc for @order based on device caps. Call when
+ * creating or modifying a memory key. MLX5_MKEY_ORDER_STRICT leaves @mkc as is.
+ */
+void mlx5_core_mkey_set_ordering(struct mlx5_core_dev *dev, void *mkc,
+				 enum mlx5_mkey_order order)
+{
+	bool ro_write, ro_read;
+
+	if (order == MLX5_MKEY_ORDER_STRICT)
+		return;
+
+	ro_write = MLX5_CAP_GEN(dev, mkc_order_write_after_write_ro);
+	ro_read = MLX5_CAP_GEN(dev, pci_relaxed_ordered_read) ||
+		  (MLX5_CAP_GEN(dev, relaxed_ordering_read_pci_enabled) &&
+		   pcie_relaxed_ordering_enabled(dev->pdev));
+
+	MLX5_SET(mkc, mkc, pci_relaxed_ordered_read, ro_read);
+	MLX5_SET(mkc, mkc, order_write_after_write, ro_write);
+
+	if (order == MLX5_MKEY_ORDER_UNORDERED &&
+	    MLX5_CAP_GEN(dev, mkc_order_read_after_write))
+		MLX5_SET(mkc, mkc, order_read_after_write,
+			 MLX5_MKC_ORDER_READ_AFTER_WRITE_RO);
+}
+EXPORT_SYMBOL(mlx5_core_mkey_set_ordering);
+
 int mlx5_core_create_mkey(struct mlx5_core_dev *dev, u32 *mkey, u32 *in,
 			  int inlen)
 {

@@ -19,6 +19,7 @@ static const struct ib_device_ops mana_ib_dev_ops = {
 
 	.add_gid = mana_ib_gd_add_gid,
 	.alloc_mw = mana_ib_alloc_mw,
+	.alloc_mr = mana_ib_alloc_mr,
 	.alloc_pd = mana_ib_alloc_pd,
 	.alloc_ucontext = mana_ib_alloc_ucontext,
 	.create_ah = mana_ib_create_ah,
@@ -40,6 +41,7 @@ static const struct ib_device_ops mana_ib_dev_ops = {
 	.get_dma_mr = mana_ib_get_dma_mr,
 	.get_link_layer = mana_ib_get_link_layer,
 	.get_port_immutable = mana_ib_get_port_immutable,
+	.map_mr_sg = mana_ib_map_mr_sg,
 	.mmap = mana_ib_mmap,
 	.modify_qp = mana_ib_modify_qp,
 	.modify_wq = mana_ib_modify_wq,

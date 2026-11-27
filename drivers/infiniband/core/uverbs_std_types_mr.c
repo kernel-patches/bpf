@@ -229,7 +229,7 @@ static int UVERBS_HANDLER(UVERBS_METHOD_REG_DMABUF_MR)(
 				 IB_ACCESS_REMOTE_READ |
 				 IB_ACCESS_REMOTE_WRITE |
 				 IB_ACCESS_REMOTE_ATOMIC |
-				 IB_ACCESS_RELAXED_ORDERING);
+				 IB_ACCESS_OPTIONAL);
 	if (ret)
 		return ret;
 
@@ -332,7 +332,7 @@ static int UVERBS_HANDLER(UVERBS_METHOD_REG_MR)(
 				     IB_ACCESS_REMOTE_READ |
 				     IB_ACCESS_REMOTE_WRITE |
 				     IB_ACCESS_REMOTE_ATOMIC |
-				     IB_ACCESS_RELAXED_ORDERING;
+				     IB_ACCESS_OPTIONAL;
 	} else {
 		if (!has_addr || has_fd_offset)
 			return -EINVAL;

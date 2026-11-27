@@ -1388,7 +1388,7 @@ static int __init hfi1_mod_init(void)
 
 	ret = node_affinity_init();
 	if (ret)
-		goto bail;
+		goto bail_dev;
 
 	/* validate max MTU before any devices start */
 	if (!valid_opa_max_mtu(hfi1_max_mtu)) {
@@ -1438,7 +1438,7 @@ static int __init hfi1_mod_init(void)
 	ret = opfn_init();
 	if (ret < 0) {
 		pr_err("Failed to allocate opfn_wq");
-		goto bail_dev;
+		goto bail_affinity;
 	}
 
 	/*
@@ -1449,12 +1449,16 @@ static int __init hfi1_mod_init(void)
 	ret = pci_register_driver(&hfi1_pci_driver);
 	if (ret < 0) {
 		pr_err("Unable to register driver: error %d\n", -ret);
-		goto bail_dev;
+		goto bail_opfn;
 	}
 	goto bail; /* all OK */
 
-bail_dev:
+bail_opfn:
 	hfi1_dbg_exit();
+	opfn_exit();
+bail_affinity:
+	node_affinity_destroy_all();
+bail_dev:
 	dev_cleanup();
 bail:
 	return ret;

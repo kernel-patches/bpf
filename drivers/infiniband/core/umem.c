@@ -211,7 +211,7 @@ static struct ib_umem *__ib_umem_get_va(struct ib_device *device,
 	umem->dma_dir    = dir;
 	umem->owning_mm = mm = current->mm;
 	umem->dma_attrs = DMA_ATTR_REQUIRE_COHERENT;
-	if (access & IB_ACCESS_RELAXED_ORDERING)
+	if (access & (IB_ACCESS_RELAXED_ORDERING | IB_ACCESS_UNORDERED))
 		umem->dma_attrs |= DMA_ATTR_WEAK_ORDERING;
 
 	mmgrab(mm);

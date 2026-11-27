@@ -913,7 +913,7 @@ static u8 rq_end_pad_mode(struct mlx5_core_dev *mdev, struct mlx5e_params *param
 {
 	bool no_pad = params->packet_merge.type == MLX5E_PACKET_MERGE_LRO ||
 		      params->packet_merge.type == MLX5E_PACKET_MERGE_SHAMPO;
-	bool ro = MLX5_CAP_GEN(mdev, relaxed_ordering_write);
+	bool ro = MLX5_CAP_GEN(mdev, mkc_order_write_after_write_ro);
 
 	return ro && no_pad ?
 		MLX5_WQ_END_PAD_MODE_NONE : MLX5_WQ_END_PAD_MODE_ALIGN;

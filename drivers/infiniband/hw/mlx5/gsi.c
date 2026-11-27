@@ -316,7 +316,7 @@ static void setup_qp(struct mlx5_ib_gsi_qp *gsi, u16 qp_index)
 	return;
 
 err_destroy_qp:
-	WARN_ON_ONCE(qp);
+	WARN_ON_ONCE(ib_destroy_qp(qp));
 }
 
 int mlx5_ib_gsi_modify_qp(struct ib_qp *qp, struct ib_qp_attr *attr,

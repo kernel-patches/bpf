@@ -26,6 +26,8 @@ struct shadow_queue {
 	u64 prod_idx;
 	/* Unmasked consumer index, Incremented on cq polling */
 	u64 cons_idx;
+	/* Unmasked index of next-to-signal shadow WQE */
+	u64 next_to_signal_idx;
 	/* queue size in wqes */
 	u32 length;
 	/* distance between elements in bytes */
@@ -50,6 +52,7 @@ static inline void reset_shadow_queue(struct shadow_queue *queue)
 {
 	queue->prod_idx = 0;
 	queue->cons_idx = 0;
+	queue->next_to_signal_idx = 0;
 }
 
 static inline void destroy_shadow_queue(struct shadow_queue *queue)
@@ -103,6 +106,25 @@ static inline void shadow_queue_advance_consumer(struct shadow_queue *queue)
 {
 	/* Finish WC generation and queue-tail updates before allowing reuse. */
 	smp_store_release(&queue->cons_idx, queue->cons_idx + 1);
+}
+
+static inline struct shadow_wqe_header *
+shadow_queue_get_next_to_signal(struct shadow_queue *queue)
+{
+	struct shadow_wqe_header *wqe = NULL;
+	/* Inspect only entries that have been fully published by posting. */
+	u64 prod_idx = smp_load_acquire(&queue->prod_idx);
+
+	queue->next_to_signal_idx = max(queue->next_to_signal_idx,
+					queue->cons_idx);
+	while (queue->next_to_signal_idx < prod_idx) {
+		wqe = shadow_queue_get_element(queue, queue->next_to_signal_idx);
+		queue->next_to_signal_idx++;
+		if (!(wqe->flags & MANA_WQ_NO_SIGNAL_WC))
+			return wqe;
+	}
+
+	return NULL;
 }
 
 #endif

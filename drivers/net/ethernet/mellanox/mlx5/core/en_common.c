@@ -38,17 +38,6 @@
  * Global resources are common to all the netdevices created on the same nic.
  */
 
-void mlx5e_mkey_set_relaxed_ordering(struct mlx5_core_dev *mdev, void *mkc)
-{
-	bool ro_write = MLX5_CAP_GEN(mdev, relaxed_ordering_write);
-	bool ro_read = MLX5_CAP_GEN(mdev, relaxed_ordering_read) ||
-		       (pcie_relaxed_ordering_enabled(mdev->pdev) &&
-			MLX5_CAP_GEN(mdev, relaxed_ordering_read_pci_enabled));
-
-	MLX5_SET(mkc, mkc, relaxed_ordering_read, ro_read);
-	MLX5_SET(mkc, mkc, relaxed_ordering_write, ro_write);
-}
-
 int mlx5e_create_mkey(struct mlx5_core_dev *mdev, u32 pdn, u32 *mkey)
 {
 	int inlen = MLX5_ST_SZ_BYTES(create_mkey_in);
@@ -64,7 +53,7 @@ int mlx5e_create_mkey(struct mlx5_core_dev *mdev, u32 pdn, u32 *mkey)
 	MLX5_SET(mkc, mkc, access_mode_1_0, MLX5_MKC_ACCESS_MODE_PA);
 	MLX5_SET(mkc, mkc, lw, 1);
 	MLX5_SET(mkc, mkc, lr, 1);
-	mlx5e_mkey_set_relaxed_ordering(mdev, mkc);
+	mlx5_core_mkey_set_ordering(mdev, mkc, MLX5_MKEY_ORDER_RELAXED);
 	MLX5_SET(mkc, mkc, pd, pdn);
 	MLX5_SET(mkc, mkc, length64, 1);
 	MLX5_SET(mkc, mkc, qpn, 0xffffff);

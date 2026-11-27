@@ -11,6 +11,11 @@
 
 #define IONIC_EXP_DBELL_SZ		8
 
+/* ionic_lif_identity.rdma.cap bits */
+enum ionic_gen_cap_flags {
+	IONIC_GEN_CAP_DMA_MR = BIT(0),
+};
+
 enum ionic_mrid_bits {
 	IONIC_MRID_INDEX_SHIFT		= 8,
 };
@@ -46,6 +51,17 @@ enum ionic_mr_flags {
 	IONIC_MRF_ON_DEMAND		= BIT(6),
 	IONIC_MRF_PB			= BIT(7),
 	IONIC_MRF_ACCESS_MASK		= BIT(12) - 1,
+
+	/*
+	 * DMA_MR is an MR type selector, not an access permission. It
+	 * sits in an otherwise-unused bit inside the access-mask range
+	 * to_ionic_mr_flags() does not derive this bit from IB access
+	 * flags. Firmware tests it before decoding access bits and takes
+	 * a dedicated path.
+	 *
+	 * DMA_MR: identity map of the full address space, bound to a pd.
+	 */
+	IONIC_MRF_DMA_MR		= BIT(8),
 
 	/* bits that determine mr type */
 	IONIC_MRF_UKEY_EN		= BIT(13),
@@ -479,6 +495,20 @@ struct ionic_v1_atomic_bdy {
 	struct ionic_sge		sge;
 };
 
+/* v2 atomic wqe body */
+struct ionic_v2_atomic_bdy {
+	__be32				remote_va_high;
+	__be32				remote_va_low;
+	__be32				remote_rkey;
+	__be32				swap_add_high;
+	__be32				swap_add_low;
+	__be32				compare_high;
+	__be32				compare_low;
+	__be32				lkey;
+	__be64				local_va;
+	__u8				rsvd_expdb[8];
+};
+
 /* v1 reg mr wqe body */
 struct ionic_v1_reg_mr_bdy {
 	__be64				va;
@@ -508,6 +538,7 @@ struct ionic_v1_wqe {
 		struct ionic_v1_recv_bdy	recv;
 		struct ionic_v1_common_bdy	common;
 		struct ionic_v1_atomic_bdy	atomic;
+		struct ionic_v2_atomic_bdy	atomic_v2;
 		struct ionic_v1_reg_mr_bdy	reg_mr;
 		struct ionic_v1_bind_mw_bdy	bind_mw;
 	};
@@ -532,6 +563,7 @@ enum ionic_v1_op {
 	IONIC_V1_FLAG_SOL		= BIT(1),
 	IONIC_V1_FLAG_INL		= BIT(2),
 	IONIC_V1_FLAG_SIG		= BIT(3),
+	IONIC_V1_FLAG_COLOR		= BIT(4),
 
 	/* flags last four bits for sgl spec format */
 	IONIC_V1_FLAG_SPEC32		= (1u << 12),
