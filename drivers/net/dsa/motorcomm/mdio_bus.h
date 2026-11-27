@@ -48,7 +48,9 @@ yt921x_intif_modify(struct yt921x_priv *priv, int port, int reg, u16 mask,
 	return res >= 0 ? 0 : res;
 }
 
+void yt921x_mbus_int_cleanup(struct yt921x_priv *priv);
 int yt921x_mbus_int_init(struct yt921x_priv *priv, struct device_node *mnp);
+void yt921x_mbus_ext_cleanup(struct yt921x_priv *priv);
 int yt921x_mbus_ext_init(struct yt921x_priv *priv, struct device_node *mnp);
 
 #endif

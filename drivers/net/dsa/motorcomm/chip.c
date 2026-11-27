@@ -2240,13 +2240,18 @@ static int yt921x_edata_read(struct yt921x_priv *priv, u8 addr, u8 *valp)
 
 static void yt921x_dsa_teardown(struct dsa_switch *ds)
 {
-#if IS_ENABLED(CONFIG_NET_DSA_YT921X_LEDS)
 	struct yt921x_priv *priv = dsa_to_yt921x_priv(ds);
 
+#if IS_ENABLED(CONFIG_NET_DSA_YT921X_LEDS)
 	yt921x_leds_remove(priv);
 #endif
 
 	dsa_devlink_resources_unregister(ds);
+
+	if (priv->mbus_ext)
+		yt921x_mbus_ext_cleanup(priv);
+	if (priv->mbus_int)
+		yt921x_mbus_int_cleanup(priv);
 }
 
 static int yt921x_chip_detect(struct yt921x_priv *priv)
@@ -2558,10 +2563,11 @@ static int yt921x_dsa_setup(struct dsa_switch *ds)
 		res = yt921x_mbus_ext_init(priv, child);
 		of_node_put(child);
 		if (res)
-			return res;
+			goto err_mbus_int;
 
 		dev_err(dev, "Untested external mdio bus\n");
-		return -ENODEV;
+		res = -ENODEV;
+		goto err;
 	}
 
 	mask = priv->info->serdes_mask;
@@ -2586,11 +2592,11 @@ static int yt921x_dsa_setup(struct dsa_switch *ds)
 	mutex_unlock(&priv->reg_lock);
 
 	if (res)
-		return res;
+		goto err;
 
 	res = yt921x_devlink_setup(priv);
 	if (res)
-		return res;
+		goto err;
 
 #if IS_ENABLED(CONFIG_NET_DSA_YT921X_LEDS)
 	res = yt921x_leds_setup(priv);
@@ -2599,6 +2605,14 @@ static int yt921x_dsa_setup(struct dsa_switch *ds)
 #endif
 
 	return 0;
+
+err:
+	if (priv->mbus_ext)
+		yt921x_mbus_ext_cleanup(priv);
+err_mbus_int:
+	if (priv->mbus_int)
+		yt921x_mbus_int_cleanup(priv);
+	return res;
 }
 
 static const struct phylink_mac_ops yt921x_phylink_mac_ops = {
