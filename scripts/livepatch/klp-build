@@ -125,7 +125,7 @@ trap trap_err ERR
 
 __usage() {
 	cat <<EOF
-Usage: $SCRIPT [OPTIONS] PATCH_FILE(s)
+Usage: $SCRIPT [OPTIONS] PATCH_FILE(s) [-- MAKE_OPTIONS]
 Generate a livepatch module.
 
 Options:
@@ -158,11 +158,23 @@ process_args() {
 	local long
 	local args
 	local patch
+	local klp_args=()
+	local make_args=()
+
+	while [[ $# -gt 0 ]]; do
+		if [[ "$1" == "--" ]]; then
+			shift
+			make_args=("$@")
+			break
+		fi
+		klp_args+=("$1")
+		shift
+	done
 
 	short="hfj:o:vdS:T"
 	long="help,show-first-changed,jobs:,output:,no-replace,verbose,debug,short-circuit:,keep-tmp"
 
-	args=$(getopt --options "$short" --longoptions "$long" -- "$@") || {
+	args=$(getopt --options "$short" --longoptions "$long" -- "${klp_args[@]}") || {
 		echo; usage; exit
 	}
 	eval set -- "$args"
@@ -237,6 +249,7 @@ process_args() {
 
 	KEEP_TMP="$keep_tmp"
 	PATCHES=("$@")
+	MAKE=("make" "${make_args[@]}")
 
 	for patch in "${PATCHES[@]}"; do
 		[[ -f "$patch" ]] || die "$patch doesn't exist"
@@ -317,12 +330,12 @@ set_kernelversion() {
 
 	stash_file "$file"
 
-	if [[ -n "$(make -s listnewconfig 2>/dev/null)" ]]; then
+	if [[ -n "$("${MAKE[@]}" -s listnewconfig 2>/dev/null)" ]]; then
 		die ".config mismatch, check your .config or run 'make olddefconfig'"
 	fi
-	make syncconfig &>/dev/null || die "make syncconfig failed"
+	"${MAKE[@]}" syncconfig &>/dev/null || die "make syncconfig failed"
 
-	kernelrelease="$(make -s kernelrelease)"
+	kernelrelease="$("${MAKE[@]}" -s kernelrelease)"
 	[[ -z "$kernelrelease" ]] && die "failed to get kernel version"
 
 	sed -i "2i echo $kernelrelease; exit 0" scripts/setlocalversion
@@ -526,7 +539,7 @@ fix_patches() {
 clean_kernel() {
 	local cmd=()
 
-	cmd=("make")
+	cmd=("${MAKE[@]}")
 	cmd+=("--silent")
 	cmd+=("-j$JOBS")
 	cmd+=("clean")
@@ -539,7 +552,7 @@ build_kernel() {
 	local log="$TMP_DIR/build.log"
 	local cmd=()
 
-	cmd=("make")
+	cmd=("${MAKE[@]}")
 
 	# When a patch to a kernel module references a newly created unexported
 	# symbol which lives in vmlinux or another kernel module, the patched
@@ -859,7 +872,7 @@ build_patch_module() {
 	cflags+=("-fdata-sections")
 	[[ $REPLACE -eq 0 ]] && cflags+=("-DKLP_NO_REPLACE")
 
-	cmd=("make")
+	cmd=("${MAKE[@]}")
 	if [[ -v VERBOSE ]]; then
 		cmd+=("V=1")
 	else

@@ -38,12 +38,13 @@ build_thinlto()		# $1 output object, $2 extra flags
 {
 	local t
 	for t in "" -DTU_B -DTU_C; do
-		$THIN_CC -flto=thin -O2 -ffunction-sections -fdata-sections \
+		$THIN_CC -flto=thin -O2 -ffunction-sections -fdata-sections $FTRACE_CFLAGS \
 			$2 $t -c "$FIXTURES_DIR/thinlto_ambiguity.c" \
 			-o "$workdir/tu$t.o" 2>/dev/null || return 1
 	done
 	"$THIN_LD" -r "$workdir/tu.o" "$workdir/tu-DTU_B.o" "$workdir/tu-DTU_C.o" \
 		-o "$1" 2>/dev/null || return 1
+	record_mcount "$1"
 }
 
 build_thinlto "$workdir/orig.o" "" ||
