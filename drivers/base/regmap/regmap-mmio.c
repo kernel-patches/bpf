@@ -590,11 +590,16 @@ EXPORT_SYMBOL_GPL(__devm_regmap_init_mmio_clk);
 int regmap_mmio_attach_clk(struct regmap *map, struct clk *clk)
 {
 	struct regmap_mmio_context *ctx = map->bus_context;
+	int ret;
+
+	ret = clk_prepare(clk);
+	if (ret)
+		return ret;
 
 	ctx->clk = clk;
 	ctx->attached_clk = true;
 
-	return clk_prepare(ctx->clk);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(regmap_mmio_attach_clk);
 
