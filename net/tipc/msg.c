@@ -601,7 +601,8 @@ bool tipc_msg_extract(struct sk_buff *skb, struct sk_buff **iskb, int *pos)
 		goto none;
 
 	hdr = buf_msg(skb);
-	if (unlikely(*pos > (msg_data_sz(hdr) - MIN_H_SIZE)))
+	if (unlikely(msg_data_sz(hdr) < MIN_H_SIZE ||
+		     *pos > (msg_data_sz(hdr) - MIN_H_SIZE)))
 		goto none;
 
 	ihdr = (struct tipc_msg *)(msg_data(hdr) + *pos);
