@@ -1936,6 +1936,7 @@ struct bpf_prog_aux {
 	enum bpf_attach_type saved_dst_attach_type;
 	bool verifier_zext; /* Zero extensions has been inserted by verifier. */
 	bool dev_bound; /* Program is bound to the netdev. */
+	bool bpf_capable; /* Program was loaded with CAP_BPF. */
 	bool offload_requested; /* Program is bound and offloaded to the netdev. */
 	bool attach_btf_trace; /* true if attaching to BTF-enabled raw tp */
 	bool attach_tracing_prog; /* true if tracing another tracing program */
