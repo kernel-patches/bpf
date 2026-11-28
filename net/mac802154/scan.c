@@ -354,35 +354,31 @@ static int mac802154_transmit_beacon(struct ieee802154_local *local,
 				     struct wpan_dev *wpan_dev)
 {
 	struct cfg802154_beacon_request *beacon_req;
-	struct ieee802154_sub_if_data *sdata;
+	struct ieee802154_sub_if_data *sdata =
+		IEEE802154_WPAN_DEV_TO_SUB_IF(wpan_dev);
 	struct sk_buff *skb;
 	int ret;
-
-	/* Update the sequence number */
-	local->beacon.mhr.seq = atomic_inc_return(&wpan_dev->bsn) & 0xFF;
 
 	skb = alloc_skb(IEEE802154_BEACON_SKB_SZ, GFP_KERNEL);
 	if (!skb)
 		return -ENOBUFS;
 
-	rcu_read_lock();
-	beacon_req = rcu_dereference(local->beacon_req);
-	if (unlikely(!beacon_req)) {
-		rcu_read_unlock();
-		kfree_skb(skb);
-		return -EINVAL;
+	rtnl_lock();
+	beacon_req = rtnl_dereference(local->beacon_req);
+	if (unlikely(!beacon_req || beacon_req->wpan_dev != wpan_dev ||
+		     !ieee802154_sdata_running(sdata) ||
+		     !netif_running(sdata->dev))) {
+		ret = -ECANCELED;
+		goto out_free;
 	}
 
-	sdata = IEEE802154_WPAN_DEV_TO_SUB_IF(beacon_req->wpan_dev);
+	/* Update the sequence number */
+	local->beacon.mhr.seq = atomic_inc_return(&wpan_dev->bsn) & 0xFF;
 	skb->dev = sdata->dev;
 
-	rcu_read_unlock();
-
 	ret = ieee802154_beacon_push(skb, &local->beacon);
-	if (ret) {
-		kfree_skb(skb);
-		return ret;
-	}
+	if (ret)
+		goto out_free;
 
 	/* Using the MLME transmission helper for sending beacons is a bit
 	 * overkill because we do not really care about the final outcome.
@@ -402,7 +398,16 @@ static int mac802154_transmit_beacon(struct ieee802154_local *local,
 	 * transmissions, wich anyway does not have a huge impact on the
 	 * performances given the current design of the stack.
 	 */
-	return ieee802154_mlme_tx(local, sdata, skb);
+	ret = ieee802154_mlme_tx_locked(local, sdata, skb);
+	rtnl_unlock();
+
+	return ret;
+
+out_free:
+	rtnl_unlock();
+	kfree_skb(skb);
+
+	return ret;
 }
 
 void mac802154_beacon_worker(struct work_struct *work)
