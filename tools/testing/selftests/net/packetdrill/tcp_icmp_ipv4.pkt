@@ -1,0 +1,124 @@
+// SPDX-License-Identifier: GPL-2.0
+--ip_version=ipv4
+
+`./defaults.sh`
+
+// Test 1: Client with IP_MINTTL checks outer IP TTL in tcp_v4_err()
+// An ICMP with outer TTL < min_ttl (250) must be dropped, while outer TTL >= min_ttl
+// must be accepted even though the quoted inner IP header has lower TTL (64).
+    0 socket(..., SOCK_STREAM, IPPROTO_TCP) = 3
+   +0 setsockopt(3, SOL_IP, IP_MINTTL, [250], 4) = 0
+   +0 fcntl(3, F_SETFL, O_RDWR|O_NONBLOCK) = 0
+   +0 connect(3, ..., ...) = -1 EINPROGRESS (Operation now in progress)
+   +0 > S 0:0(0) <...>
+   // Outer TTL 10 < min_ttl (250): dropped, socket stays in TCP_SYN_SENT
+   +0 < (ttl 10) icmp unreachable host_unreachable [0:0(0)]
+   +1 > S 0:0(0) <...>
+   // Outer TTL 255 >= min_ttl (250): accepted, socket aborts
+   +0 < (ttl 255) icmp unreachable host_unreachable [0:0(0)]
+   +0 %{ assert tcpi_state == TCP_CLOSE }%
+   +0 getsockopt(3, SOL_SOCKET, SO_ERROR, [EHOSTUNREACH], [4]) = 0
+   +0 close(3) = 0
+
+// Test 2: Listener with IP_MINTTL checks TTL before reqsk handling
+// An incoming ICMP or 3rd ACK with outer TTL < min_ttl (255) must not abort or
+// complete TCP_NEW_SYN_RECV, while outer TTL >= min_ttl (255) must be accepted.
+   +0 socket(..., SOCK_STREAM|SOCK_NONBLOCK, IPPROTO_TCP) = 3
+   +0 setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+   +0 setsockopt(3, SOL_IP, IP_MINTTL, [255], 4) = 0
+   +0 bind(3, ..., ...) = 0
+   +0 listen(3, 10) = 0
+   +0 < (ttl 255) S 0:0(0) win 65535 <mss 1460,nop,nop,sackOK>
+   +0 > (ttl 64) S. 0:0(0) ack 1 <...>
+   // Outer TTL 10 < min_ttl (255) on ICMP: dropped in tcp_v4_err(), reqsk survives
+   +0 < (ttl 10) icmp unreachable port_unreachable [0:0(0)]
+   +1 > (ttl 64) S. 0:0(0) ack 1 <...>
+   // Outer TTL 10 < min_ttl (255) on 3rd ACK: dropped in tcp_v4_rcv(), reqsk survives
+   +0 < (ttl 10) . 1:1(0) ack 1 win 65535
+   +2 > (ttl 64) S. 0:0(0) ack 1 <...>
+   // Outer TTL 255 >= min_ttl (255): accepted, ICMP aborts reqsk
+   +0 < (ttl 255) icmp unreachable port_unreachable [0:0(0)]
+   +0 < (ttl 255) . 1:1(0) ack 1 win 65535
+   +0 > R 1:1(0)
+   +0 close(3) = 0
+
+// Test 3: Server in TCP_NEW_SYN_RECV ignores ICMP_FRAG_NEEDED, but aborts on
+// other ICMP_DEST_UNREACH codes, ICMP_TIME_EXCEEDED, and ICMP_PARAMETERPROB.
+   // 3a: ICMP_FRAG_NEEDED must not abort reqsk, ICMP_HOST_UNREACH must abort
+   +0 socket(..., SOCK_STREAM|SOCK_NONBLOCK, IPPROTO_TCP) = 3
+   +0 setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+   +0 bind(3, ..., ...) = 0
+   +0 listen(3, 10) = 0
+   +0 < S 0:0(0) win 65535 <mss 1460,nop,nop,sackOK>
+   +0 > S. 0:0(0) ack 1 <...>
+   +0 < icmp unreachable frag_needed mtu 1200 [0:0(0)]
+   +1 > S. 0:0(0) ack 1 <...>
+   +0 < icmp unreachable host_unreachable [0:0(0)]
+   // Remote sends 3rd ACK: listener responds with RST because reqsk was aborted
+   +0 < . 1:1(0) ack 1 win 65535
+   +0 > R 1:1(0)
+   +0 close(3) = 0
+   // 3b: ICMP_NET_UNREACH must abort reqsk
+   +0 socket(..., SOCK_STREAM|SOCK_NONBLOCK, IPPROTO_TCP) = 3
+   +0 setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+   +0 bind(3, ..., ...) = 0
+   +0 listen(3, 10) = 0
+   +0 < S 0:0(0) win 65535 <mss 1460,nop,nop,sackOK>
+   +0 > S. 0:0(0) ack 1 <...>
+   +0 < icmp unreachable net_unreachable [0:0(0)]
+   +0 < . 1:1(0) ack 1 win 65535
+   +0 > R 1:1(0)
+   +0 close(3) = 0
+   // 3c: ICMP_TIME_EXCEEDED must abort reqsk
+   +0 socket(..., SOCK_STREAM|SOCK_NONBLOCK, IPPROTO_TCP) = 3
+   +0 setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+   +0 bind(3, ..., ...) = 0
+   +0 listen(3, 10) = 0
+   +0 < S 0:0(0) win 65535 <mss 1460,nop,nop,sackOK>
+   +0 > S. 0:0(0) ack 1 <...>
+   +0 < icmp time_exceeded [0:0(0)]
+   +0 < . 1:1(0) ack 1 win 65535
+   +0 > R 1:1(0)
+   +0 close(3) = 0
+   // 3d: ICMP_PARAMETERPROB must abort reqsk
+   +0 socket(..., SOCK_STREAM|SOCK_NONBLOCK, IPPROTO_TCP) = 3
+   +0 setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+   +0 bind(3, ..., ...) = 0
+   +0 listen(3, 10) = 0
+   +0 < S 0:0(0) win 65535 <mss 1460,nop,nop,sackOK>
+   +0 > S. 0:0(0) ack 1 <...>
+   +0 < icmp parameter_problem [0:0(0)]
+   +0 < . 1:1(0) ack 1 win 65535
+   +0 > R 1:1(0)
+   +0 close(3) = 0
+   // 3e: ICMP_PORT_UNREACH must abort reqsk
+   +0 socket(..., SOCK_STREAM|SOCK_NONBLOCK, IPPROTO_TCP) = 3
+   +0 setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+   +0 bind(3, ..., ...) = 0
+   +0 listen(3, 10) = 0
+   +0 < S 0:0(0) win 65535 <mss 1460,nop,nop,sackOK>
+   +0 > S. 0:0(0) ack 1 <...>
+   +0 < icmp unreachable port_unreachable [0:0(0)]
+   +0 < . 1:1(0) ack 1 win 65535
+   +0 > R 1:1(0)
+   +0 close(3) = 0
+
+// Test 4: Socket with IP_PMTUDISC_INTERFACE ignores ICMP_FRAG_NEEDED
+// Socket configured with IP_PMTUDISC_INTERFACE must not overwrite MTU
+// upon receiving ICMP_DEST_UNREACH with code ICMP_FRAG_NEEDED.
+   +0 socket(..., SOCK_STREAM, IPPROTO_TCP) = 3
+   +0 setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
+   +0 bind(3, ..., ...) = 0
+   +0 listen(3, 1) = 0
+   +0 < S 0:0(0) win 65535 <mss 1460,sackOK,nop,nop,nop,wscale 8>
+   +0 > S. 0:0(0) ack 1 <...>
+   +0 < . 1:1(0) ack 1 win 257
+   +0 accept(3, ..., ...) = 4
+   +0 setsockopt(4, SOL_IP, IP_MTU_DISCOVER, [IP_PMTUDISC_INTERFACE], 4) = 0
+   +0 getsockopt(4, SOL_IP, IP_MTU, [1500], [4]) = 0
+   +0 write(4, ..., 1000) = 1000
+   +0 > P. 1:1001(1000) ack 1 <...>
+   +0 < icmp unreachable frag_needed mtu 1200 [1:1001(1000)]
+   +0 getsockopt(4, SOL_IP, IP_MTU, [1500], [4]) = 0
+   +0 close(4) = 0
+   +0 close(3) = 0
