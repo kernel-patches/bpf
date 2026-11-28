@@ -17,6 +17,7 @@ struct sch_frag_data {
 	unsigned int l2_len;
 	u8 l2_data[VLAN_ETH_HLEN];
 	int (*xmit)(struct sk_buff *skb);
+	struct task_struct *owner;
 	local_lock_t bh_lock;
 };
 
@@ -98,10 +99,19 @@ static int sch_fragment(struct net *net, struct sk_buff *skb,
 
 	if (skb_protocol(skb, true) == htons(ETH_P_IP)) {
 		struct rtable sch_frag_rt = { 0 };
+		struct sch_frag_data *data;
 		unsigned long orig_dst;
 
+		data = this_cpu_ptr(&sch_frag_data_storage);
+		if (READ_ONCE(data->owner) == current) {
+			kfree_skb(skb);
+			return -ELOOP;
+		}
+
 		local_lock_nested_bh(&sch_frag_data_storage.bh_lock);
+		data = this_cpu_ptr(&sch_frag_data_storage);
 		sch_frag_prepare_frag(skb, xmit);
+		WRITE_ONCE(data->owner, current);
 		dst_init(&sch_frag_rt.dst, &sch_frag_dst_ops, NULL,
 			 DST_OBSOLETE_NONE, DST_NOCOUNT);
 		sch_frag_rt.dst.dev = skb->dev;
@@ -111,14 +121,24 @@ static int sch_fragment(struct net *net, struct sk_buff *skb,
 		IPCB(skb)->frag_max_size = mru;
 
 		ret = ip_do_fragment(net, skb->sk, skb, sch_frag_xmit);
+		WRITE_ONCE(data->owner, NULL);
 		local_unlock_nested_bh(&sch_frag_data_storage.bh_lock);
 		refdst_drop(orig_dst);
 	} else if (skb_protocol(skb, true) == htons(ETH_P_IPV6)) {
-		unsigned long orig_dst;
 		struct rt6_info sch_frag_rt;
+		struct sch_frag_data *data;
+		unsigned long orig_dst;
+
+		data = this_cpu_ptr(&sch_frag_data_storage);
+		if (READ_ONCE(data->owner) == current) {
+			kfree_skb(skb);
+			return -ELOOP;
+		}
 
 		local_lock_nested_bh(&sch_frag_data_storage.bh_lock);
+		data = this_cpu_ptr(&sch_frag_data_storage);
 		sch_frag_prepare_frag(skb, xmit);
+		WRITE_ONCE(data->owner, current);
 		memset(&sch_frag_rt, 0, sizeof(sch_frag_rt));
 		dst_init(&sch_frag_rt.dst, &sch_frag_dst_ops, NULL,
 			 DST_OBSOLETE_NONE, DST_NOCOUNT);
@@ -129,6 +149,7 @@ static int sch_fragment(struct net *net, struct sk_buff *skb,
 		IP6CB(skb)->frag_max_size = mru;
 
 		ret = ip6_fragment(net, skb->sk, skb, sch_frag_xmit);
+		WRITE_ONCE(data->owner, NULL);
 		local_unlock_nested_bh(&sch_frag_data_storage.bh_lock);
 		refdst_drop(orig_dst);
 	} else {
