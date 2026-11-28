@@ -12,6 +12,8 @@
 #include <uapi/linux/ethtool_netlink_generated.h>
 #include <linux/regulator/driver.h>
 
+struct pse_pi_led_triggers;
+
 /* Maximum current in uA according to IEEE 802.3-2022 Table 145-1 */
 #define MAX_PI_CURRENT 1920000
 /* Maximum power in mW according to IEEE 802.3-2022 Table 145-16 */
@@ -312,6 +314,7 @@ struct pse_ntf {
  * @ntf_fifo_lock: protect @ntf_fifo writer
  * @unregistering: set under @lock when unregistering starts; the PSE
  *		   core switches no PI on after that
+ * @pi_led_trigs: per-PI LED trigger state array
  */
 struct pse_controller_dev {
 	const struct pse_controller_ops *ops;
@@ -339,6 +342,7 @@ struct pse_controller_dev {
 	DECLARE_KFIFO_PTR(ntf_fifo, struct pse_ntf);
 	spinlock_t ntf_fifo_lock; /* Protect @ntf_fifo writer */
 	bool unregistering;
+	struct pse_pi_led_triggers *pi_led_trigs;
 };
 
 /**
