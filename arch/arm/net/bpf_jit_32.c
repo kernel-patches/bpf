@@ -130,8 +130,6 @@ enum {
 #define TMP_REG_2	(MAX_BPF_JIT_REG + 1)	/* TEMP Register 2 */
 #define TCALL_CNT	(MAX_BPF_JIT_REG + 2)	/* Tail Call Count */
 
-#define FLAG_IMM_OVERFLOW	(1 << 0)
-
 /*
  * Map eBPF registers to ARM 32bit registers or stack scratch space.
  *
@@ -193,10 +191,6 @@ static const s8 bpf2a32[][2] = {
  * offsets		:	array of eBPF instruction offsets in
  *				JITed code.
  * target		:	final JITed code.
- * epilogue_bytes	:	no of bytes used in epilogue.
- * imm_count		:	no of immediate counts used for global
- *				variables.
- * imms			:	array of global variable addresses.
  */
 
 struct jit_ctx {
@@ -205,15 +199,9 @@ struct jit_ctx {
 	unsigned int prologue_bytes;
 	unsigned int epilogue_offset;
 	unsigned int cpu_architecture;
-	u32 flags;
 	u32 *offsets;
 	u32 *target;
 	u32 stack_size;
-#if __LINUX_ARM_ARCH__ < 7
-	u16 epilogue_bytes;
-	u16 imm_count;
-	u32 *imms;
-#endif
 };
 
 /*
@@ -404,53 +392,6 @@ static void jit_fill_hole(void *area, unsigned int size)
 #define _STACK_SIZE	(ctx->prog->aux->stack_depth + SCRATCH_SIZE)
 #define STACK_SIZE	ALIGN(_STACK_SIZE, STACK_ALIGNMENT)
 
-#if __LINUX_ARM_ARCH__ < 7
-
-static u16 imm_offset(u32 k, struct jit_ctx *ctx)
-{
-	unsigned int i = 0, offset;
-	u16 imm;
-
-	/* on the "fake" run we just count them (duplicates included) */
-	if (ctx->target == NULL) {
-		ctx->imm_count++;
-		return 0;
-	}
-
-	while ((i < ctx->imm_count) && ctx->imms[i]) {
-		if (ctx->imms[i] == k)
-			break;
-		i++;
-	}
-
-	if (ctx->imms[i] == 0)
-		ctx->imms[i] = k;
-
-	/* constants go just after the epilogue */
-	offset =  ctx->offsets[ctx->prog->len - 1] * 4;
-	offset += ctx->prologue_bytes;
-	offset += ctx->epilogue_bytes;
-	offset += i * 4;
-
-	ctx->target[offset / 4] = k;
-
-	/* PC in ARM mode == address of the instruction + 8 */
-	imm = offset - (8 + ctx->idx * 4);
-
-	if (imm & ~0xfff) {
-		/*
-		 * literal pool is too far, signal it into flags. we
-		 * can only detect it on the second pass unfortunately.
-		 */
-		ctx->flags |= FLAG_IMM_OVERFLOW;
-		return 0;
-	}
-
-	return imm;
-}
-
-#endif /* __LINUX_ARM_ARCH__ */
-
 static inline int bpf2a32_offset(int bpf_to, int bpf_from,
 				 const struct jit_ctx *ctx) {
 	int to, from;
@@ -469,7 +410,34 @@ static inline int bpf2a32_offset(int bpf_to, int bpf_from,
 static inline void emit_mov_i_no8m(const u8 rd, u32 val, struct jit_ctx *ctx)
 {
 #if __LINUX_ARM_ARCH__ < 7
-	emit(ARM_LDR_I(rd, ARM_PC, imm_offset(val, ctx)), ctx);
+	/*
+	 * A single MVN if the inverted value is an imm8m.  Else MOV + ORR set
+	 * the bytes of val, or MVN + BIC clear the bytes of ~val -- a byte is
+	 * always an imm8m.  Inverting pays once the top half is all ones, as
+	 * it is for a small negative value: those two bytes cost an insn each
+	 * the other way round.
+	 */
+	u32 op = ARM_MOV_I(rd, 0), next = ARM_ORR_I(rd, rd, 0);
+	int imm12 = imm8m(~val);
+	unsigned int shift;
+
+	if (imm12 >= 0) {
+		emit(ARM_MVN_I(rd, imm12), ctx);
+		return;
+	}
+	if (val >= 0xffff0000) {
+		op = ARM_MVN_I(rd, 0);
+		next = ARM_BIC_I(rd, rd, 0);
+		val = ~val;
+	}
+	for (shift = 0; shift < 32; shift += 8) {
+		u32 part = val & (0xffU << shift);
+
+		if (!part)
+			continue;
+		emit(op | imm8m(part), ctx);
+		op = next;
+	}
 #else
 	emit(ARM_MOVW(rd, val & 0xffff), ctx);
 	if (val > 0xffff)
@@ -2091,14 +2059,6 @@ notyet:
 		pr_err_once("unknown opcode %02x\n", code);
 		return -EINVAL;
 	}
-
-	if (ctx->flags & FLAG_IMM_OVERFLOW)
-		/*
-		 * this instruction generated an overflow when
-		 * trying to access the literal pool, so
-		 * delegate this filter to the kernel interpreter.
-		 */
-		return -1;
 	return 0;
 }
 
@@ -2192,21 +2152,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 
 	ctx.epilogue_offset = ctx.idx;
 
-#if __LINUX_ARM_ARCH__ < 7
-	tmp_idx = ctx.idx;
 	build_epilogue(&ctx);
-	ctx.epilogue_bytes = (ctx.idx - tmp_idx) * 4;
-
-	ctx.idx += ctx.imm_count;
-	if (ctx.imm_count) {
-		ctx.imms = kzalloc_objs(u32, ctx.imm_count);
-		if (ctx.imms == NULL)
-			goto out_off;
-	}
-#else
-	/* there's nothing about the epilogue on ARMv7 */
-	build_epilogue(&ctx);
-#endif
 	/* Now we can get the actual image size of the JITed arm code.
 	 * Currently, we are not considering the THUMB-2 instructions
 	 * for jit, although it can decrease the size of the image.
@@ -2224,7 +2170,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	 * we must fall back to the interpretation
 	 */
 	if (header == NULL)
-		goto out_imms;
+		goto out_off;
 
 	/* 2.) Actual pass to generate final JIT code */
 	ctx.target = (u32 *) image_ptr;
@@ -2254,11 +2200,6 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	prog->jited = 1;
 	prog->jited_len = image_size;
 
-out_imms:
-#if __LINUX_ARM_ARCH__ < 7
-	if (ctx.imm_count)
-		kfree(ctx.imms);
-#endif
 out_off:
 	kfree(ctx.offsets);
 
@@ -2267,6 +2208,6 @@ out_off:
 out_free:
 	image_ptr = NULL;
 	bpf_jit_binary_free(header);
-	goto out_imms;
+	goto out_off;
 }
 
