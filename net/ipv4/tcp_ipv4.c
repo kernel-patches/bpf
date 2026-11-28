@@ -504,7 +504,8 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 	int err;
 
 	sk = __inet_lookup_established(net, iph->daddr, th->dest, iph->saddr,
-				       ntohs(th->source), inet_iif(skb), 0);
+				       ntohs(th->source), inet_iif(skb),
+				       inet_sdif(skb));
 	if (!sk) {
 		__ICMP_INC_STATS(net, ICMP_MIB_INERRORS);
 		return -ENOENT;
