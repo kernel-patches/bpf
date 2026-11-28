@@ -299,6 +299,9 @@ struct jit_context {
 	 */
 	int tail_call_direct_label;
 	int tail_call_indirect_label;
+
+	/* Emit the address range check in front of PROBE_MEM loads */
+	bool probe_mem_check;
 };
 
 /* Maximum number of bytes emitted while JITing one eBPF insn */
@@ -2573,6 +2576,7 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
 		u32 src_reg = insn->src_reg;
+		bool probe_mem, bounds_check;
 		bool accesses_stack_only;
 		u8 b3 = 0;
 		u8 *start_of_ldx;
@@ -3117,6 +3121,9 @@ populate_extable:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_B:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_H:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_W:
+			probe_mem = BPF_MODE(insn->code) == BPF_PROBE_MEM ||
+				    BPF_MODE(insn->code) == BPF_PROBE_MEMSX;
+			bounds_check = probe_mem && ctx->probe_mem_check;
 			insn_off = insn->off;
 			if (src_reg == BPF_REG_PARAMS) {
 				if (insn_off == 8 && !arena_sp) {
@@ -3134,8 +3141,7 @@ populate_extable:
 				 */
 			}
 
-			if (BPF_MODE(insn->code) == BPF_PROBE_MEM ||
-			    BPF_MODE(insn->code) == BPF_PROBE_MEMSX) {
+			if (bounds_check) {
 				/* Conservatively check that src_reg + insn->off is a kernel address:
 				 *   src_reg + insn->off > TASK_SIZE_MAX + PAGE_SIZE
 				 *   and
@@ -3176,6 +3182,8 @@ populate_extable:
 				/* populate jmp_offset for JNE above to jump to start_of_ldx */
 				start_of_ldx = prog;
 				end_of_jmp[-1] = start_of_ldx - end_of_jmp;
+			} else if (probe_mem) {
+				start_of_ldx = prog;
 			} else if (!accesses_stack_only) {
 				err = emit_kasan_check(env, &prog, src_reg,
 						       insn_off,
@@ -3189,14 +3197,14 @@ populate_extable:
 				emit_ldsx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn_off);
 			else
 				emit_ldx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn_off);
-			if (BPF_MODE(insn->code) == BPF_PROBE_MEM ||
-			    BPF_MODE(insn->code) == BPF_PROBE_MEMSX) {
+			if (probe_mem) {
 				struct exception_table_entry *ex;
 				u8 *_insn = image + proglen + (start_of_ldx - temp);
 				s64 delta;
 
 				/* populate jmp_offset for JMP above */
-				start_of_ldx[-1] = prog - start_of_ldx;
+				if (bounds_check)
+					start_of_ldx[-1] = prog - start_of_ldx;
 
 				if (!bpf_prog->aux->extable)
 					break;
@@ -4893,6 +4901,15 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 		addrs[i] = proglen;
 	}
 	ctx.cleanup_addr = proglen;
+	/*
+	 * With SMAP enabled, a PROBE_MEM load of a user address faults (#PF, or
+	 * #GP with LASS) and the fault handler resolves the exception table
+	 * entry of the program, as for an unmapped kernel address. That lookup
+	 * only finds programs in the BPF ksym tree, so programs loaded without
+	 * CAP_BPF keep the address range check, as do kernels without SMAP.
+	 */
+	ctx.probe_mem_check = !cpu_feature_enabled(X86_FEATURE_SMAP) ||
+			      !bpf_prog_kallsyms_allowed(prog);
 skip_init_addrs:
 
 	/*
@@ -5235,7 +5252,11 @@ bool bpf_jit_supports_ptr_xchg(void)
 	return true;
 }
 
-/* x86-64 JIT emits its own code to filter user addresses so return 0 here */
+/*
+ * The x86-64 JIT keeps user addresses away from PROBE_MEM loads itself, with
+ * its own range check or by leaving the access to SMAP and the fault handler
+ * (see bpf_int_jit_compile()), so return 0 here.
+ */
 u64 bpf_arch_uaddress_limit(void)
 {
 	return 0;

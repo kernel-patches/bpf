@@ -953,10 +953,22 @@ static bool bpf_prog_kallsyms_candidate(const struct bpf_prog *fp)
 	return fp->jited && !bpf_prog_was_classic(fp);
 }
 
+/*
+ * Programs loaded without CAP_BPF are kept out of the BPF ksym tree, so
+ * search_bpf_extables() does not find their exception tables. A JIT that
+ * relies on the exception table to recover from a faulting PROBE_MEM load needs
+ * this answer at JIT time, before bpf_prog_kallsyms_add() runs. Both get the
+ * answer that bpf_prog_load() recorded, so they cannot disagree, and the JIT
+ * makes no capability check of its own.
+ */
+bool bpf_prog_kallsyms_allowed(const struct bpf_prog *fp)
+{
+	return fp->aux->main_prog_aux->bpf_capable;
+}
+
 void bpf_prog_kallsyms_add(struct bpf_prog *fp)
 {
-	if (!bpf_prog_kallsyms_candidate(fp) ||
-	    !bpf_token_capable(fp->aux->token, CAP_BPF))
+	if (!bpf_prog_kallsyms_candidate(fp) || !bpf_prog_kallsyms_allowed(fp))
 		return;
 
 	bpf_prog_ksym_set_addr(fp);

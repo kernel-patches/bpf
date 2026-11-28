@@ -3104,6 +3104,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	/* move token into prog->aux, reuse taken refcnt */
 	prog->aux->token = token;
 	token = NULL;
+	prog->aux->bpf_capable = bpf_cap;
 
 	prog->aux->user = get_current_user();
 	prog->len = attr->insn_cnt;
