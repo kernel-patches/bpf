@@ -469,6 +469,9 @@ INDIRECT_CALLABLE_SCOPE int tcp4_gro_complete(struct sk_buff *skb, int thoff)
 		skb_shinfo(skb)->gso_type |= SKB_GSO_FRAGLIST | SKB_GSO_TCPV4;
 		skb_shinfo(skb)->gso_segs = NAPI_GRO_CB(skb)->count;
 
+		if (skb->encapsulation)
+			skb->inner_transport_header = skb->transport_header;
+
 		__skb_incr_checksum_unnecessary(skb);
 
 		return 0;
