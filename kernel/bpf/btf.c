@@ -7532,10 +7532,22 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	u32 nr_args, arg;
 	int i, ret;
 
+	/*
+	 * Loads start at an 8-byte boundary: the start of a u64 slot, or of a
+	 * field of an iterator's context struct. Arguments and return values
+	 * smaller than 8 bytes are in the low-order bytes of their slot, which
+	 * on big-endian are at its end, so loads ending there are allowed too,
+	 * except for iterators, whose fields are followed by padding.
+	 */
 	if (off % 8) {
-		bpf_log(log, "func '%s' offset %d is not multiple of 8\n",
-			tname, off);
-		return false;
+		bool iter = prog->type == BPF_PROG_TYPE_TRACING &&
+			    prog->expected_attach_type == BPF_TRACE_ITER;
+
+		if (!IS_ENABLED(CONFIG_CPU_BIG_ENDIAN) || iter || off % 8 != 8 - size) {
+			bpf_log(log, "func '%s' offset %d is not multiple of 8\n",
+				tname, off);
+			return false;
+		}
 	}
 	arg = btf_ctx_arg_idx(btf, t, off);
 	args = (const struct btf_param *)(t + 1);
@@ -10749,14 +10761,223 @@ check_modules:
 	return populate_cand_cache(cands, module_cand_cache, MODULE_CAND_CACHE_SIZE);
 }
 
+#define BPF_FUNC_ARGS "bpf_func_args"
+#define BTF_TRACE_PREFIX "btf_trace_"
+
+/*
+ * The context of tp_btf, fentry, fexit, fmod_ret, fsession and LSM programs
+ * is an array of u64 slots: the arguments of the attach target, then, where
+ * the program can see it, its return value, see btf_ctx_arg_idx(). Describe
+ * it as
+ *
+ *	struct bpf_func_args {
+ *		<type of the parameter> <name of the parameter>;
+ *		...
+ *		<return type> __ret;
+ *	};
+ *
+ * in a split BTF on top of the BTF of the attach target, named after the
+ * prog's own 'struct bpf_func_args___xyz'. This struct is then the only CO-RE
+ * candidate for it, and relocations against it are ordinary CO-RE. libbpf
+ * does the same, see bpf_prog_func_args_btf() in tools/lib/bpf/libbpf.c.
+ */
+struct func_args_btf {
+	struct btf btf;
+	struct btf_type *types[1];
+	struct bpf_core_cand cand;
+	struct btf_type t;
+	struct btf_member m[MAX_BPF_FUNC_ARGS + 1];
+	/* the names of the struct and of __ret */
+	char strs[];
+};
+
+#define FUNC_ARGS_RET "__ret"
+
+/*
+ * Is the root type of a relocation 'struct bpf_func_args___xyz'? Clang uses
+ * the typedef as the root type of relocations against a struct accessed
+ * through one, so skip typedefs and modifiers, and take the name of an
+ * anonymous struct from its typedef. Returns the root type to relocate
+ * against in *res_id: the struct, unless it is anonymous.
+ *
+ * Unlike for other types, the flavor is everything after the first triple
+ * underscore, so that it can start with or contain underscores, e.g. when
+ * generated from a prog's name.
+ */
+static bool bpf_core_is_func_args(const struct btf *btf, u32 id, u32 *res_id)
+{
+	const struct btf_type *t;
+	const char *name = NULL;
+	int depth = MAX_RESOLVE_DEPTH;
+	u32 root_id = id;
+
+	t = btf_type_by_id(btf, id);
+	while (t && btf_type_is_modifier(t) && depth--) {
+		if (btf_type_is_typedef(t))
+			name = btf_name_by_offset(btf, t->name_off);
+		id = t->type;
+		t = btf_type_by_id(btf, id);
+	}
+	if (!t || !__btf_type_is_struct(t))
+		return false;
+	/* relocations can't have an anonymous root type, keep its typedef */
+	if (t->name_off) {
+		name = btf_name_by_offset(btf, t->name_off);
+		*res_id = id;
+	} else {
+		*res_id = root_id;
+	}
+
+	return name && (!strcmp(name, BPF_FUNC_ARGS) ||
+			str_has_prefix(name, BPF_FUNC_ARGS "___"));
+}
+
+static int func_args_add(struct func_args_btf *a, u32 name_off, u32 type_id)
+{
+	const struct btf_type *t = btf_type_skip_modifiers(&a->btf, type_id, NULL);
+	u32 n = btf_type_vlen(&a->t);
+	u32 sz;
+
+	if (!t)
+		return -EINVAL;
+	sz = btf_type_is_ptr(t) ? 8 : t->size;
+	if (!sz)
+		return -EINVAL;
+	if (n == ARRAY_SIZE(a->m))
+		return -E2BIG;
+
+	/* unnamed parameters still take up their slots */
+	if (name_off) {
+		a->m[n].name_off = name_off;
+		a->m[n].type = type_id;
+		a->m[n].offset = a->t.size * 8;
+		/* a small argument is in the high addresses of its slot */
+		if (IS_ENABLED(CONFIG_CPU_BIG_ENDIAN) && sz < 8)
+			a->m[n].offset += (8 - sz) * 8;
+		a->t.info = BTF_KIND_STRUCT << 24 | (n + 1);
+	}
+	a->t.size += roundup(sz, 8);
+	return 0;
+}
+
+static struct func_args_btf *bpf_core_func_args_btf(struct bpf_core_ctx *ctx, u32 struct_id)
+{
+	const struct bpf_prog *prog = ctx->prog;
+	struct btf *targ_btf;
+	const struct btf_param *p;
+	const struct btf_type *t;
+	const char *struct_name;
+	struct func_args_btf *a;
+	int i, first = 0, err = 0;
+	size_t name_len;
+	bool has_ret = false;
+	const char *tname;
+	char name[128];
+	s32 id;
+
+	/* the prog holds a reference to attach_btf */
+	if (!prog || !prog->aux->attach_btf || prog->aux->dst_prog ||
+	    (prog->type != BPF_PROG_TYPE_TRACING && prog->type != BPF_PROG_TYPE_LSM)) {
+		bpf_log(ctx->log, "struct %s needs an attach target in kernel BTF\n",
+			BPF_FUNC_ARGS);
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+
+	switch (prog->expected_attach_type) {
+	case BPF_TRACE_FEXIT:
+	case BPF_MODIFY_RETURN:
+	case BPF_TRACE_FSESSION:
+	case BPF_LSM_MAC:
+	case BPF_LSM_CGROUP:
+		has_ret = true;
+		break;
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_RAW_TP:
+		break;
+	default:
+		bpf_log(ctx->log, "struct %s is not supported for this attach type\n",
+			BPF_FUNC_ARGS);
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+
+	targ_btf = prog->aux->attach_btf;
+	t = btf_type_by_id(targ_btf, prog->aux->attach_btf_id);
+	if (t && btf_type_is_typedef(t)) {
+		/*
+		 * btf_trace_xyz has no names of parameters, __probestub_xyz()
+		 * has. It takes void *__data first, which is not in the
+		 * context.
+		 */
+		tname = btf_name_by_offset(targ_btf, t->name_off);
+		if (!tname || !str_has_prefix(tname, BTF_TRACE_PREFIX))
+			return ERR_PTR(-EINVAL);
+		if (snprintf(name, sizeof(name), "__probestub_%s",
+			     tname + sizeof(BTF_TRACE_PREFIX) - 1) >= sizeof(name))
+			return ERR_PTR(-ENAMETOOLONG);
+		id = btf_find_by_name_kind(targ_btf, name, BTF_KIND_FUNC);
+		t = id > 0 ? btf_type_by_id(targ_btf, id) : NULL;
+		first = 1;
+	}
+	if (!t || !btf_type_is_func(t)) {
+		bpf_log(ctx->log, "can't find the parameters of the attach target for struct %s\n",
+			BPF_FUNC_ARGS);
+		return ERR_PTR(-EINVAL);
+	}
+	t = btf_type_by_id(targ_btf, t->type);
+	if (!t || !btf_type_is_func_proto(t))
+		return ERR_PTR(-EINVAL);
+
+	/*
+	 * Name the candidate after the prog's struct, so that the names that
+	 * type-based relocations compare match whatever its flavor is.
+	 */
+	struct_name = btf_name_by_offset(ctx->btf, btf_type_by_id(ctx->btf, struct_id)->name_off);
+	name_len = strlen(struct_name) + 1;
+	a = kzalloc_flex(*a, strs, name_len + sizeof(FUNC_ARGS_RET), GFP_KERNEL_ACCOUNT);
+	if (!a)
+		return ERR_PTR(-ENOMEM);
+	memcpy(a->strs, struct_name, name_len);
+	memcpy(a->strs + name_len, FUNC_ARGS_RET, sizeof(FUNC_ARGS_RET));
+
+	a->btf.base_btf = targ_btf;
+	a->btf.start_id = btf_nr_types(targ_btf);
+	a->btf.start_str_off = targ_btf->start_str_off + targ_btf->hdr.str_len;
+	a->btf.strings = a->strs;
+	a->btf.hdr.str_len = name_len + sizeof(FUNC_ARGS_RET);
+	a->btf.types = a->types;
+	a->btf.nr_types = 1;
+	a->types[0] = &a->t;
+	a->t.name_off = a->btf.start_str_off;
+	a->t.info = BTF_KIND_STRUCT << 24;
+	a->cand.btf = &a->btf;
+	a->cand.id = a->btf.start_id;
+
+	p = btf_params(t);
+	/* a trailing parameter of type void is '...' */
+	for (i = first; !err && i < btf_type_vlen(t) && p[i].type; i++)
+		err = func_args_add(a, p[i].name_off, p[i].type);
+	if (!err && has_ret && t->type)
+		err = func_args_add(a, a->t.name_off + name_len, t->type);
+	if (err) {
+		bpf_log(ctx->log, "failed to describe the arguments of the attach target: %d\n",
+			err);
+		kfree(a);
+		return ERR_PTR(err);
+	}
+	return a;
+}
+
 int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 		   int relo_idx, void *insn)
 {
 	bool need_cands = relo->kind != BPF_CORE_TYPE_ID_LOCAL;
 	struct bpf_core_cand_list cands = {};
+	struct func_args_btf *args = NULL;
+	struct bpf_core_relo struct_relo;
 	struct bpf_core_relo_res targ_res;
 	struct bpf_core_spec *specs;
 	const struct btf_type *type;
+	u32 struct_id;
 	int err;
 
 	/* ~4k of temp memory necessary to convert LLVM spec like "0:1:0:5"
@@ -10772,6 +10993,31 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 			relo_idx, relo->type_id);
 		kfree(specs);
 		return -EINVAL;
+	}
+
+	if (need_cands && bpf_core_is_func_args(ctx->btf, relo->type_id, &struct_id)) {
+		/* the type only exists here, not in the kernel's BTF */
+		if (relo->kind == BPF_CORE_TYPE_ID_TARGET) {
+			bpf_log(ctx->log, "relo #%u: no kernel type ID for struct %s\n",
+				relo_idx, BPF_FUNC_ARGS);
+			need_cands = false;
+			err = -EOPNOTSUPP;
+			goto out;
+		}
+		/* the candidate depends on the prog, keep it out of the cache */
+		need_cands = false;
+		args = bpf_core_func_args_btf(ctx, struct_id);
+		if (IS_ERR(args)) {
+			err = PTR_ERR(args);
+			args = NULL;
+			goto out;
+		}
+		cands.cands = &args->cand;
+		cands.len = 1;
+		/* type-based relocations need the root to be the struct, not a typedef */
+		struct_relo = *relo;
+		struct_relo.type_id = struct_id;
+		relo = &struct_relo;
 	}
 
 	if (need_cands) {
@@ -10819,6 +11065,7 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 
 out:
 	kfree(specs);
+	kfree(args);
 	if (need_cands) {
 		kfree(cands.cands);
 		mutex_unlock(&cand_cache_mutex);

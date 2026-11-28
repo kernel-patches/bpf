@@ -544,3 +544,75 @@ Enum-based relocations:
             108:  CO-RE <enumval_value> [16] enum bar::V = 1
     35:     *(u64 *)(r2 + 0x0) = r1
     36:     exit
+
+Relocations Against Function Arguments
+======================================
+
+The context of tp_btf, fentry, fexit, fmod_ret, fsession and LSM programs
+is an array of u64 slots, holding the arguments of the attach target and,
+where the program can see it, its return value. Programs can describe it
+with a struct named ``bpf_func_args___<flavor>`` accessed with
+``preserve_access_index``, with members named after the parameters of the
+attach target and ``__ret`` for the return value. The compiler emits
+ordinary CO-RE relocations for these accesses, e.g.:
+
+.. code-block:: c
+
+  struct bpf_func_args___test3 {
+    unsigned long long c;
+    char a;
+  } __attribute__((preserve_access_index));
+
+  SEC("fentry/bpf_fentry_test3")
+  int prog(struct bpf_func_args___test3 *ctx)
+  {
+    return ctx->a;
+  }
+
+  0000000000000000 <prog>:
+       0:       w0 = *(u8 *)(r1 + 0x8)
+                0000000000000000:  CO-RE <byte_off> [2] struct bpf_func_args___test3::a (0:1)
+       1:       w0 <<= 0x18
+       2:       w0 s>>= 0x18
+       3:       exit
+
+Loaders resolve relocations whose root type is a struct named
+``bpf_func_args``, or ``bpf_func_args___`` followed by any flavor, against a
+single candidate, which they construct from the program's attach target
+rather than look up in kernel BTF. Unlike for other types, the flavor is
+everything after the first triple underscore, so it can start with or contain
+underscores, e.g., when it is generated from the name of a program. The
+compiler uses a typedef as the root type when the struct is accessed through
+one, so loaders skip typedefs and modifiers to find the struct, and take the
+name of an anonymous struct from its typedef. They then relocate against
+the struct itself, unless it is anonymous, and give the candidate the same
+name, so that type-based relocations match it whatever its flavor is:
+
+.. code-block:: c
+
+  struct bpf_func_args___<flavor> {
+    <type of the parameter> <name of the parameter>;
+    ...
+    <return type> __ret;
+  };
+
+- Its members are the parameters of the attach target, with their names and
+  types, at their offsets in the context, as laid out by the kernel's
+  ``btf_ctx_arg_idx()``: each takes up a whole number of 8-byte slots (e.g.,
+  structs larger than 8 bytes passed by value take up two). On big-endian
+  targets, members smaller than 8 bytes are at the end of their slot.
+- ``__ret`` follows the parameters for fexit, fmod_ret, fsession and LSM
+  programs, unless the attach target returns void.
+- For tp_btf programs, the attach target is a ``btf_trace_<name>`` typedef
+  without parameter names, so the parameters are taken from the
+  identically-typed ``__probestub_<name>()`` function (or, on kernels
+  before Linux 6.5, ``__traceiter_<name>()``), without their first
+  ``void *__data`` parameter. If neither exists, libbpf finds no
+  candidate, while the kernel, which only looks for
+  ``__probestub_<name>()``, fails the relocation.
+
+The struct is constructed in BTF split from the BTF of the attach target,
+so that members refer to the target's types, and relocations against it are
+then resolved as usual. ``target_type_id`` relocations against it fail, as
+it doesn't exist in the kernel. libbpf and the kernel, for light skeletons,
+implement this.
