@@ -14,9 +14,13 @@
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
 #include <linux/rtnetlink.h>
+#include <linux/workqueue.h>
 #include <net/net_trackers.h>
 
 #define PSE_PW_D_LIMIT INT_MAX
+
+/* Default poll interval: fast enough for PD events, light on the I2C bus */
+#define PSE_DEFAULT_POLL_INTERVAL_MS 500
 
 static DEFINE_MUTEX(pse_list_mutex);
 static LIST_HEAD(pse_controller_list);
@@ -392,8 +396,8 @@ static void pse_pw_d_retry_power_delivery(struct pse_controller_dev *pcdev,
  * @pw_d: a pointer to the PSE power domain
  *
  * This function determines whether the power control for a specific power
- * domain is managed by software in the interrupt handler rather than directly
- * by hardware.
+ * domain is managed by software in the event handler (IRQ or poll) rather
+ * than directly by hardware.
  *
  * Software power control is active in the following cases:
  * - When the budget evaluation strategy is set to static
@@ -1119,6 +1123,19 @@ int pse_controller_register(struct pse_controller_dev *pcdev)
 		goto free_kfifo;
 	}
 
+	if (pcdev->polling) {
+		pcdev->poll_notifs = devm_kzalloc_objs(pcdev->dev,
+						       *pcdev->poll_notifs,
+						       pcdev->nr_lines);
+		pcdev->poll_notifs_mask = devm_bitmap_zalloc(pcdev->dev,
+							     pcdev->nr_lines,
+							     GFP_KERNEL);
+		if (!pcdev->poll_notifs || !pcdev->poll_notifs_mask) {
+			ret = -ENOMEM;
+			goto free_kfifo;
+		}
+	}
+
 	ret = of_load_pse_pis(pcdev);
 	if (ret)
 		goto free_kfifo;
@@ -1171,6 +1188,14 @@ int pse_controller_register(struct pse_controller_dev *pcdev)
 	list_add(&pcdev->list, &pse_controller_list);
 	mutex_unlock(&pse_list_mutex);
 
+	/* Start polling only now, so the worker never sees a controller
+	 * that is not fully set up.
+	 */
+	if (pcdev->polling)
+		queue_delayed_work(system_freezable_power_efficient_wq,
+				   &pcdev->poll_work,
+				   msecs_to_jiffies(pcdev->poll_interval_ms));
+
 	return 0;
 
 free_kfifo:
@@ -1193,12 +1218,15 @@ void pse_controller_unregister(struct pse_controller_dev *pcdev)
 	pcdev->unregistering = true;
 	mutex_unlock(&pcdev->lock);
 
-	/* Stop the IRQ and the notification worker first: pse_isr() uses
-	 * pcdev->pi and the power domains that pse_flush_pw_ds() drops,
-	 * and the worker reads the kfifo that is freed below.
+	/* Stop the IRQ, the poll work and the notification worker first:
+	 * pse_isr() and pse_poll_worker() use pcdev->pi and the power
+	 * domains that pse_flush_pw_ds() drops, and the worker reads the
+	 * kfifo that is freed below.
 	 */
 	if (pcdev->irq)
 		disable_irq(pcdev->irq);
+	if (pcdev->polling)
+		cancel_delayed_work_sync(&pcdev->poll_work);
 	/* Unlink before the PI array is freed: of_pse_control_get() walks
 	 * the list and reads pcdev->pi[].
 	 */
@@ -1323,48 +1351,39 @@ static int pse_set_config_isr(struct pse_controller_dev *pcdev, int id,
 }
 
 /**
- * pse_isr - IRQ handler for PSE
- * @irq: irq number
- * @data: pointer to user interrupt structure
+ * pse_handle_events - Process PSE events for all PIs
+ * @pcdev: a pointer to the PSE controller device
+ * @pi_notifs: per-PI notification array
+ * @notifs_mask: bitmap of PIs with events (sized for pcdev->nr_lines)
  *
- * Return: irqreturn_t - status of IRQ
+ * Common event handling shared between IRQ and poll paths.
+ * Caller must hold pcdev->lock.
  */
-static irqreturn_t pse_isr(int irq, void *data)
+static void pse_handle_events(struct pse_controller_dev *pcdev,
+			      unsigned long *pi_notifs,
+			      unsigned long *notifs_mask)
 {
-	struct pse_controller_dev *pcdev;
-	struct pse_irq_desc *desc;
-	struct pse_irq *h = data;
-	int ret, i;
+	int i;
 
-	desc = &h->desc;
-	pcdev = h->pcdev;
+	lockdep_assert_held(&pcdev->lock);
 
-	/* Clear notifs mask */
-	memset(h->notifs, 0, pcdev->nr_lines * sizeof(*h->notifs));
-	bitmap_zero(h->notifs_mask, pcdev->nr_lines);
-	mutex_lock(&pcdev->lock);
-	ret = desc->map_event(irq, pcdev, h->notifs, h->notifs_mask);
-	if (ret || bitmap_empty(h->notifs_mask, pcdev->nr_lines)) {
-		mutex_unlock(&pcdev->lock);
-		return IRQ_NONE;
-	}
-
-	for_each_set_bit(i, h->notifs_mask, pcdev->nr_lines) {
+	for_each_set_bit(i, notifs_mask, pcdev->nr_lines) {
 		unsigned long notifs, rnotifs;
 		struct pse_ntf ntf = {};
+		int ret;
 
 		/* Do nothing PI not described */
 		if (!pcdev->pi[i].rdev)
 			continue;
 
-		notifs = h->notifs[i];
+		notifs = pi_notifs[i];
 		if (pse_pw_d_is_sw_pw_control(pcdev, pcdev->pi[i].pw_d)) {
 			ret = pse_set_config_isr(pcdev, i, notifs);
 			if (ret)
 				notifs |= ETHTOOL_PSE_EVENT_SW_PW_CONTROL_ERROR;
 		}
 
-		dev_dbg(h->pcdev->dev,
+		dev_dbg(pcdev->dev,
 			"Sending PSE notification EVT 0x%lx\n", notifs);
 
 		ntf.notifs = notifs;
@@ -1377,10 +1396,71 @@ static irqreturn_t pse_isr(int irq, void *data)
 		regulator_notifier_call_chain(pcdev->pi[i].rdev, rnotifs,
 					      NULL);
 	}
+}
 
+/**
+ * pse_isr - IRQ handler for PSE
+ * @irq: irq number
+ * @data: pointer to user interrupt structure
+ *
+ * Return: irqreturn_t - status of IRQ
+ */
+static irqreturn_t pse_isr(int irq, void *data)
+{
+	struct pse_controller_dev *pcdev;
+	struct pse_irq *h = data;
+	int ret;
+
+	pcdev = h->pcdev;
+
+	/* Clear notifs mask */
+	memset(h->notifs, 0, pcdev->nr_lines * sizeof(*h->notifs));
+	bitmap_zero(h->notifs_mask, pcdev->nr_lines);
+	mutex_lock(&pcdev->lock);
+	ret = h->desc.map_event(irq, pcdev, h->notifs, h->notifs_mask);
+	if (ret || bitmap_empty(h->notifs_mask, pcdev->nr_lines)) {
+		mutex_unlock(&pcdev->lock);
+		return IRQ_NONE;
+	}
+
+	pse_handle_events(pcdev, h->notifs, h->notifs_mask);
 	mutex_unlock(&pcdev->lock);
 
 	return IRQ_HANDLED;
+}
+
+static void pse_poll_worker(struct work_struct *work)
+{
+	struct pse_controller_dev *pcdev =
+		container_of(work, struct pse_controller_dev,
+			     poll_work.work);
+	int ret;
+
+	memset(pcdev->poll_notifs, 0,
+	       pcdev->nr_lines * sizeof(*pcdev->poll_notifs));
+	bitmap_zero(pcdev->poll_notifs_mask, pcdev->nr_lines);
+	mutex_lock(&pcdev->lock);
+	ret = pcdev->poll_desc.map_event(0, pcdev, pcdev->poll_notifs,
+					 pcdev->poll_notifs_mask);
+	/* Log only changes: a controller that stopped answering would
+	 * otherwise log an error at every poll.
+	 */
+	if (ret != pcdev->poll_err) {
+		if (ret)
+			dev_err(pcdev->dev, "Failed to poll events: %pe\n",
+				ERR_PTR(ret));
+		else
+			dev_info(pcdev->dev, "Polling events works again\n");
+		pcdev->poll_err = ret;
+	}
+	if (!ret && !bitmap_empty(pcdev->poll_notifs_mask, pcdev->nr_lines))
+		pse_handle_events(pcdev, pcdev->poll_notifs,
+				  pcdev->poll_notifs_mask);
+	mutex_unlock(&pcdev->lock);
+
+	queue_delayed_work(system_freezable_power_efficient_wq,
+			   &pcdev->poll_work,
+			   msecs_to_jiffies(pcdev->poll_interval_ms));
 }
 
 /**
@@ -1444,6 +1524,51 @@ int devm_pse_irq_helper(struct pse_controller_dev *pcdev, int irq,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(devm_pse_irq_helper);
+
+/**
+ * pse_poll_helper - Set up a poll-based PSE event notifier
+ * @pcdev: a pointer to the PSE controller device
+ * @d: PSE event description, the same as for devm_pse_irq_helper().
+ *     d->name is not used.
+ *
+ * For PSE controllers without a usable IRQ. Every poll_interval_ms
+ * (default 500 ms), a delayed work calls d->map_event() with irq 0 and
+ * handles the events like pse_isr() does. The work runs on a freezable
+ * workqueue, so it does not touch the hardware during suspend.
+ *
+ * With the "disabled" budget strategy, the hardware keeps the power
+ * control of a polled controller. The PSE core takes it over only for
+ * an IRQ controller, see pse_pw_d_is_sw_pw_control().
+ *
+ * Must be called before devm_pse_controller_register(), which allocates
+ * the poll buffers and starts the polling once the controller is
+ * registered.
+ *
+ * Return: 0 on success, -EBUSY if the controller is already registered,
+ *	   or another errno on failure
+ */
+int pse_poll_helper(struct pse_controller_dev *pcdev,
+		    const struct pse_irq_desc *d)
+{
+	if (!d || !d->map_event)
+		return -EINVAL;
+
+	/* pcdev->pi is set by pse_controller_register(), which must come
+	 * after this call to start the polling.
+	 */
+	if (WARN_ON(pcdev->pi))
+		return -EBUSY;
+
+	pcdev->poll_desc = *d;
+	if (!pcdev->poll_interval_ms)
+		pcdev->poll_interval_ms = PSE_DEFAULT_POLL_INTERVAL_MS;
+
+	INIT_DELAYED_WORK(&pcdev->poll_work, pse_poll_worker);
+	pcdev->polling = true;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(pse_poll_helper);
 
 /* PSE control section */
 

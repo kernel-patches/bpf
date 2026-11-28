@@ -43,10 +43,12 @@ struct ethtool_c33_pse_pw_limit_range {
 };
 
 /**
- * struct pse_irq_desc - notification sender description for IRQ based events.
+ * struct pse_irq_desc - notification sender description for IRQ or poll
+ *			  based events.
  *
- * @name: the visible name for the IRQ
+ * @name: the visible name for the IRQ, not used for polling
  * @map_event: driver callback to map IRQ status into PSE devices with events.
+ *	       irq is 0 when it is called from the poll work.
  */
 struct pse_irq_desc {
 	const char *name;
@@ -186,8 +188,8 @@ struct ethtool_pse_control_status {
  * @pi_get_prio: Get the PSE PI priority.
  * @pi_set_prio: Configure the PSE PI priority.
  * @pi_get_pw_req: Get the power requested by a PD before enabling the PSE PI.
- *		   This is only relevant when an interrupt is registered using
- *		   devm_pse_irq_helper helper.
+ *		   This is only relevant when events are reported, using the
+ *		   devm_pse_irq_helper() or pse_poll_helper() helper.
  */
 struct pse_controller_ops {
 	int (*setup_pi_matrix)(struct pse_controller_dev *pcdev);
@@ -294,6 +296,14 @@ struct pse_ntf {
  * @pi: table of PSE PIs described in this controller device
  * @no_of_pse_pi: flag set if the pse_pis devicetree node is not used
  * @irq: PSE interrupt
+ * @polling: flag indicating poll-based event detection is active
+ * @poll_interval_ms: poll interval in milliseconds, a driver may set it
+ *		      before pse_poll_helper(), 0 means 500 ms
+ * @poll_work: delayed work for poll-based event detection
+ * @poll_desc: copy of the driver's event descriptor for polling
+ * @poll_notifs: per-PI notification scratch space for poll worker
+ * @poll_notifs_mask: bitmap of PIs with events for poll worker
+ * @poll_err: result of the last poll, to log only changes
  * @pis_prio_max: Maximum value allowed for the PSE PIs priority
  * @supp_budget_eval_strategies: budget evaluation strategies supported
  *				 by the PSE
@@ -316,6 +326,13 @@ struct pse_controller_dev {
 	struct pse_pi *pi;
 	bool no_of_pse_pi;
 	int irq;
+	bool polling;
+	unsigned int poll_interval_ms;
+	struct delayed_work poll_work;
+	struct pse_irq_desc poll_desc;
+	unsigned long *poll_notifs;
+	unsigned long *poll_notifs_mask;
+	int poll_err;
 	unsigned int pis_prio_max;
 	u32 supp_budget_eval_strategies;
 	struct work_struct ntf_work;
@@ -350,6 +367,8 @@ int devm_pse_controller_register(struct device *dev,
 				 struct pse_controller_dev *pcdev);
 int devm_pse_irq_helper(struct pse_controller_dev *pcdev, int irq,
 			int irq_flags, const struct pse_irq_desc *d);
+int pse_poll_helper(struct pse_controller_dev *pcdev,
+		    const struct pse_irq_desc *d);
 
 struct pse_control *of_pse_control_get(struct device_node *node,
 				       struct phy_device *phydev);
