@@ -9,7 +9,7 @@
 #include <bpf/btf.h>
 
 #if defined(__x86_64__) || defined(__aarch64__) || \
-    (defined(__riscv) && __riscv_xlen == 64)
+    (defined(__riscv) && __riscv_xlen == 64) || defined(__loongarch__)
 
 #define CALLEE_INSN	6
 #define DATA		0x1234

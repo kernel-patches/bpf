@@ -770,6 +770,7 @@ __naked void callx_rodata_partial_read(void)
 }
 
 SEC("socket")
+__flag(BPF_F_ANY_ALIGNMENT)
 __failure __msg("read of 8 bytes at offset")
 __msg("overlaps with a pointer to a function")
 __naked void callx_rodata_misaligned_read(void)
