@@ -686,18 +686,16 @@ static int eth_stop(struct net_device *net)
 static int get_ether_addr(const char *str, u8 *dev_addr)
 {
 	if (str) {
-		unsigned	i;
+		bool valid;
 
-		for (i = 0; i < 6; i++) {
-			unsigned char num;
+		/* Try the delimited formats first */
+		valid = parse_mac_pton(str, dev_addr, ".:");
+		if (valid && is_valid_ether_addr(dev_addr))
+			return 0;
 
-			if ((*str == '.') || (*str == ':'))
-				str++;
-			num = hex_to_bin(*str++) << 4;
-			num |= hex_to_bin(*str++);
-			dev_addr [i] = num;
-		}
-		if (is_valid_ether_addr(dev_addr))
+		/* Fall back to the raw format */
+		valid = hex2bin(dev_addr, str, ETH_ALEN) == 0;
+		if (valid && is_valid_ether_addr(dev_addr))
 			return 0;
 	}
 	eth_random_addr(dev_addr);
@@ -927,8 +925,12 @@ int gether_set_dev_addr(struct net_device *net, const char *dev_addr)
 	u8 new_addr[ETH_ALEN];
 
 	dev = netdev_priv(net);
-	if (get_ether_addr(dev_addr, new_addr))
+	if (get_ether_addr(dev_addr, new_addr)) {
+		if (dev_addr)
+			pr_warn("rejected device ethernet address %s, using random\n",
+				dev_addr);
 		return -EINVAL;
+	}
 	memcpy(dev->dev_mac, new_addr, ETH_ALEN);
 	net->addr_assign_type = NET_ADDR_SET;
 	return 0;
@@ -957,8 +959,12 @@ int gether_set_host_addr(struct net_device *net, const char *host_addr)
 	u8 new_addr[ETH_ALEN];
 
 	dev = netdev_priv(net);
-	if (get_ether_addr(host_addr, new_addr))
+	if (get_ether_addr(host_addr, new_addr)) {
+		if (host_addr)
+			pr_warn("rejected host ethernet address %s, using random\n",
+				host_addr);
 		return -EINVAL;
+	}
 	memcpy(dev->host_mac, new_addr, ETH_ALEN);
 	return 0;
 }
