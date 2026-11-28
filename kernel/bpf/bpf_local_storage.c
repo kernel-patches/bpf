@@ -15,7 +15,8 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/rcupdate_wait.h>
 
-#define BPF_LOCAL_STORAGE_CREATE_FLAG_MASK (BPF_F_NO_PREALLOC | BPF_F_CLONE)
+#define BPF_LOCAL_STORAGE_CREATE_FLAG_MASK \
+	(BPF_F_NO_PREALLOC | BPF_F_CLONE | BPF_F_INLINE_VALUE)
 
 static struct bpf_local_storage_map_bucket *
 select_bucket(struct bpf_local_storage_map *smap,
@@ -114,7 +115,12 @@ static void bpf_local_storage_free(struct bpf_local_storage *local_storage,
 	if (!local_storage)
 		return;
 
-	if (reuse_now) {
+	/*
+	 * A sleepable program can still use an inline value: wait for it. A
+	 * tasks trace grace period also covers plain RCU readers: RCU Tasks
+	 * Trace is SRCU-fast, and its grace period calls synchronize_rcu().
+	 */
+	if (reuse_now && !bpf_local_storage_has_inline(local_storage)) {
 		kfree_rcu(local_storage, rcu);
 		return;
 	}
@@ -158,6 +164,18 @@ void bpf_selem_free(struct bpf_local_storage_elem *selem,
 	call_rcu_tasks_trace(&selem->rcu, bpf_selem_free_trace_rcu);
 }
 
+/*
+ * selem was never published: no reader can see it, and this works in NMI.
+ * Only the syscall update puts special fields (uptrs) in a new selem, and it
+ * never runs in NMI, so freeing them here is safe too.
+ */
+static void bpf_selem_free_unpublished(struct bpf_local_storage_elem *selem,
+				       struct bpf_local_storage_map *smap)
+{
+	bpf_obj_free_fields(smap->map.record, SDATA(selem)->data);
+	kfree_nolock(selem);
+}
+
 static void bpf_selem_free_list(struct hlist_head *list, bool reuse_now)
 {
 	struct bpf_local_storage_elem *selem;
@@ -170,6 +188,31 @@ static void bpf_selem_free_list(struct hlist_head *list, bool reuse_now)
 	 */
 	hlist_for_each_entry_safe(selem, n, list, free_node)
 		bpf_selem_free(selem, reuse_now);
+}
+
+/*
+ * Free local_storage when selem, its last selem, goes away. An object with an
+ * inline area can hold values with no selem, so free it only after destroy()
+ * marked it.
+ */
+static bool bpf_local_storage_free_last(struct bpf_local_storage *local_storage,
+					struct bpf_local_storage_elem *selem)
+{
+	if (!hlist_is_singular_node(&selem->snode, &local_storage->list))
+		return false;
+	return !bpf_local_storage_has_inline(local_storage) ||
+	       READ_ONCE(local_storage->dying);
+}
+
+/*
+ * local_storage goes away: the owner needs a new one for a new value. An
+ * object with an inline area can be empty, so destroy() marks it instead.
+ */
+static bool bpf_local_storage_gone(const struct bpf_local_storage *local_storage)
+{
+	if (bpf_local_storage_has_inline(local_storage))
+		return READ_ONCE(local_storage->dying);
+	return hlist_empty(&local_storage->list);
 }
 
 static void bpf_selem_unlink_storage_nolock_misc(struct bpf_local_storage_elem *selem,
@@ -187,7 +230,7 @@ static void bpf_selem_unlink_storage_nolock_misc(struct bpf_local_storage_elem *
 	if (pin_owner && !refcount_inc_not_zero(&local_storage->owner_refcnt))
 		return;
 
-	uncharge += free_local_storage ? sizeof(*local_storage) : 0;
+	uncharge += free_local_storage ? local_storage->obj_size : 0;
 	mem_uncharge(smap, local_storage->owner, uncharge);
 	local_storage->mem_charge -= uncharge;
 
@@ -215,8 +258,7 @@ static bool bpf_selem_unlink_storage_nolock(struct bpf_local_storage *local_stor
 
 	smap = rcu_dereference_check(SDATA(selem)->smap, bpf_rcu_lock_held());
 
-	free_local_storage = hlist_is_singular_node(&selem->snode,
-						    &local_storage->list);
+	free_local_storage = bpf_local_storage_free_last(local_storage, selem);
 
 	bpf_selem_unlink_storage_nolock_misc(selem, smap, local_storage,
 					     free_local_storage, false);
@@ -344,6 +386,40 @@ out:
 	return err;
 }
 
+int bpf_local_storage_delete(void *owner, struct bpf_local_storage_map *smap)
+{
+	struct bpf_local_storage __rcu **owner_ptr = owner_storage(smap, owner);
+	struct bpf_local_storage *local_storage;
+	struct bpf_local_storage_data *sdata;
+	unsigned long flags;
+	int err;
+
+	/* An inode can have no LSM blob, so no storage pointer */
+	local_storage = owner_ptr ? rcu_dereference_check(*owner_ptr, bpf_rcu_lock_held()) : NULL;
+	sdata = local_storage ? bpf_local_storage_lookup(local_storage, smap, false) : NULL;
+	if (!sdata)
+		return -ENOENT;
+
+	if (sdata != bpf_local_storage_inline(local_storage, smap))
+		return bpf_selem_unlink(SELEM(sdata));
+
+	/* As bpf_selem_unlink(): the result must not depend on the place */
+	if (in_nmi())
+		return -EOPNOTSUPP;
+
+	/* The value bytes stay: a program can still hold a pointer to them */
+	err = raw_res_spin_lock_irqsave(&local_storage->lock, flags);
+	if (err)
+		return err;
+	/* A racing delete can clear the tag before this one takes the lock */
+	if (sdata->inline_tag == bpf_local_storage_inline_tag(smap))
+		WRITE_ONCE(sdata->inline_tag, 0);
+	else
+		err = -ENOENT;
+	raw_res_spin_unlock_irqrestore(&local_storage->lock, flags);
+	return err;
+}
+
 /*
  * Unlink an selem from map and local storage with lockless fallback if callers
  * are racing or rqspinlock returns error. It should only be called by
@@ -413,8 +489,8 @@ static void bpf_selem_unlink_nofail(struct bpf_local_storage_elem *selem,
 		err = raw_res_spin_lock_irqsave(&local_storage->lock, flags);
 		if (!err) {
 			if (likely(selem_linked_to_storage(selem))) {
-				free_storage = hlist_is_singular_node(&selem->snode,
-								      &local_storage->list);
+				free_storage = bpf_local_storage_free_last(local_storage,
+									   selem);
 				 /*
 				  * Okay to skip clearing owner_storage and storage->owner in
 				  * destroy() since the owner is going away. No user or bpf
@@ -498,22 +574,44 @@ static int check_flags(const struct bpf_local_storage_data *old_sdata,
 	return 0;
 }
 
-int bpf_local_storage_alloc(void *owner,
-			    struct bpf_local_storage_map *smap,
-			    struct bpf_local_storage_elem *first_selem)
+/*
+ * Once an inline map exists, a new object gets an inline area up to the end
+ * of the last slot, also for other maps. Its size does not change.
+ */
+static u32 bpf_local_storage_obj_size(struct bpf_local_storage_map *smap)
 {
+	u32 end = max(READ_ONCE(smap->cache->inline_end), smap->inline_end);
+
+	return end ? kmalloc_size_roundup(end) : sizeof(struct bpf_local_storage);
+}
+
+/*
+ * The first value for owner goes into first_selem or, if first_selem is NULL,
+ * into the inline slot of smap (value, or zeros if value is NULL). Return the
+ * new storage, so that the caller does not read the owner pointer again.
+ */
+struct bpf_local_storage *
+bpf_local_storage_alloc(void *owner, struct bpf_local_storage_map *smap,
+			struct bpf_local_storage_elem *first_selem, void *value)
+{
+	struct bpf_local_storage **owner_storage_ptr =
+		(struct bpf_local_storage **)owner_storage(smap, owner);
 	struct bpf_local_storage *prev_storage, *storage;
-	struct bpf_local_storage **owner_storage_ptr;
 	struct bpf_local_storage_map_bucket *b;
+	u32 size = bpf_local_storage_obj_size(smap);
+	struct bpf_local_storage_data *sdata;
 	unsigned long flags;
 	int err;
 
-	err = mem_charge(smap, owner, sizeof(*storage));
-	if (err)
-		return err;
+	/* The new object holds the slot of an inline map: no selem for it */
+	WARN_ON_ONCE(first_selem && bpf_local_storage_map_inline(smap));
 
-	storage = bpf_map_kmalloc_nolock(&smap->map, sizeof(*storage),
-					 __GFP_ZERO, NUMA_NO_NODE);
+	err = mem_charge(smap, owner, size);
+	if (err)
+		return ERR_PTR(err);
+
+	storage = bpf_map_kmalloc_nolock(&smap->map, size, __GFP_ZERO,
+					 NUMA_NO_NODE);
 	if (!storage) {
 		err = -ENOMEM;
 		goto uncharge;
@@ -522,8 +620,27 @@ int bpf_local_storage_alloc(void *owner,
 	INIT_HLIST_HEAD(&storage->list);
 	raw_res_spin_lock_init(&storage->lock);
 	storage->owner = owner;
-	storage->mem_charge = sizeof(*storage);
+	storage->obj_size = size;
+	storage->mem_charge = size;
 	refcount_set(&storage->owner_refcnt, 1);
+
+	if (!first_selem) {
+		/*
+		 * Nobody can see storage before it is published, so fill the
+		 * slot with no lock. With no selem, nobody can find storage
+		 * through the map, so no bucket lock either. cmpxchg() orders
+		 * the slot before the pointer. sdata is not NULL:
+		 * bpf_local_storage_obj_size() covers the slot of smap.
+		 */
+		sdata = bpf_local_storage_inline(storage, smap);
+		if (value)
+			copy_map_value(&smap->map, sdata->data, value);
+		sdata->inline_tag = bpf_local_storage_inline_tag(smap);
+		if (likely(!cmpxchg(owner_storage_ptr, NULL, storage)))
+			return storage;
+		err = -EAGAIN;
+		goto uncharge;
+	}
 
 	bpf_selem_link_storage_nolock(storage, first_selem);
 
@@ -532,8 +649,6 @@ int bpf_local_storage_alloc(void *owner,
 	if (err)
 		goto uncharge;
 
-	owner_storage_ptr =
-		(struct bpf_local_storage **)owner_storage(smap, owner);
 	/* Publish storage to the owner.
 	 * Instead of using any lock of the kernel object (i.e. owner),
 	 * cmpxchg will work with any kernel object regardless what
@@ -559,12 +674,53 @@ int bpf_local_storage_alloc(void *owner,
 	bpf_selem_link_map_nolock(b, first_selem);
 	raw_res_spin_unlock_irqrestore(&b->lock, flags);
 
-	return 0;
+	return storage;
 
 uncharge:
-	bpf_local_storage_free(storage, true);
-	mem_uncharge(smap, owner, sizeof(*storage));
-	return err;
+	/* storage was never published: no reader can see it */
+	kfree_nolock(storage);
+	mem_uncharge(smap, owner, size);
+	return ERR_PTR(err);
+}
+
+/* Write the value of smap into its slot, in place */
+static struct bpf_local_storage_data *
+bpf_local_storage_update_inline(struct bpf_local_storage *local_storage,
+				struct bpf_local_storage_map *smap,
+				void *value, u64 map_flags)
+{
+	u64 tag = bpf_local_storage_inline_tag(smap);
+	struct bpf_local_storage_data *sdata;
+	unsigned long flags;
+	int err;
+
+	sdata = bpf_local_storage_inline(local_storage, smap);
+	err = raw_res_spin_lock_irqsave(&local_storage->lock, flags);
+	if (err)
+		return ERR_PTR(err);
+
+	/* As an empty list in the selem path: destroy() has started */
+	if (unlikely(bpf_local_storage_gone(local_storage)))
+		err = -EAGAIN;
+	else
+		err = check_flags(sdata->inline_tag == tag ? sdata : NULL, map_flags);
+	if (err)
+		goto unlock;
+
+	/*
+	 * Lockless readers (programs, the syscall lookup, sk diag) can see a
+	 * torn value. This race is intended, as in array maps. The init value
+	 * can be the old value in the slot: keep it.
+	 */
+	if (!value)
+		memset(sdata->data, 0, smap->map.value_size);
+	else if (value != sdata->data)
+		copy_map_value(&smap->map, sdata->data, value);
+	/* A reader that sees the tag must see the value */
+	smp_store_release(&sdata->inline_tag, tag);
+unlock:
+	raw_res_spin_unlock_irqrestore(&local_storage->lock, flags);
+	return err ? ERR_PTR(err) : sdata;
 }
 
 /* sk cannot be going away because it is linking new elem
@@ -593,25 +749,43 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 
 	local_storage = rcu_dereference_check(*owner_storage(smap, owner),
 					      bpf_rcu_lock_held());
-	if (!local_storage || hlist_empty(&local_storage->list)) {
+	/* One gone() read decides slot or selem: a second read can differ */
+	if (!local_storage || bpf_local_storage_gone(local_storage)) {
 		/* Very first elem for the owner */
 		err = check_flags(NULL, map_flags);
 		if (err)
 			return ERR_PTR(err);
 
+		/* destroy() has started: no new object can be published */
+		if (local_storage && READ_ONCE(local_storage->dying))
+			return ERR_PTR(-EAGAIN);
+
+		if (bpf_local_storage_map_inline(smap)) {
+			/* Only destroy() frees the new object with the slot */
+			local_storage = bpf_local_storage_alloc(owner, smap, NULL,
+								value);
+			return IS_ERR(local_storage) ? ERR_CAST(local_storage) :
+			       bpf_local_storage_inline(local_storage, smap);
+		}
+
 		selem = bpf_selem_alloc(smap, owner, value, swap_uptrs);
 		if (!selem)
 			return ERR_PTR(-ENOMEM);
 
-		err = bpf_local_storage_alloc(owner, smap, selem);
-		if (err) {
-			bpf_selem_free(selem, true);
+		local_storage = bpf_local_storage_alloc(owner, smap, selem, NULL);
+		if (IS_ERR(local_storage)) {
+			bpf_selem_free_unpublished(selem, smap);
 			mem_uncharge(smap, owner, smap->elem_size);
-			return ERR_PTR(err);
+			return ERR_CAST(local_storage);
 		}
 
 		return SDATA(selem);
 	}
+
+	/* An object without room for the slot keeps the value in an selem */
+	if (bpf_local_storage_inline(local_storage, smap))
+		return bpf_local_storage_update_inline(local_storage, smap,
+						       value, map_flags);
 
 	if ((map_flags & BPF_F_LOCK) && !(map_flags & BPF_NOEXIST)) {
 		/* Hoping to find an old_sdata to do inline update
@@ -642,7 +816,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		goto free_selem;
 
 	/* Recheck local_storage->list under local_storage->lock */
-	if (unlikely(hlist_empty(&local_storage->list))) {
+	if (unlikely(bpf_local_storage_gone(local_storage))) {
 		/* A parallel del is happening and local_storage is going
 		 * away.  It has just been checked before, so very
 		 * unlikely.  Return instead of retry to keep things
@@ -692,7 +866,7 @@ free_selem:
 	bpf_selem_free_list(&old_selem_free_list, false);
 	if (alloc_selem) {
 		mem_uncharge(smap, owner, smap->elem_size);
-		bpf_selem_free(alloc_selem, true);
+		bpf_selem_free_unpublished(alloc_selem, smap);
 	}
 	return err ? ERR_PTR(err) : SDATA(selem);
 }
@@ -729,17 +903,133 @@ static void bpf_local_storage_cache_idx_free(struct bpf_local_storage_cache *cac
 	spin_unlock(&cache->idx_lock);
 }
 
+static struct bpf_local_storage_map *
+inline_map(struct bpf_local_storage_cache *cache, u32 i)
+{
+	return rcu_dereference_protected(cache->inline_maps[i],
+					 lockdep_is_held(&cache->idx_lock));
+}
+
+/* A live slot that overlaps [off, end), or NULL */
+static struct bpf_local_storage_map *
+inline_overlap(struct bpf_local_storage_cache *cache, u32 off, u32 end)
+{
+	struct bpf_local_storage_map *m;
+	u32 i;
+
+	for (i = 0; i < BPF_LOCAL_STORAGE_INLINE_MAPS; i++) {
+		m = inline_map(cache, i);
+		if (m && off < m->inline_end && m->inline_off < end)
+			return m;
+	}
+	return NULL;
+}
+
+/*
+ * First fit. Slots are not sorted: scan again after each overlap. An overlap
+ * ends after off, so off grows and the loop ends. 0: no room.
+ */
+static u32 bpf_local_storage_inline_fit(struct bpf_local_storage_cache *cache,
+					u32 size)
+{
+	u32 off = BPF_LOCAL_STORAGE_INLINE_START;
+	struct bpf_local_storage_map *m;
+
+	while (off + size <= BPF_LOCAL_STORAGE_INLINE_MAX) {
+		m = inline_overlap(cache, off, off + size);
+		if (!m)
+			return off;
+		off = m->inline_end;
+	}
+	return 0;
+}
+
+/* A slot is an 8 byte tag, then the value, 8 byte aligned */
+static u32 bpf_local_storage_slot_size(u32 value_size)
+{
+	return 8 + round_up(value_size, 8);
+}
+
+/*
+ * Claim a table entry and the first free range for the slot of smap. Old
+ * objects keep the tag and value bytes of a freed map. A new claim number
+ * gives a tag that does not match old tags until the counter wraps, and
+ * rarely matches old value bytes. A program can write a match on purpose,
+ * but that needs CAP_BPF or a BPF token. This is memory safe: no pointer is
+ * read from a slot.
+ */
+static int bpf_local_storage_inline_get(struct bpf_local_storage_map *smap)
+{
+	struct bpf_local_storage_cache *cache = smap->cache;
+	u32 size = bpf_local_storage_slot_size(smap->map.value_size);
+	u32 i, off;
+
+	guard(spinlock)(&cache->idx_lock);
+	for (i = 0; i < BPF_LOCAL_STORAGE_INLINE_MAPS; i++)
+		if (!inline_map(cache, i))
+			break;
+	if (i == BPF_LOCAL_STORAGE_INLINE_MAPS)
+		return -ENOSPC;
+
+	off = bpf_local_storage_inline_fit(cache, size);
+	if (!off)
+		return -ENOSPC;
+
+	/* Never 0, so that no claim number reads as unset */
+	cache->inline_claims = cache->inline_claims + 1 ?: 1;
+	smap->inline_claim = cache->inline_claims;
+	smap->inline_off = off;
+	smap->inline_end = off + size;
+	WRITE_ONCE(cache->inline_end, max(cache->inline_end, smap->inline_end));
+	rcu_assign_pointer(cache->inline_maps[i], smap);
+	return 0;
+}
+
+/* Clear the entry before map free waits for RCU readers of inline_maps[] */
+static void bpf_local_storage_inline_free(struct bpf_local_storage_map *smap)
+{
+	struct bpf_local_storage_cache *cache = smap->cache;
+	struct bpf_local_storage_map *m;
+	bool found = false;
+	u32 i, end = 0;
+
+	guard(spinlock)(&cache->idx_lock);
+	for (i = 0; i < BPF_LOCAL_STORAGE_INLINE_MAPS; i++) {
+		m = inline_map(cache, i);
+		if (m == smap) {
+			RCU_INIT_POINTER(cache->inline_maps[i], NULL);
+			found = true;
+		} else if (m) {
+			end = max(end, m->inline_end);
+		}
+	}
+	WRITE_ONCE(cache->inline_end, end);
+	WARN_ON_ONCE(!found);
+}
+
 int bpf_local_storage_map_alloc_check(union bpf_attr *attr)
 {
 	if (attr->map_flags & ~BPF_LOCAL_STORAGE_CREATE_FLAG_MASK ||
 	    !(attr->map_flags & BPF_F_NO_PREALLOC) ||
+	    ((attr->map_flags & BPF_F_CLONE) &&
+	     (attr->map_flags & BPF_F_INLINE_VALUE)) ||
 	    attr->max_entries ||
 	    attr->key_size != sizeof(int) || !attr->value_size ||
 	    /* Enforce BTF for userspace sk dumping */
 	    !attr->btf_key_type_id || !attr->btf_value_type_id)
 		return -EINVAL;
 
+	/* The slot tag needs an 8 byte acquire and release */
+	if (!IS_ENABLED(CONFIG_64BIT) && (attr->map_flags & BPF_F_INLINE_VALUE))
+		return -EOPNOTSUPP;
+
 	if (attr->value_size > BPF_LOCAL_STORAGE_MAX_VALUE_SIZE)
+		return -E2BIG;
+
+	/* Never fits, also in an empty area: -ENOSPC is only for no room now */
+	if ((attr->map_flags & BPF_F_INLINE_VALUE) &&
+	    bpf_local_storage_slot_size(attr->value_size) >
+	    BPF_LOCAL_STORAGE_INLINE_MAX - BPF_LOCAL_STORAGE_INLINE_START)
 		return -E2BIG;
 
 	return 0;
@@ -753,7 +1043,53 @@ int bpf_local_storage_map_check_btf(struct bpf_map *map,
 	if (!btf_type_is_i32(key_type))
 		return -EINVAL;
 
+	/* An inline value is copied in place and is not freed with a delete */
+	if ((map->map_flags & BPF_F_INLINE_VALUE) && !IS_ERR_OR_NULL(map->record))
+		return -EINVAL;
+
 	return 0;
+}
+
+/*
+ * A storage is freed when its last selem goes away. An object with an inline
+ * area can hold values with an empty list, so mark it as dying under the
+ * lock: from now on updaters return -EAGAIN, and the last selem frees the
+ * object. Free an empty object now.
+ *
+ * If destroy() could not take the lock to unlink an selem, the selem stays
+ * linked. A racing map free that read its storage pointer before destroy()
+ * cleared it unlinks it and frees the object. Else the object leaks, as the
+ * selem does: map free skips the storage, and bpf_selem_unlink_nofail()
+ * warns.
+ *
+ * Only a timeout can fail the lock here: destroy() holds no other lock.
+ * Then try again after a grace period. Nothing frees the object while dying
+ * is false, so its rcu head is free. destroy() never runs in NMI.
+ */
+static void bpf_local_storage_mark_dying_rcu(struct rcu_head *rcu);
+
+static void bpf_local_storage_mark_dying(struct bpf_local_storage *local_storage)
+{
+	unsigned long flags;
+	bool empty;
+
+	if (raw_res_spin_lock_irqsave(&local_storage->lock, flags)) {
+		call_rcu_tasks_trace(&local_storage->rcu,
+				     bpf_local_storage_mark_dying_rcu);
+		return;
+	}
+	WRITE_ONCE(local_storage->dying, true);
+	empty = hlist_empty(&local_storage->list);
+	raw_res_spin_unlock_irqrestore(&local_storage->lock, flags);
+
+	if (empty)
+		bpf_local_storage_free(local_storage, false);
+}
+
+static void bpf_local_storage_mark_dying_rcu(struct rcu_head *rcu)
+{
+	bpf_local_storage_mark_dying(container_of(rcu, struct bpf_local_storage,
+						  rcu));
 }
 
 /*
@@ -763,6 +1099,7 @@ int bpf_local_storage_map_check_btf(struct bpf_map *map,
 u32 bpf_local_storage_destroy(struct bpf_local_storage *local_storage)
 {
 	struct bpf_local_storage_elem *selem;
+	u32 mem;
 
 	/* Neither the bpf_prog nor the bpf_map's syscall
 	 * could be modifying the local_storage->list now.
@@ -786,7 +1123,15 @@ u32 bpf_local_storage_destroy(struct bpf_local_storage *local_storage)
 		smp_mb();
 	}
 
-	return local_storage->mem_charge;
+	/*
+	 * The loop must not free an object with an inline area: only the mark
+	 * lets the last selem free it, so mark it after the loop. The mark can
+	 * free the object, so read mem_charge first.
+	 */
+	mem = local_storage->mem_charge;
+	if (bpf_local_storage_has_inline(local_storage))
+		bpf_local_storage_mark_dying(local_storage);
+	return mem;
 }
 
 u64 bpf_local_storage_map_mem_usage(const struct bpf_map *map)
@@ -833,6 +1178,19 @@ bpf_local_storage_map_alloc(union bpf_attr *attr,
 	smap->elem_size = offsetof(struct bpf_local_storage_elem,
 				   sdata.data[attr->value_size]);
 
+	smap->cache = cache;
+	/*
+	 * Only map create calls map_alloc(). The kernel's copy of an inner map
+	 * template holds no slot, but the map given as inner_map_fd holds one
+	 * until it is freed. map_free() gives the slot back, also when a later
+	 * step of map create fails.
+	 */
+	if (attr->map_flags & BPF_F_INLINE_VALUE) {
+		err = bpf_local_storage_inline_get(smap);
+		if (err)
+			goto free_smap;
+	}
+
 	smap->cache_idx = bpf_local_storage_cache_idx_get(cache);
 	return &smap->map;
 
@@ -852,6 +1210,8 @@ void bpf_local_storage_map_free(struct bpf_map *map,
 
 	smap = (struct bpf_local_storage_map *)map;
 	bpf_local_storage_cache_idx_free(cache, smap->cache_idx);
+	if (smap->inline_off)
+		bpf_local_storage_inline_free(smap);
 
 	/* Note that this map might be concurrently cloned from
 	 * bpf_sk_storage_clone. Wait for any existing bpf_sk_storage_clone
