@@ -484,6 +484,13 @@ tcp_ecn - INTEGER
 	5     AccECN               No ECN
 	===== ==================== ====================
 
+	Note that a BPF program implementing the bpf_tcp_ops 'ecn_init'
+	struct_ops callback, attached to a cgroup, can override this value
+	per connection for the sockets of that cgroup. The callback sees
+	this sysctl value as the default via bpf_get_retval(), and return
+	values outside the table above fall back to it. Connections
+	established via syncookies always use the sysctl value.
+
 	Default: 2
 
 tcp_ecn_option - INTEGER
