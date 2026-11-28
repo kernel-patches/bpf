@@ -1067,7 +1067,7 @@ int bpf_core_patch_insn(const char *prog_name, struct bpf_insn *insn,
 			goto bad_insn;
 		if (res->poison)
 			return bpf_core_poison_insn(prog_name, relo_idx, insn, insn_idx);
-		if (res->validate && insn->imm != orig_val) {
+		if (res->validate && insn->imm != (__s32)orig_val) {
 			pr_warn("prog '%s': relo #%d: unexpected insn #%d (ALU/ALU64) value: got %d, exp %llu -> %llu\n",
 				prog_name, relo_idx,
 				insn_idx, insn->imm, (unsigned long long)orig_val,
