@@ -2365,7 +2365,7 @@ void tls_sw_release_resources_tx(struct sock *sk)
 	/* Wait for any pending async encryptions to complete */
 	tls_encrypt_async_wait(ctx);
 
-	tls_tx_records(sk, -1);
+	tls_tx_records(sk, current->flags & PF_KTHREAD ? MSG_DONTWAIT : -1);
 
 	/* Free up un-sent records in tx_list. First, free
 	 * the partially sent record if any at head of tx_list.
@@ -2465,10 +2465,17 @@ static void tx_work_handler(struct work_struct *work)
 		return;
 
 	if (mutex_trylock(&tls_ctx->tx_lock)) {
+		bool retry;
+		int ret;
+
 		lock_sock(sk);
-		tls_tx_records(sk, -1);
+		ret = tls_tx_records(sk, MSG_DONTWAIT);
+		retry = ret == -EAGAIN && tcp_rtx_and_write_queues_empty(sk);
 		release_sock(sk);
 		mutex_unlock(&tls_ctx->tx_lock);
+		if (retry &&
+		    !test_and_set_bit(BIT_TX_SCHEDULED, &ctx->tx_bitmask))
+			schedule_delayed_work(&ctx->tx_work.work, 1);
 	} else if (!test_and_set_bit(BIT_TX_SCHEDULED, &ctx->tx_bitmask)) {
 		/* Someone is holding the tx_lock, they will likely run Tx
 		 * and cancel the work on their way out of the lock section.
