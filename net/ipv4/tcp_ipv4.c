@@ -391,7 +391,6 @@ void tcp_v4_mtu_reduced(struct sock *sk)
 		WRITE_ONCE(sk->sk_err_soft, EMSGSIZE);
 
 	if (inet->pmtudisc != IP_PMTUDISC_DONT &&
-	    ip_sk_accept_pmtu(sk) &&
 	    inet_csk(sk)->icsk_pmtu_cookie > dmtu) {
 		tcp_sync_mss(sk, dmtu);
 
@@ -585,6 +584,9 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 			 * they should go through unfragmented).
 			 */
 			if (sk->sk_state == TCP_LISTEN)
+				goto out;
+
+			if (!ip_sk_accept_pmtu(sk))
 				goto out;
 
 			WRITE_ONCE(tp->mtu_info, info);
