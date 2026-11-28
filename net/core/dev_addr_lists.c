@@ -30,7 +30,9 @@ static void __hw_addr_changed(struct netdev_hw_addr_list *list)
 	if (!list->is_dev_mc)
 		return;
 	dev = container_of(list, struct net_device, mc);
-	atomic_inc(&dev_net(dev)->dev_mc_genid);
+	rcu_read_lock();
+	atomic_inc(&dev_net_rcu(dev)->dev_mc_genid);
+	rcu_read_unlock();
 }
 
 static void __hw_addr_count_add(struct netdev_hw_addr_list *list, int value)
