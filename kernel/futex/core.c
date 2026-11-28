@@ -388,7 +388,8 @@ __futex_hash(union futex_key *key, struct futex_private_hash *fph, struct futex_
 	}
 #endif
 
-	hash = jhash2((u32 *)key, offsetof(typeof(*key), both.offset) / sizeof(u32),
+	hash = jhash2((u32 *)key,
+		      struct_offset(key, both.offset) / sizeof(u32),
 		      key->both.offset);
 
 	if (node == FUTEX_NO_NODE) {
