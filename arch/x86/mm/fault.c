@@ -1263,7 +1263,16 @@ void do_user_addr_fault(struct pt_regs *regs,
 		     !(error_code & X86_PF_USER) &&
 		     !(regs->flags & X86_EFLAGS_AC))) {
 		/*
-		 * No extable entry here.  This was a kernel access to an
+		 * The CPU refused the access. If the BPF JIT marked this load
+		 * as one that may fault, skip it and zero the destination.
+		 */
+		if (!user_mode(regs) && !(error_code & X86_PF_WRITE) &&
+		    ex_get_fixup_type(regs->ip) == EX_TYPE_BPF &&
+		    fixup_exception(regs, X86_TRAP_PF, error_code, address))
+			return;
+
+		/*
+		 * No other fixups here.  This was a kernel access to an
 		 * invalid pointer.  get_kernel_nofault() will not get here.
 		 */
 		page_fault_oops(regs, error_code, address);
