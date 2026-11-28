@@ -26,6 +26,7 @@
  *		containing the IV, the scatter gather list and the aead request
  * @payload_offset: offset in the skb where the payload starts
  * @nosignal: whether this skb should be sent with the MSG_NOSIGNAL flag (TCP)
+ * @data: whether this skb is an encrypted data packet (TCP)
  */
 struct ovpn_cb {
 	struct ovpn_peer *peer;
@@ -33,6 +34,7 @@ struct ovpn_cb {
 	void *crypto_tmp;
 	unsigned int payload_offset;
 	bool nosignal;
+	bool data;
 };
 
 static inline struct ovpn_cb *ovpn_skb_cb(struct sk_buff *skb)

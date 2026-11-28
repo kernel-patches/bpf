@@ -159,7 +159,7 @@ static struct frag_queue *fq_find(struct net *net, __be32 id, u32 user,
 					    IPV6_ADDR_LINKLOCAL)))
 		key.iif = 0;
 
-	q = inet_frag_find(nf_frag->fqdir, &key);
+	q = inet_frag_find(nf_frag->fqdir, &key, NULL);
 	if (!q)
 		return NULL;
 
@@ -184,6 +184,14 @@ static int nf_ct_frag6_queue(struct frag_queue *fq, struct sk_buff *skb,
 
 	payload_len = ntohs(ipv6_hdr(skb)->payload_len);
 
+	/* IPV6_HDRINCL allows payload_len to differ from the real packet
+	 * length.  Never let it promise more than the skb actually holds.
+	 */
+	if (payload_len + sizeof(struct ipv6hdr) > skb->len) {
+		pr_debug("payload_len exceeds skb length.\n");
+		goto err;
+	}
+
 	offset = ntohs(fhdr->frag_off) & ~0x7;
 	end = offset + (payload_len -
 			((u8 *)(fhdr + 1) - (u8 *)(ipv6_hdr(skb) + 1)));
@@ -192,6 +200,13 @@ static int nf_ct_frag6_queue(struct frag_queue *fq, struct sk_buff *skb,
 		pr_debug("offset is too large.\n");
 		return -EINVAL;
 	}
+
+	/* A fragment must carry at least one byte after its fragment
+	 * header, otherwise end < offset and the rb-tree ordering breaks.
+	 * Reject before touching any fq state.
+	 */
+	if (end <= offset)
+		goto err;
 
 	ecn = ip6_frag_ecn(ipv6_hdr(skb));
 
@@ -235,9 +250,6 @@ static int nf_ct_frag6_queue(struct frag_queue *fq, struct sk_buff *skb,
 			fq->q.len = end;
 		}
 	}
-
-	if (end == offset)
-		goto err;
 
 	/* Point into the IP datagram 'data' part. */
 	if (!pskb_pull(skb, (u8 *) (fhdr + 1) - skb->data)) {

@@ -1651,8 +1651,18 @@ alloc_new_skb:
 			 */
 			datalen = length + fraggap;
 
-			if (datalen > (cork->length <= mtu ? mtu : maxfraglen) - fragheaderlen)
-				datalen = maxfraglen - fragheaderlen - rt->dst.trailer_len;
+			if (datalen > (cork->length <= mtu ? mtu : maxfraglen) - fragheaderlen) {
+				unsigned int need = (unsigned int)transhdrlen + fraggap;
+				unsigned int room = maxfraglen - fragheaderlen;
+				unsigned int trailer = (unsigned int)rt->dst.trailer_len;
+
+				if (maxfraglen <= fragheaderlen || room <= trailer ||
+				    room - trailer < need) {
+					err = -EMSGSIZE;
+					goto error;
+				}
+				datalen = room - trailer;
+			}
 			fraglen = datalen + fragheaderlen;
 			pagedlen = 0;
 
@@ -1727,9 +1737,14 @@ alloc_new_skb:
 			skb->transport_header = (skb->network_header +
 						 fragheaderlen);
 			if (fraggap) {
-				skb->csum = skb_copy_and_csum_bits(
-					skb_prev, maxfraglen,
-					data + transhdrlen, fraggap);
+				if (skb_copy_and_csum_bits(skb_prev, maxfraglen,
+							   data + transhdrlen,
+							   fraggap,
+							   &skb->csum)) {
+					err = -EFAULT;
+					kfree_skb(skb);
+					goto error;
+				}
 				skb_prev->csum = csum_sub(skb_prev->csum,
 							  skb->csum);
 				data += fraggap;
@@ -1742,8 +1757,6 @@ alloc_new_skb:
 				err = -EFAULT;
 				kfree_skb(skb);
 				goto error;
-			} else if (flags & MSG_SPLICE_PAGES) {
-				copy = 0;
 			}
 
 			offset += copy;

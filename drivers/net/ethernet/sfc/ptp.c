@@ -1633,26 +1633,26 @@ int efx_ptp_probe(struct efx_nic *efx, struct efx_channel *channel)
 
 	if (efx->mcdi->fn_flags &
 	    (1 << MC_CMD_DRV_ATTACH_EXT_OUT_FLAG_PRIMARY)) {
+		INIT_WORK(&ptp->pps_work, efx_ptp_pps_worker);
+		ptp->pps_workwq = create_singlethread_workqueue("sfc_pps");
+		if (!ptp->pps_workwq) {
+			rc = -ENOMEM;
+			goto fail3;
+		}
+
 		ptp->phc_clock_info = efx_phc_clock_info;
 		ptp->phc_clock = ptp_clock_register(&ptp->phc_clock_info,
 						    &efx->pci_dev->dev);
 		if (IS_ERR(ptp->phc_clock)) {
 			rc = PTR_ERR(ptp->phc_clock);
-			goto fail3;
-		} else if (ptp->phc_clock) {
-			INIT_WORK(&ptp->pps_work, efx_ptp_pps_worker);
-			ptp->pps_workwq = create_singlethread_workqueue("sfc_pps");
-			if (!ptp->pps_workwq) {
-				rc = -ENOMEM;
-				goto fail4;
-			}
+			goto fail4;
 		}
 	}
 	ptp->nic_ts_enabled = false;
 
 	return 0;
 fail4:
-	ptp_clock_unregister(efx->ptp_data->phc_clock);
+	destroy_workqueue(efx->ptp_data->pps_workwq);
 
 fail3:
 	destroy_workqueue(efx->ptp_data->workwq);
@@ -1702,16 +1702,16 @@ void efx_ptp_remove(struct efx_nic *efx)
 
 	cancel_work_sync(&efx->ptp_data->work);
 	cancel_delayed_work_sync(&efx->ptp_data->cleanup_work);
-	if (efx->ptp_data->pps_workwq)
+	if (efx->ptp_data->pps_workwq) {
 		cancel_work_sync(&efx->ptp_data->pps_work);
+		destroy_workqueue(efx->ptp_data->pps_workwq);
+	}
 
 	skb_queue_purge(&efx->ptp_data->rxq);
 	skb_queue_purge(&efx->ptp_data->txq);
 
-	if (efx->ptp_data->phc_clock) {
-		destroy_workqueue(efx->ptp_data->pps_workwq);
+	if (efx->ptp_data->phc_clock)
 		ptp_clock_unregister(efx->ptp_data->phc_clock);
-	}
 
 	destroy_workqueue(efx->ptp_data->workwq);
 

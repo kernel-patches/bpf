@@ -1290,6 +1290,7 @@ int rndis_set_subchannel(struct net_device *ndev,
 	struct net_device_context *ndev_ctx = netdev_priv(ndev);
 	struct hv_device *hv_dev = ndev_ctx->device_ctx;
 	struct rndis_device *rdev = nvdev->extension;
+	bool restore_rss_table;
 	int i, ret;
 
 	ASSERT_RTNL();
@@ -1332,11 +1333,23 @@ int rndis_set_subchannel(struct net_device *ndev,
 	for (i = 0; i < VRSS_SEND_TAB_SIZE; i++)
 		ndev_ctx->tx_table[i] = i % nvdev->num_chn;
 
-	/* ignore failures from setting rss parameters, still have channels */
-	if (dev_info)
-		rndis_filter_set_rss_param(rdev, dev_info->rss_key);
-	else
+	if (dev_info) {
+		/* Validate the whole saved table against the granted channels. */
+		restore_rss_table = netif_is_rxfh_configured(ndev) &&
+				    dev_info->rss_indir_size == ndev_ctx->rx_table_sz;
+		for (i = 0; restore_rss_table && i < ndev_ctx->rx_table_sz; i++)
+			if (dev_info->rss_indir_table[i] >= nvdev->num_chn)
+				restore_rss_table = false;
+
+		/* Restore the saved table if valid, otherwise use defaults. */
+		for (i = 0; i < ndev_ctx->rx_table_sz; i++)
+			ndev_ctx->rx_table[i] = restore_rss_table ?
+				dev_info->rss_indir_table[i] :
+				ethtool_rxfh_indir_default(i, nvdev->num_chn);
+	} else {
+		/* Set initial RSS parameters; ignore failures to keep the channels. */
 		rndis_filter_set_rss_param(rdev, netvsc_hash_key);
+	}
 
 	netif_set_real_num_tx_queues(ndev, nvdev->num_chn);
 	netif_set_real_num_rx_queues(ndev, nvdev->num_chn);
@@ -1500,6 +1513,8 @@ struct netvsc_device *rndis_filter_device_add(struct hv_device *dev,
 
 	net_device->extension = rndis_device;
 	rndis_device->ndev = net;
+	memcpy(rndis_device->rss_key, device_info->rss_key,
+	       NETVSC_HASH_KEYLEN);
 
 	/* Send the rndis initialization message */
 	ret = rndis_filter_init_device(rndis_device, net_device);
@@ -1570,11 +1585,8 @@ struct netvsc_device *rndis_filter_device_add(struct hv_device *dev,
 	/* We will use the given number of channels if available. */
 	net_device->num_chn = min(net_device->max_chn, device_info->num_chn);
 
-	if (!netif_is_rxfh_configured(net)) {
-		for (i = 0; i < ndc->rx_table_sz; i++)
-			ndc->rx_table[i] = ethtool_rxfh_indir_default(
-						i, net_device->num_chn);
-	}
+	for (i = 0; i < ndc->rx_table_sz; i++)
+		ndc->rx_table[i] = ethtool_rxfh_indir_default(i, net_device->num_chn);
 
 	atomic_set(&net_device->open_chn, 1);
 	vmbus_set_sc_create_callback(dev->channel, netvsc_sc_open);
@@ -1598,6 +1610,9 @@ out:
 	/* setting up multiple channels failed */
 	net_device->max_chn = 1;
 	net_device->num_chn = 1;
+	if (ndc->rx_table_sz)
+		memset(ndc->rx_table, 0,
+		       ndc->rx_table_sz * sizeof(*ndc->rx_table));
 	return net_device;
 
 err_dev_remv:

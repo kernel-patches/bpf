@@ -420,6 +420,7 @@ static int sctp_do_bind(struct sock *sk, union sctp_addr *addr, int len)
 	struct sctp_bind_addr *bp = &ep->base.bind_addr;
 	struct sctp_af *af;
 	unsigned short snum;
+	bool bound;
 	int ret = 0;
 
 	/* Common sockaddr verification. */
@@ -467,6 +468,7 @@ static int sctp_do_bind(struct sock *sk, union sctp_addr *addr, int len)
 	 * The function sctp_get_port_local() does duplicate address
 	 * detection.
 	 */
+	bound = sp->bind_hash;
 	addr->v4.sin_port = htons(snum);
 	if (sctp_get_port_local(sk, addr))
 		return -EADDRINUSE;
@@ -484,7 +486,8 @@ static int sctp_do_bind(struct sock *sk, union sctp_addr *addr, int len)
 				 SCTP_ADDR_SRC, GFP_ATOMIC);
 
 	if (ret) {
-		sctp_put_port(sk);
+		if (!bound)
+			sctp_put_port(sk);
 		return ret;
 	}
 	/* Copy back into socket for getsockname() use. */
@@ -9629,6 +9632,23 @@ static int sctp_sock_migrate(struct sock *oldsk, struct sock *newsk,
 	 */
 	err = sctp_bind_addr_dup(&newsp->ep->base.bind_addr,
 				 &oldsp->ep->base.bind_addr, GFP_KERNEL);
+	if (err)
+		return err;
+
+	/* Copy the endpoint's feature flags and AUTH settings from the original
+	 * endpoint so that restarts on the accepted or peeled-off socket
+	 * negotiate the same capabilities.
+	 */
+	newep->prsctp_enable = oldsp->ep->prsctp_enable;
+	newep->ecn_enable = oldsp->ep->ecn_enable;
+	newep->reconf_enable = oldsp->ep->reconf_enable;
+	newep->asconf_enable = oldsp->ep->asconf_enable;
+	newep->intl_enable = oldsp->ep->intl_enable;
+	newep->strreset_enable = oldsp->ep->strreset_enable;
+	newep->sndbuf_policy = oldsp->ep->sndbuf_policy;
+	newep->rcvbuf_policy = oldsp->ep->rcvbuf_policy;
+
+	err = sctp_auth_ep_copy(newep, oldsp->ep, GFP_KERNEL);
 	if (err)
 		return err;
 

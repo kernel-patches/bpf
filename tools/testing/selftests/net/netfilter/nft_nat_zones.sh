@@ -171,7 +171,7 @@ done
 
 wait || ret=1
 
-[ "$ret" -ne 0 ] && "FAIL: Ping failure from $cl" 1>&2
+[ "$ret" -ne 0 ] && echo "FAIL: Ping failure from $cl" 1>&2
 
 for i in $(seq 1 "$maxclients"); do
    if ! ip netns exec "$gw" nft get element inet raw inicmp "{ 10.1.0.3 . \"veth$i\" . 10.3.0.99 }" | grep -q "{ 10.1.0.3 . \"veth$i\" . 10.3.0.99 counter packets 3 bytes 252 }"; then

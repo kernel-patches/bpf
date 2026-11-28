@@ -445,6 +445,12 @@ union sctp_addr *sctp_find_unmatch_addr(struct sctp_bind_addr	*bp,
 	 * can't change.
 	 */
 	list_for_each_entry(laddr, &bp->address_list, list) {
+		/* An address already being deleted cannot serve as the
+		 * one remaining address.
+		 */
+		if (laddr->state == SCTP_ADDR_DEL)
+			continue;
+
 		addr_buf = (union sctp_addr *)addrs;
 		for (i = 0; i < addrcnt; i++) {
 			addr = addr_buf;

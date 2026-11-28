@@ -2208,7 +2208,7 @@ def _multi_parse(ri, struct, init_lines, local_vars):
             var_set |= set(l_vars) if l_vars else set()
         except Exception:
             pass  # _attr_get() not implemented by simple types, ignore
-    local_vars += list(var_set)
+
     if indexed_arrays or multi_attrs:
         local_vars.append('int i;')
     if needs_parg:
@@ -2218,7 +2218,14 @@ def _multi_parse(ri, struct, init_lines, local_vars):
     all_multi = indexed_arrays | multi_attrs
 
     for arg in sorted(all_multi):
-        local_vars.append(f"unsigned int n_{struct[arg].c_name} = 0;")
+        aspec = struct[arg]
+        var_set.add(f'unsigned int n_{struct[arg].c_name} = 0;')
+        if aspec.type == 'binary' and 'struct' in aspec:
+            var_set.add('size_t size;')
+        elif aspec.type == 'string':
+            var_set.add('unsigned int len;')
+
+    local_vars += list(var_set)
 
     ri.cw.block_start()
     ri.cw.write_func_lvar(local_vars)
@@ -2304,13 +2311,12 @@ def _multi_parse(ri, struct, init_lines, local_vars):
         elif aspec.type in scalars:
             ri.cw.p(f"dst->{aspec.c_name}[i] = ynl_attr_get_{aspec.type}(attr);")
         elif aspec.type == 'binary' and 'struct' in aspec:
-            ri.cw.p('size_t len = ynl_attr_data_len(attr);')
+            ri.cw.p('size = ynl_attr_data_len(attr);')
             ri.cw.nl()
-            ri.cw.p(f'if (len > sizeof(dst->{aspec.c_name}[0]))')
-            ri.cw.p(f'len = sizeof(dst->{aspec.c_name}[0]);')
-            ri.cw.p(f"memcpy(&dst->{aspec.c_name}[i], ynl_attr_data(attr), len);")
+            ri.cw.p(f'if (size > sizeof(dst->{aspec.c_name}[0]))')
+            ri.cw.p(f'size = sizeof(dst->{aspec.c_name}[0]);')
+            ri.cw.p(f"memcpy(&dst->{aspec.c_name}[i], ynl_attr_data(attr), size);")
         elif aspec.type == 'string':
-            ri.cw.p('unsigned int len;')
             ri.cw.nl()
             ri.cw.p('len = strnlen(ynl_attr_get_str(attr), ynl_attr_data_len(attr));')
             ri.cw.p(f'dst->{aspec.c_name}[i] = malloc(sizeof(struct ynl_string) + len + 1);')

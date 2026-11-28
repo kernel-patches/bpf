@@ -399,6 +399,13 @@ static bool bcm_ptp_rxtstamp(struct mii_timestamper *mii_ts,
 	if (!header)
 		return false;
 
+	/* In one-step P2P, the PHY updates the correctionField of
+	 * Pdelay_Req instead of inserting a timestamp.
+	 */
+	if (priv->tx_type == HWTSTAMP_TX_ONESTEP_P2P &&
+	    ptp_get_msgtype(header, type) == PTP_MSGTYPE_PDELAY_REQ)
+		return false;
+
 	data = (u8 *)(header + 1);
 	sec = get_unaligned_be32(data);
 	nsec = get_unaligned_be32(data + 4);
@@ -801,6 +808,8 @@ static int bcm_ptp_hwtstamp_set(struct mii_timestamper *mii_ts,
 
 	switch (cfg->rx_filter) {
 	case HWTSTAMP_FILTER_NONE:
+		if (cfg->tx_type == HWTSTAMP_TX_ONESTEP_P2P)
+			return -ERANGE;
 		priv->hwts_rx = false;
 		break;
 	case HWTSTAMP_FILTER_PTP_V2_L4_EVENT:
@@ -826,15 +835,19 @@ static int bcm_ptp_hwtstamp_set(struct mii_timestamper *mii_ts,
 
 	mode = TX_MODE_SEL(PORT, SYNC, REPLACE_TS) |
 	       TX_MODE_SEL(PORT, DELAY_REQ, REPLACE_TS) |
-	       TX_MODE_SEL(PORT, PDELAY_REQ, REPLACE_TS) |
-	       TX_MODE_SEL(PORT, PDELAY_RESP, REPLACE_TS);
+	       TX_MODE_SEL(PORT, PDELAY_REQ, REPLACE_TS);
+	if (priv->tx_type == HWTSTAMP_TX_ONESTEP_P2P)
+		mode |= TX_MODE_SEL(PORT, PDELAY_RESP, UPDATE_CF);
 
 	bcm_phy_write_exp(priv->phydev, TX_EVENT_MODE, mode);
 
 	mode = RX_MODE_SEL(PORT, SYNC, INSERT_TS_64) |
 	       RX_MODE_SEL(PORT, DELAY_REQ, INSERT_TS_64) |
-	       RX_MODE_SEL(PORT, PDELAY_REQ, INSERT_TS_64) |
 	       RX_MODE_SEL(PORT, PDELAY_RESP, INSERT_TS_64);
+	if (priv->tx_type == HWTSTAMP_TX_ONESTEP_P2P)
+		mode |= RX_MODE_SEL(PORT, PDELAY_REQ, UPDATE_CF);
+	else
+		mode |= RX_MODE_SEL(PORT, PDELAY_REQ, INSERT_TS_64);
 
 	bcm_phy_write_exp(priv->phydev, RX_EVENT_MODE, mode);
 

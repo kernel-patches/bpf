@@ -43,7 +43,7 @@ static const char gve_gstrings_main_stats[][ETH_GSTRING_LEN] = {
 	"rx_packets", "rx_hsplit_pkt", "tx_packets", "rx_bytes",
 	"tx_bytes", "rx_dropped", "tx_dropped", "tx_timeouts",
 	"rx_skb_alloc_fail", "rx_buf_alloc_fail", "rx_desc_err_dropped_pkt",
-	"rx_hsplit_unsplit_pkt",
+	"rx_hsplit_unsplit_pkt", "rx_critical_low_bufs",
 	"interface_up_cnt", "interface_down_cnt", "reset_cnt",
 	"page_alloc_fail", "dma_mapping_error", "stats_report_trigger_cnt",
 };
@@ -52,6 +52,7 @@ static const char gve_gstrings_rx_stats[][ETH_GSTRING_LEN] = {
 	"rx_posted_desc[%u]", "rx_completed_desc[%u]", "rx_consumed_desc[%u]",
 	"rx_bytes[%u]", "rx_hsplit_bytes[%u]", "rx_cont_packet_cnt[%u]",
 	"rx_frag_flip_cnt[%u]", "rx_frag_copy_cnt[%u]", "rx_frag_alloc_cnt[%u]",
+	"rx_critical_low_bufs[%u]",
 	"rx_dropped_pkt[%u]", "rx_copybreak_pkt[%u]", "rx_copied_pkt[%u]",
 	"rx_queue_drop_cnt[%u]", "rx_no_buffers_posted[%u]",
 	"rx_drops_packet_over_mru[%u]", "rx_drops_invalid_checksum[%u]",
@@ -152,11 +153,13 @@ gve_get_ethtool_stats(struct net_device *netdev,
 	u64 tmp_rx_pkts, tmp_rx_hsplit_pkt, tmp_rx_bytes, tmp_rx_hsplit_bytes,
 		tmp_rx_skb_alloc_fail, tmp_rx_buf_alloc_fail,
 		tmp_rx_desc_err_dropped_pkt, tmp_rx_hsplit_unsplit_pkt,
+		tmp_rx_critical_low_bufs,
 		tmp_tx_pkts, tmp_tx_bytes,
 		tmp_xdp_tx_errors, tmp_xdp_redirect_errors;
 	u64 rx_buf_alloc_fail, rx_desc_err_dropped_pkt, rx_hsplit_unsplit_pkt,
-		rx_pkts, rx_hsplit_pkt, rx_skb_alloc_fail, rx_bytes, tx_pkts, tx_bytes,
-		tx_dropped, xdp_tx_errors, xdp_redirect_errors;
+		rx_critical_low_bufs, rx_pkts, rx_hsplit_pkt, rx_skb_alloc_fail,
+		rx_bytes, tx_pkts, tx_bytes, tx_dropped, xdp_tx_errors,
+		xdp_redirect_errors;
 	int rx_base_stats_idx, max_rx_stats_idx, max_tx_stats_idx;
 	int stats_idx, stats_region_len, nic_stats_len;
 	struct stats *report_stats;
@@ -198,6 +201,7 @@ gve_get_ethtool_stats(struct net_device *netdev,
 	for (rx_pkts = 0, rx_bytes = 0, rx_hsplit_pkt = 0,
 	     rx_skb_alloc_fail = 0, rx_buf_alloc_fail = 0,
 	     rx_desc_err_dropped_pkt = 0, rx_hsplit_unsplit_pkt = 0,
+	     rx_critical_low_bufs = 0,
 	     xdp_tx_errors = 0, xdp_redirect_errors = 0,
 	     ring = 0;
 	     ring < priv->rx_cfg.num_queues; ring++) {
@@ -216,6 +220,8 @@ gve_get_ethtool_stats(struct net_device *netdev,
 					rx->rx_desc_err_dropped_pkt;
 				tmp_rx_hsplit_unsplit_pkt =
 					rx->rx_hsplit_unsplit_pkt;
+				tmp_rx_critical_low_bufs =
+					rx->rx_critical_low_bufs;
 				tmp_xdp_tx_errors = rx->xdp_tx_errors;
 				tmp_xdp_redirect_errors =
 					rx->xdp_redirect_errors;
@@ -228,6 +234,7 @@ gve_get_ethtool_stats(struct net_device *netdev,
 			rx_buf_alloc_fail += tmp_rx_buf_alloc_fail;
 			rx_desc_err_dropped_pkt += tmp_rx_desc_err_dropped_pkt;
 			rx_hsplit_unsplit_pkt += tmp_rx_hsplit_unsplit_pkt;
+			rx_critical_low_bufs += tmp_rx_critical_low_bufs;
 			xdp_tx_errors += tmp_xdp_tx_errors;
 			xdp_redirect_errors += tmp_xdp_redirect_errors;
 		}
@@ -263,6 +270,7 @@ gve_get_ethtool_stats(struct net_device *netdev,
 	data[i++] = rx_buf_alloc_fail;
 	data[i++] = rx_desc_err_dropped_pkt;
 	data[i++] = rx_hsplit_unsplit_pkt;
+	data[i++] = rx_critical_low_bufs;
 	data[i++] = priv->interface_up_cnt;
 	data[i++] = priv->interface_down_cnt;
 	data[i++] = priv->reset_cnt;
@@ -335,6 +343,8 @@ gve_get_ethtool_stats(struct net_device *netdev,
 				tmp_rx_buf_alloc_fail = rx->rx_buf_alloc_fail;
 				tmp_rx_desc_err_dropped_pkt =
 					rx->rx_desc_err_dropped_pkt;
+				tmp_rx_critical_low_bufs =
+					rx->rx_critical_low_bufs;
 				tmp_xdp_tx_errors = rx->xdp_tx_errors;
 				tmp_xdp_redirect_errors =
 					rx->xdp_redirect_errors;
@@ -346,6 +356,7 @@ gve_get_ethtool_stats(struct net_device *netdev,
 			data[i++] = rx->rx_frag_flip_cnt;
 			data[i++] = rx->rx_frag_copy_cnt;
 			data[i++] = rx->rx_frag_alloc_cnt;
+			data[i++] = tmp_rx_critical_low_bufs;
 			/* rx dropped packets */
 			data[i++] = tmp_rx_skb_alloc_fail +
 				    tmp_rx_desc_err_dropped_pkt +

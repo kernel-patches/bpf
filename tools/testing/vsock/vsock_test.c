@@ -662,6 +662,113 @@ static void test_seqpacket_timeout_server(const struct test_opts *opts)
 	close(fd);
 }
 
+#define STREAM_RCVTIMEO_DRIP_BYTES	6
+#define STREAM_RCVTIMEO_DRIP_USEC	800000 /* 0.8s, inside the 1s timeout */
+
+/* Keep the data socket open until both sides confirm. The client
+ * writes WAITDONE when recv() returns, but must not close until the
+ * server has finished drip-feeding all 6 bytes and acknowledged;
+ * otherwise later sends hit EPIPE. Failure paths complete the same
+ * handshake so the server is not left in control_expectln("WAITDONE").
+ */
+static void test_stream_timeout_waitall_done(int fd)
+{
+	control_writeln("WAITDONE");
+	control_expectln("SRVDONE");
+	close(fd);
+}
+
+static void test_stream_timeout_waitall_client(const struct test_opts *opts)
+{
+	char buf[STREAM_RCVTIMEO_DRIP_BYTES];
+	time_t read_enter_ns;
+	struct timeval tv;
+	time_t read_ns;
+	int failed = 0;
+	ssize_t n;
+	int fd;
+
+	fd = vsock_stream_connect(opts->peer_cid, opts->peer_port);
+	if (fd < 0) {
+		perror("connect");
+		exit(EXIT_FAILURE);
+	}
+
+	tv.tv_sec = RCVTIMEO_TIMEOUT_SEC;
+	tv.tv_usec = 0;
+
+	setsockopt_timeval_check(fd, SOL_SOCKET, SO_RCVTIMEO, tv,
+				 "setsockopt(SO_RCVTIMEO)");
+
+	/* Enter recv() before the peer starts drip-feeding, so the first
+	 * byte cannot already be queued.
+	 */
+	control_writeln("CLNSENT");
+
+	read_enter_ns = current_nsec();
+	n = recv(fd, buf, sizeof(buf), MSG_WAITALL);
+	read_ns = current_nsec() - read_enter_ns;
+
+	/* Unfixed kernels restart the full SO_RCVTIMEO after each partial
+	 * read, so this recv() returns 6 bytes after ~4.8s. A cumulative
+	 * 1s timeout returns much sooner; use 2s as the cap so the two
+	 * outcomes cannot be confused.
+	 */
+	if (read_ns >= 2ULL * NSEC_PER_SEC * RCVTIMEO_TIMEOUT_SEC) {
+		fprintf(stderr,
+			"recv(MSG_WAITALL) exceeded SO_RCVTIMEO, %lu ns\n",
+			read_ns);
+		failed = 1;
+	}
+
+	if (n == sizeof(buf)) {
+		fprintf(stderr,
+			"recv(MSG_WAITALL) completed under drip-feed\n");
+		failed = 1;
+	}
+
+	if (n < 0 && errno != EAGAIN) {
+		perror("EAGAIN expected");
+		failed = 1;
+	}
+
+	if (n == 0) {
+		fprintf(stderr, "unexpected EOF on recv(MSG_WAITALL)\n");
+		failed = 1;
+	}
+
+	test_stream_timeout_waitall_done(fd);
+	if (failed)
+		exit(EXIT_FAILURE);
+}
+
+static void test_stream_timeout_waitall_server(const struct test_opts *opts)
+{
+	int fd;
+	int i;
+
+	fd = vsock_stream_accept(VMADDR_CID_ANY, opts->peer_port, NULL);
+	if (fd < 0) {
+		perror("accept");
+		exit(EXIT_FAILURE);
+	}
+
+	control_expectln("CLNSENT");
+
+	/* Drip-feed all 6 bytes even after the client times out, so an
+	 * unfixed kernel still collects a full 6-byte recv and fails.
+	 * The client keeps the data socket open until SRVDONE.
+	 */
+	for (i = 0; i < STREAM_RCVTIMEO_DRIP_BYTES; i++) {
+		timeout_usleep(STREAM_RCVTIMEO_DRIP_USEC);
+		send_byte(fd, 1, 0);
+	}
+
+	control_expectln("WAITDONE");
+	control_writeln("SRVDONE");
+	close(fd);
+}
+
 static void test_seqpacket_bigmsg_client(const struct test_opts *opts)
 {
 	unsigned long long sock_buf_size;
@@ -2738,6 +2845,11 @@ static struct test_case test_cases[] = {
 		.name = "SOCK_SEQPACKET timeout",
 		.run_client = test_seqpacket_timeout_client,
 		.run_server = test_seqpacket_timeout_server,
+	},
+	{
+		.name = "SOCK_STREAM MSG_WAITALL timeout",
+		.run_client = test_stream_timeout_waitall_client,
+		.run_server = test_stream_timeout_waitall_server,
 	},
 	{
 		.name = "SOCK_SEQPACKET invalid receive buffer",

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0
 #
-# Testing for IPv4 and IPv6 BIG TCP over VXLAN, GENEVE and bareudp tunnels.
+# Testing for IPv4 and IPv6 BIG TCP over VXLAN, GENEVE and bareudp tunnels,
+# and over ipip, gre, gretap, sit, ip6tnl, ip6gre and ip6gretap tunnels,
+# without encapsulation and with FOU and GUE.
 
 source "$(dirname "$0")/lib.sh"
 
@@ -16,6 +18,8 @@ CLIENT_IP4="192.168.1.2"
 CLIENT_IP6="2001:db8::1:2"
 CLIENT_IP4_TUN="192.168.2.2"
 CLIENT_IP6_TUN="2001:db8::2:2"
+
+FOU_PORT=5555
 
 # Kselftest framework requirement - SKIP code is 4.
 ksft_skip=4
@@ -71,15 +75,86 @@ setup_bareudp() {
 	return 1
 }
 
+# $1: tunnel type, $2: traffic family
+# Prints the IP protocol carried by FOU for this tunnel.
+fou_ipproto() {
+	case "$1" in
+	ipip)
+		echo 4
+		;;
+	sit)
+		echo 41
+		;;
+	ip6tnl)
+		if [ "$2" = 4 ]; then
+			echo 4
+		else
+			echo 41
+		fi
+		;;
+	*)
+		echo 47
+		;;
+	esac
+}
+
+# Create an IP tunnel device, with FOU or GUE encapsulation if requested.
+# $1: netns, $2: device, $3: tunnel type, $4: tunnel family,
+# $5: traffic family, $6: encapsulation (none, fou or gue),
+# $7: local underlay address, $8: remote one
+setup_ip_tunnel() {
+	local encap_args=()
+	local fou_args=()
+	local mode=()
+
+	if [ "$4" = 6 ]; then
+		fou_args=(-6)
+	fi
+	if [ "$6" = fou ]; then
+		ip -netns "$1" fou add port "$FOU_PORT" \
+			ipproto "$(fou_ipproto "$3" "$5")" "${fou_args[@]}" ||
+			return 1
+	elif [ "$6" = gue ]; then
+		ip -netns "$1" fou add port "$FOU_PORT" gue "${fou_args[@]}" ||
+			return 1
+	fi
+	if [ "$6" != none ]; then
+		encap_args=(encap "$6" encap-sport auto encap-dport "$FOU_PORT")
+		# Check the outer UDP checksum too
+		if [ "$4" = 4 ]; then
+			encap_args+=(encap-csum)
+		else
+			encap_args+=(encap-udp6-csum)
+		fi
+	fi
+	if [ "$3" = ip6tnl ]; then
+		if [ "$5" = 4 ]; then
+			mode=(mode ipip6)
+		else
+			mode=(mode ip6ip6)
+		fi
+	fi
+
+	ip -netns "$1" link add "$2" type "$3" "${mode[@]}" \
+		local "$7" remote "$8" "${encap_args[@]}"
+}
+
+# $1: tunnel type, $2: tunnel family, $3: veth tx csum offload,
+# and for IP tunnels: $4: traffic family, $5: encapsulation
 setup_tunnel() {
+	local name="${1^^}"
+
+	if [ "${5:-none}" != none ]; then
+		name="$name/${5^^}"
+	fi
 	if [ "$2" = 4 ]; then
 		SERVER_IP="$SERVER_IP4"
 		CLIENT_IP="$CLIENT_IP4"
-		echo "Setting up ${1^^} over IPv4, veth tx csum offload $3"
+		echo "Setting up $name over IPv4, veth tx csum offload $3"
 	else
 		SERVER_IP="$SERVER_IP6"
 		CLIENT_IP="$CLIENT_IP6"
-		echo "Setting up ${1^^} over IPv6, veth tx csum offload $3"
+		echo "Setting up $name over IPv6, veth tx csum offload $3"
 	fi
 
 	case "$1" in
@@ -94,6 +169,10 @@ setup_tunnel() {
 	bareudp)
 		setup_bareudp "$CLIENT_NS" tun0 "$CLIENT_IP" "$SERVER_IP" ||
 			return 1
+		;;
+	*)
+		setup_ip_tunnel "$CLIENT_NS" tun0 "$1" "$2" "$4" "$5" \
+			"$CLIENT_IP" "$SERVER_IP" || return 1
 		;;
 	esac
 	ip -netns "$CLIENT_NS" link set tun0 up
@@ -115,6 +194,10 @@ setup_tunnel() {
 		setup_bareudp "$SERVER_NS" tun1 "$SERVER_IP" "$CLIENT_IP" ||
 			return 1
 		;;
+	*)
+		setup_ip_tunnel "$SERVER_NS" tun1 "$1" "$2" "$4" "$5" \
+			"$SERVER_IP" "$CLIENT_IP" || return 1
+		;;
 	esac
 	ip -netns "$SERVER_NS" link set tun1 up
 	ip -netns "$SERVER_NS" addr replace "$SERVER_IP4_TUN/24" dev tun1
@@ -127,9 +210,22 @@ setup_tunnel() {
 	ip netns exec "$SERVER_NS" ethtool -K link1 tx-checksumming "$3" > /dev/null
 }
 
+# For IP tunnels: $1: tunnel family, $2: encapsulation
 cleanup_tunnel() {
+	local fou_args=()
+	local ns
+
 	ip -netns "$CLIENT_NS" link del tun0
 	ip -netns "$SERVER_NS" link del tun1
+	if [ "${2:-none}" = none ]; then
+		return 0
+	fi
+	if [ "$1" = 6 ]; then
+		fou_args=(-6)
+	fi
+	for ns in "$CLIENT_NS" "$SERVER_NS"; do
+		ip -netns "$ns" fou del port "$FOU_PORT" "${fou_args[@]}"
+	done
 }
 
 cleanup() {
@@ -240,6 +336,30 @@ if ! ip link help 2>&1 | grep gso_ipv4_max_size &> /dev/null; then
 	exit "$ksft_skip"
 fi
 
+# $1: tunnel type, $2: tunnel family, $3: traffic family, $4: encapsulation
+run_ip_tunnel() {
+	local csum_offload
+
+	for csum_offload in on off; do
+		# sit does not use gro_cells on receive, so with software GSO
+		# on the sender there is nothing big to receive.
+		if [ "$1" = sit ] && [ "$csum_offload" = off ]; then
+			continue
+		fi
+		setup_tunnel "$1" "$2" "$csum_offload" "$3" "$4" || exit "$?"
+		do_test "$2" "$3" "$csum_offload" || exit "$?"
+		cleanup_tunnel "$2" "$4"
+	done
+}
+
+# fou is not loaded on demand when built as a module
+ENCAPS=(none)
+if modprobe -q fou && modprobe -q fou6; then
+	ENCAPS+=(fou gue)
+else
+	echo "SKIP: FOU and GUE tests, could not load fou and fou6"
+fi
+
 WORKDIR=$(mktemp -d)
 trap cleanup EXIT
 setup
@@ -252,5 +372,18 @@ for tunnel in vxlan geneve bareudp; do
 				cleanup_tunnel
 			done
 		done
+	done
+done
+for encap in "${ENCAPS[@]}"; do
+	run_ip_tunnel ipip 4 4 "$encap"
+	for traffic_family in 4 6; do
+		run_ip_tunnel gre 4 "$traffic_family" "$encap"
+		run_ip_tunnel gretap 4 "$traffic_family" "$encap"
+	done
+	run_ip_tunnel sit 4 6 "$encap"
+	for traffic_family in 4 6; do
+		run_ip_tunnel ip6tnl 6 "$traffic_family" "$encap"
+		run_ip_tunnel ip6gre 6 "$traffic_family" "$encap"
+		run_ip_tunnel ip6gretap 6 "$traffic_family" "$encap"
 	done
 done

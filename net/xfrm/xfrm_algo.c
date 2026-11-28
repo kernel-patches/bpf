@@ -83,6 +83,42 @@ static struct xfrm_algo_desc aead_list[] = {
 	}
 },
 {
+	.name = "rfc4106(gcm(aria))",
+
+	.uinfo = {
+		.aead = {
+			.geniv = "seqiv",
+			.icv_truncbits = 64,
+		}
+	},
+
+	.pfkey_supported = 0,
+},
+{
+	.name = "rfc4106(gcm(aria))",
+
+	.uinfo = {
+		.aead = {
+			.geniv = "seqiv",
+			.icv_truncbits = 96,
+		}
+	},
+
+	.pfkey_supported = 0,
+},
+{
+	.name = "rfc4106(gcm(aria))",
+
+	.uinfo = {
+		.aead = {
+			.geniv = "seqiv",
+			.icv_truncbits = 128,
+		}
+	},
+
+	.pfkey_supported = 0,
+},
+{
 	.name = "rfc4309(ccm(aes))",
 
 	.uinfo = {
@@ -511,6 +547,32 @@ static struct xfrm_algo_desc ealg_list[] = {
 		.sadb_alg_minbits = 128,
 		.sadb_alg_maxbits = 256
 	}
+},
+{
+	.name = "cbc(aria)",
+
+	.uinfo = {
+		.encr = {
+			.geniv = "echainiv",
+			.blockbits = 128,
+			.defkeybits = 128,
+		}
+	},
+
+	.pfkey_supported = 0,
+},
+{
+	.name = "rfc3686(ctr(aria))",
+
+	.uinfo = {
+		.encr = {
+			.geniv = "seqiv",
+			.blockbits = 128,
+			.defkeybits = 160, /* 128-bit key + 32-bit nonce */
+		}
+	},
+
+	.pfkey_supported = 0,
 },
 {
 	.name = "cbc(twofish)",

@@ -147,13 +147,6 @@ bool ipc_pm_dev_slp_notification(struct iosm_pm *ipc_pm,
 				 u32 sleep_notification);
 
 /**
- * ipc_pm_set_s2idle_sleep - Set PM variables to sleep/active
- * @ipc_pm:	Pointer to power management component
- * @sleep:	true to enter sleep/false to exit sleep
- */
-void ipc_pm_set_s2idle_sleep(struct iosm_pm *ipc_pm, bool sleep);
-
-/**
  * ipc_pm_prepare_host_sleep - Prepare the PM for sleep by entering
  *			       IPC_MEM_HOST_PM_SLEEP_WAIT_D3 state.
  * @ipc_pm:	Pointer to power management component

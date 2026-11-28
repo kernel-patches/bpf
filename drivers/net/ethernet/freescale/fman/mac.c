@@ -307,6 +307,7 @@ static int mac_probe(struct platform_device *_of_dev)
 		dev_err(dev, "failed to add Ethernet platform device for MAC %d\n",
 			priv->cell_index);
 		priv->eth_dev = NULL;
+		goto _return_dev_arr_put;
 	}
 
 	return err;

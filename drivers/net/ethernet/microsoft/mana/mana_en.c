@@ -2730,8 +2730,8 @@ static void mana_destroy_txq(struct mana_port_context *apc)
 		if (apc->tx_qp[i]->txq.napi_initialized) {
 			/* Detach the CQ only after the WQ object is destroyed,
 			 * so a completion EQE that arrives before then still
-			 * finds the CQ in cq_table[] rather than hitting the
-			 * WARN in mana_gd_process_eqe(). One grace period then
+			 * finds the CQ in cq_table[] rather than being dropped
+			 * by mana_gd_process_eqe(). One grace period then
 			 * covers both mana_gd_intr() and NAPI users.
 			 */
 			mana_gd_detach_cq(gc, apc->tx_qp[i]->tx_cq.gdma_cq);

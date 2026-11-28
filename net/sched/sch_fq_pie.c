@@ -134,7 +134,7 @@ static int fq_pie_qdisc_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	struct fq_pie_sched_data *q = qdisc_priv(sch);
 	struct fq_pie_flow *sel_flow;
 	int ret;
-	u8 memory_limited = false;
+	bool memory_limited;
 	u8 enqueue = false;
 	u32 pkt_len;
 	u32 idx;
@@ -152,7 +152,8 @@ static int fq_pie_qdisc_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	sel_flow = &q->flows[idx];
 	/* Checks whether adding a new packet would exceed memory limit */
 	get_pie_cb(skb)->mem_usage = skb->truesize;
-	memory_limited = q->memory_usage > q->memory_limit + skb->truesize;
+	memory_limited = skb->truesize > q->memory_limit ||
+		q->memory_usage > q->memory_limit - skb->truesize;
 
 	/* Checks if the qdisc is full */
 	if (unlikely(qdisc_qlen(sch) >= sch->limit)) {
@@ -160,6 +161,7 @@ static int fq_pie_qdisc_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		goto out;
 	} else if (unlikely(memory_limited)) {
 		q->overmemory++;
+		goto out;
 	}
 
 	reason = QDISC_DROP_CONGESTED;
@@ -394,8 +396,7 @@ static void fq_pie_timer(struct timer_list *t)
 	int max_cnt, i;
 
 	rcu_read_lock();
-	root_lock = qdisc_lock(qdisc_root_sleeping(sch));
-	spin_lock(root_lock);
+	root_lock = qdisc_lock_root_sleeping(sch);
 
 	/* Limit this expensive loop to 2048 flows per round. */
 	max_cnt = min_t(int, q->flows_cnt - q->flows_cursor, 2048);
@@ -547,10 +548,12 @@ static void fq_pie_reset(struct Qdisc *sch)
 		/* Removes all packets from flow */
 		rtnl_kfree_skbs(flow->head, flow->tail);
 		flow->head = NULL;
+		flow->backlog = 0;
 
 		INIT_LIST_HEAD(&flow->flowchain);
 		pie_vars_init(&flow->vars);
 	}
+	q->memory_usage = 0;
 }
 
 static void fq_pie_destroy(struct Qdisc *sch)

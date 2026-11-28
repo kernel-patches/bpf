@@ -1783,6 +1783,10 @@ static int ethtool_get_regs(struct net_device *dev, char __user *useraddr)
 	if (reglen <= 0)
 		return reglen;
 
+	/* A zero-length dump has nothing to fill in. */
+	if (!regs.len)
+		return 0;
+
 	if (regs.len > reglen)
 		regs.len = reglen;
 

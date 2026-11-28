@@ -3381,6 +3381,15 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	return 0;
 
 out_close_led:
+	if (is_offload(adapter))
+		cxgb3_adapter_unofld(adapter);
+
+	for_each_port(adapter, i)
+		if (test_bit(i, &adapter->registered_device_map))
+			unregister_netdev(adapter->port[i]);
+
+	cxgb_disable_msi(adapter);
+
 	t3_set_reg_field(adapter, A_T3DBG_GPIO_EN, F_GPIO0_OUT_VAL, 0);
 
 out_free_dev:

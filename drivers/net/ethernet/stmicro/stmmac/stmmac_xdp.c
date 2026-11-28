@@ -35,6 +35,7 @@ static int stmmac_xdp_enable_pool(struct stmmac_priv *priv,
 
 	if (need_update) {
 		napi_disable(&ch->rx_napi);
+		timer_delete_sync(&ch->rx_refill_timer);
 		napi_disable(&ch->tx_napi);
 		stmmac_disable_rx_queue(priv, queue);
 		stmmac_disable_tx_queue(priv, queue);

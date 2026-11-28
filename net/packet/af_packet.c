@@ -547,29 +547,18 @@ static void *packet_current_frame(struct packet_sock *po,
 	return packet_lookup_frame(po, rb, rb->head, status);
 }
 
-static u16 vlan_get_tci(const struct sk_buff *skb, struct net_device *dev)
+static u16 vlan_get_tci(const struct sk_buff *skb, unsigned short type)
 {
 	struct vlan_hdr vhdr, *vh;
-	unsigned int header_len;
 
-	if (!dev)
+	if (type != ARPHRD_ETHER && type != ARPHRD_LOOPBACK)
 		return 0;
 
 	/* In the SOCK_DGRAM scenario, skb data starts at the network
 	 * protocol, which is after the VLAN headers. The outer VLAN
-	 * header is at the hard_header_len offset in non-variable
-	 * length link layer headers. If it's a VLAN device, the
-	 * min_header_len should be used to exclude the VLAN header
-	 * size.
+	 * header is at the ETH_HLEN offset from the MAC header.
 	 */
-	if (dev->min_header_len == dev->hard_header_len)
-		header_len = dev->hard_header_len;
-	else if (is_vlan_dev(dev))
-		header_len = dev->min_header_len;
-	else
-		return 0;
-
-	vh = skb_header_pointer(skb, skb_mac_offset(skb) + header_len,
+	vh = skb_header_pointer(skb, skb_mac_offset(skb) + ETH_HLEN,
 				sizeof(vhdr), &vhdr);
 	if (unlikely(!vh))
 		return 0;
@@ -1031,7 +1020,7 @@ static void prb_fill_vlan_info(struct tpacket_kbdq_core *pkc,
 		ppd->hv1.tp_vlan_tpid = ntohs(pkc->skb->vlan_proto);
 		ppd->tp_status = TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 	} else if (unlikely(po->sk.sk_type == SOCK_DGRAM && eth_type_vlan(pkc->skb->protocol))) {
-		ppd->hv1.tp_vlan_tci = vlan_get_tci(pkc->skb, pkc->skb->dev);
+		ppd->hv1.tp_vlan_tci = vlan_get_tci(pkc->skb, pkc->skb->dev->type);
 		ppd->hv1.tp_vlan_tpid = ntohs(pkc->skb->protocol);
 		ppd->tp_status = TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 	} else {
@@ -1798,7 +1787,8 @@ static int fanout_add(struct sock *sk, struct fanout_args *args)
 			/* legacy PACKET_FANOUT_MAX */
 			args->max_num_members = 256;
 		err = -ENOMEM;
-		match = kvzalloc_flex(*match, arr, args->max_num_members);
+		match = kvzalloc_flex(*match, arr, args->max_num_members,
+				      GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
 		if (!match)
 			goto out;
 		write_pnet(&match->net, sock_net(sk));
@@ -2043,8 +2033,13 @@ retry:
 	}
 
 	/* Keep the allocation-time header length across retry. */
-	if (!skb)
+	if (!skb) {
 		hard_header_len = READ_ONCE(dev->hard_header_len);
+		if (len < hard_header_len || !len) {
+			err = -EINVAL;
+			goto out_unlock;
+		}
+	}
 
 	err = -EMSGSIZE;
 	if (len > dev->mtu + hard_header_len + VLAN_HLEN + extra_len)
@@ -2053,7 +2048,7 @@ retry:
 	if (!skb) {
 		size_t reserved = LL_RESERVED_SPACE_EX(dev, hard_header_len);
 		int tlen = dev->needed_tailroom;
-		unsigned int hhlen = dev->header_ops ? hard_header_len : 0;
+		unsigned int hhlen = dev_has_header(dev) ? hard_header_len : 0;
 
 		rcu_read_unlock();
 		skb = sock_wmalloc(sk, len + reserved + tlen, 0, GFP_KERNEL);
@@ -2070,8 +2065,6 @@ retry:
 		if (hhlen) {
 			skb->data -= hhlen;
 			skb->tail -= hhlen;
-			if (len < hhlen)
-				skb_reset_network_header(skb);
 		}
 		err = memcpy_from_msg(skb_put(skb, len), msg, len);
 		if (err)
@@ -2079,10 +2072,6 @@ retry:
 		goto retry;
 	}
 
-	if (!dev_validate_header(dev, skb->data, len) || !skb->len) {
-		err = -EINVAL;
-		goto out_unlock;
-	}
 	if (len > (dev->mtu + hard_header_len + extra_len) &&
 	    !packet_extra_vlan_len_allowed(dev, skb)) {
 		err = -EMSGSIZE;
@@ -2474,7 +2463,7 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 			h.h2->tp_vlan_tpid = ntohs(skb->vlan_proto);
 			status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else if (unlikely(sk->sk_type == SOCK_DGRAM && eth_type_vlan(skb->protocol))) {
-			h.h2->tp_vlan_tci = vlan_get_tci(skb, skb->dev);
+			h.h2->tp_vlan_tci = vlan_get_tci(skb, dev->type);
 			h.h2->tp_vlan_tpid = ntohs(skb->protocol);
 			status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else {
@@ -2626,10 +2615,6 @@ static void tpacket_ubuf_complete(struct sk_buff *skb, struct ubuf_info *uarg,
 	sk_free(&po->sk);
 }
 
-static const struct ubuf_info_ops tpacket_ubuf_ops = {
-	.complete = tpacket_ubuf_complete,
-};
-
 static int tpacket_fill_skb(struct packet_sock *po, struct sk_buff *skb,
 		struct net_device *dev, void *data, int tp_len,
 		__be16 proto, unsigned char *addr, int hlen, int copylen,
@@ -2660,18 +2645,16 @@ static int tpacket_fill_skb(struct packet_sock *po, struct sk_buff *skb,
 		if (unlikely(err < 0))
 			return -EINVAL;
 	} else if (copylen) {
-		int hdrlen = min_t(int, copylen, tp_len);
-
 		skb_push(skb, hard_header_len);
 		skb_put(skb, copylen - hard_header_len);
-		err = skb_store_bits(skb, 0, data, hdrlen);
+		if (!dev_has_header(dev))
+			skb_reset_network_header(skb);
+		err = skb_store_bits(skb, 0, data, copylen);
 		if (unlikely(err))
 			return err;
-		if (!dev_validate_header(dev, skb->data, hdrlen))
-			return -EINVAL;
 
-		data += hdrlen;
-		to_write -= hdrlen;
+		data += copylen;
+		to_write -= copylen;
 	}
 
 	offset = offset_in_page(data);
@@ -2901,6 +2884,10 @@ static int tpacket_snd(struct packet_sock *po, struct msghdr *msg)
 						    vnet_hdr.hdr_len);
 			has_vnet_hdr = true;
 		}
+		if (unlikely(tp_len < reserve)) {
+			tp_len = -EINVAL;
+			goto tpacket_error;
+		}
 		/* Prevent the byte count from wrapping into a negative errno */
 		if (unlikely(tp_len > INT_MAX - len_sum))
 			break;
@@ -2962,7 +2949,7 @@ tpacket_error:
 		}
 		uarg->po = po;
 		uarg->ph = ph;
-		uarg->ubuf.ops = &tpacket_ubuf_ops;
+		uarg->ubuf.type = UBUF_TYPE_TPACKET;
 		uarg->ubuf.flags = SKBFL_ZEROCOPY_FRAG;
 		refcount_set(&uarg->ubuf.refcnt, 1);
 
@@ -3109,6 +3096,11 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	    (len > dev->mtu + reserve + VLAN_HLEN + extra_len))
 		goto out_unlock;
 
+	if (unlikely(len < reserve)) {
+		err = -EINVAL;
+		goto out_unlock;
+	}
+
 	err = -ENOBUFS;
 	hlen = LL_RESERVED_SPACE_EX(dev, hard_header_len);
 	tlen = dev->needed_tailroom;
@@ -3128,8 +3120,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 			goto out_free;
 	} else if (reserve) {
 		skb_reserve(skb, -reserve);
-		if (len < reserve + sizeof(struct ipv6hdr) &&
-		    dev->min_header_len != hard_header_len)
+		if (!dev_has_header(dev))
 			skb_reset_network_header(skb);
 	}
 
@@ -3138,8 +3129,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	if (err)
 		goto out_free;
 
-	if ((sock->type == SOCK_RAW &&
-	     !dev_validate_header(dev, skb->data, len)) || !skb->len) {
+	if (unlikely(!skb->len)) {
 		err = -EINVAL;
 		goto out_free;
 	}
@@ -3247,6 +3237,15 @@ static int packet_release(struct socket *sock)
 
 	packet_flush_mclist(sk);
 
+	f = fanout_release(sk);
+
+	/* The socket is no longer reachable from the receive path:
+	 * unregister_prot_hook() removed it from the ptype lists and
+	 * from its fanout group, if any. Wait once for packets currently
+	 * being received, this covers the rings, po->rollover and @f.
+	 */
+	synchronize_net();
+
 	lock_sock(sk);
 	if (po->rx_ring.pg_vec) {
 		memset(&req_u, 0, sizeof(req_u));
@@ -3258,10 +3257,6 @@ static int packet_release(struct socket *sock)
 		packet_set_ring(sk, &req_u, 1, 1);
 	}
 	release_sock(sk);
-
-	f = fanout_release(sk);
-
-	synchronize_net();
 
 	kfree(po->rollover);
 	if (f) {
@@ -3640,19 +3635,10 @@ static int packet_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 			aux.tp_status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else if (unlikely(sock->type == SOCK_DGRAM && eth_type_vlan(skb->protocol))) {
 			struct sockaddr_ll *sll = &PACKET_SKB_CB(skb)->sa.ll;
-			struct net_device *dev;
 
-			rcu_read_lock();
-			dev = dev_get_by_index_rcu(sock_net(sk), sll->sll_ifindex);
-			if (dev) {
-				aux.tp_vlan_tci = vlan_get_tci(skb, dev);
-				aux.tp_vlan_tpid = ntohs(skb->protocol);
-				aux.tp_status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
-			} else {
-				aux.tp_vlan_tci = 0;
-				aux.tp_vlan_tpid = 0;
-			}
-			rcu_read_unlock();
+			aux.tp_vlan_tci = vlan_get_tci(skb, sll->sll_hatype);
+			aux.tp_vlan_tpid = ntohs(skb->protocol);
+			aux.tp_status |= TP_STATUS_VLAN_VALID | TP_STATUS_VLAN_TPID_VALID;
 		} else {
 			aux.tp_vlan_tci = 0;
 			aux.tp_vlan_tpid = 0;
@@ -3793,7 +3779,7 @@ static int packet_mc_add(struct sock *sk, struct packet_mreq_max *mreq)
 		goto done;
 
 	err = -ENOBUFS;
-	i = kmalloc_obj(*i);
+	i = kmalloc_obj(*i, GFP_KERNEL_ACCOUNT);
 	if (i == NULL)
 		goto done;
 
@@ -4514,7 +4500,7 @@ static void packet_free_tx_ring(struct sock *sk, struct pgv *pg_vec,
 static char *alloc_one_pg_vec_page(unsigned long order)
 {
 	char *buffer;
-	gfp_t gfp_flags = GFP_KERNEL | __GFP_COMP |
+	gfp_t gfp_flags = GFP_KERNEL_ACCOUNT | __GFP_COMP |
 			  __GFP_ZERO | __GFP_NOWARN | __GFP_NORETRY;
 
 	buffer = (char *) __get_free_pages(gfp_flags, order);
@@ -4522,7 +4508,8 @@ static char *alloc_one_pg_vec_page(unsigned long order)
 		return buffer;
 
 	/* __get_free_pages failed, fall back to vmalloc */
-	buffer = vzalloc(array_size((1 << order), PAGE_SIZE));
+	buffer = __vcalloc(1 << order, PAGE_SIZE,
+			   GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
 	if (buffer)
 		return buffer;
 
@@ -4543,7 +4530,8 @@ static struct pgv *alloc_pg_vec(struct tpacket_req *req, int order, bool tx_ring
 	struct pgv *pg_vec;
 	int i;
 
-	vec = kzalloc_flex(*vec, pg_vec, block_nr, GFP_KERNEL | __GFP_NOWARN);
+	vec = kzalloc_flex(*vec, pg_vec, block_nr,
+			   GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
 	if (unlikely(!vec))
 		return NULL;
 	vec->order = order;
@@ -4667,8 +4655,10 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
 			break;
 		default:
 			if (!tx_ring) {
-				rx_owner_map = bitmap_alloc(req->tp_frame_nr,
-					GFP_KERNEL | __GFP_NOWARN | __GFP_ZERO);
+				rx_owner_map =
+					bitmap_zalloc(req->tp_frame_nr,
+						      GFP_KERNEL_ACCOUNT |
+						      __GFP_NOWARN);
 				if (!rx_owner_map)
 					goto out_free_pg_vec;
 			}
@@ -4693,7 +4683,9 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
 
 	spin_unlock(&po->bind_lock);
 
-	synchronize_net();
+	/* packet_release() already detached the socket and waited. */
+	if (!closing)
+		synchronize_net();
 
 	err = -EBUSY;
 	mutex_lock(&po->pg_vec_lock);
@@ -4951,6 +4943,7 @@ static void __exit packet_exit(void)
 	proto_unregister(&packet_proto);
 	unregister_netdevice_notifier(&packet_netdev_notifier);
 	unregister_pernet_subsys(&packet_net_ops);
+	net_zcopy_register(UBUF_TYPE_TPACKET, NULL);
 }
 
 static int __init packet_init(void)
@@ -4966,6 +4959,8 @@ static int __init packet_init(void)
 	rc = proto_register(&packet_proto, 0);
 	if (rc)
 		goto out_notifier;
+
+	net_zcopy_register(UBUF_TYPE_TPACKET, tpacket_ubuf_complete);
 	rc = sock_register(&packet_family_ops);
 	if (rc)
 		goto out_proto;
@@ -4973,6 +4968,7 @@ static int __init packet_init(void)
 	return 0;
 
 out_proto:
+	net_zcopy_register(UBUF_TYPE_TPACKET, NULL);
 	proto_unregister(&packet_proto);
 out_notifier:
 	unregister_netdevice_notifier(&packet_netdev_notifier);

@@ -152,19 +152,37 @@ static inline int ioc3_alloc_skb(struct ioc3_private *ip, struct sk_buff **skb,
 }
 
 #ifdef CONFIG_PCI_XTALK_BRIDGE
+/* A Bridge 64-bit direct-mapped DMA address carries the target widget in
+ * bits 63:60 and the DMA attributes below it.  An address in the 32-bit
+ * direct window carries neither, so attributes OR-ed onto one form a
+ * 64-bit address aimed at widget 0.
+ */
 static inline unsigned long ioc3_map(dma_addr_t addr, unsigned long attr)
 {
+	if (!(addr & PCI64_ATTR_TARG_MASK))
+		return addr;
+
 	return (addr & ~PCI64_ATTR_BAR) | attr;
 }
 
-#define ERBAR_VAL	(ERBAR_BARRIER_BIT << ERBAR_RXBARR_SHIFT)
+/* The RX barrier's upper address bits follow the same form. */
+static inline u32 ioc3_erbar(dma_addr_t addr)
+{
+	if (!(addr & PCI64_ATTR_TARG_MASK))
+		return 0;
+
+	return ERBAR_BARRIER_BIT << ERBAR_RXBARR_SHIFT;
+}
 #else
 static inline unsigned long ioc3_map(dma_addr_t addr, unsigned long attr)
 {
 	return addr;
 }
 
-#define ERBAR_VAL	0
+static inline u32 ioc3_erbar(dma_addr_t addr)
+{
+	return 0;
+}
 #endif
 
 static int ioc3eth_nvmem_match(struct device *dev, const void *data)
@@ -718,8 +736,6 @@ static void ioc3_init(struct net_device *dev)
 	struct ioc3_private *ip = netdev_priv(dev);
 	struct ioc3_ethregs *regs = ip->regs;
 
-	timer_delete_sync(&ip->ioc3_timer);	/* Kill if running	*/
-
 	writel(EMCR_RST, &regs->emcr);		/* Reset		*/
 	readl(&regs->emcr);			/* Flush WB		*/
 	udelay(4);				/* Give it time ...	*/
@@ -727,7 +743,7 @@ static void ioc3_init(struct net_device *dev)
 	readl(&regs->emcr);
 
 	/* Misc registers  */
-	writel(ERBAR_VAL, &regs->erbar);
+	writel(ioc3_erbar(ip->rxr_dma), &regs->erbar);
 	readl(&regs->etcdc);			/* Clear on read */
 	writel(15, &regs->ercsr);		/* RX low watermark  */
 	writel(0, &regs->ertr);			/* Interrupt immediately */
@@ -781,14 +797,23 @@ static inline void ioc3_stop(struct ioc3_private *ip)
 static int ioc3_open(struct net_device *dev)
 {
 	struct ioc3_private *ip = netdev_priv(dev);
+	int err;
 
 	ip->ehar_h = 0;
 	ip->ehar_l = 0;
 
+	timer_delete_sync(&ip->ioc3_timer);
 	ioc3_init(dev);
 	if (ioc3_alloc_rx_bufs(dev)) {
 		netdev_err(dev, "%s: rx buffer allocation failed\n", __func__);
 		return -ENOMEM;
+	}
+	err = request_irq(dev->irq, ioc3_interrupt, IRQF_SHARED, "ioc3-eth",
+			  dev);
+	if (err) {
+		netdev_err(dev, "Can't get irq %d\n", dev->irq);
+		ioc3_free_rx_bufs(ip);
+		return err;
 	}
 	ioc3_start(ip);
 	ioc3_mii_start(ip);
@@ -802,6 +827,9 @@ static int ioc3_close(struct net_device *dev)
 	struct ioc3_private *ip = netdev_priv(dev);
 
 	timer_delete_sync(&ip->ioc3_timer);
+
+	/* ioc3_error() restarts the chip, so free the IRQ before stopping it */
+	free_irq(dev->irq, dev);
 
 	netif_stop_queue(dev);
 
@@ -839,8 +867,9 @@ static int ioc3eth_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Invalid resource\n");
 		return -EINVAL;
 	}
-	/* get mac addr from one wire prom */
-	if (ioc3eth_get_mac_addr(regs, mac_addr))
+	/* get mac addr from a device property, or from one wire prom */
+	if (device_get_mac_address(&pdev->dev, mac_addr) &&
+	    ioc3eth_get_mac_addr(regs, mac_addr))
 		return -EPROBE_DEFER; /* not available yet */
 
 	dev = alloc_etherdev(sizeof(struct ioc3_private));
@@ -848,6 +877,7 @@ static int ioc3eth_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	SET_NETDEV_DEV(dev, &pdev->dev);
+	platform_set_drvdata(pdev, dev);
 
 	ip = netdev_priv(dev);
 	ip->dma_dev = pdev->dev.parent;
@@ -866,13 +896,6 @@ static int ioc3eth_probe(struct platform_device *pdev)
 	dev->irq = platform_get_irq(pdev, 0);
 	if (dev->irq < 0) {
 		err = dev->irq;
-		goto out_free;
-	}
-
-	if (devm_request_irq(&pdev->dev, dev->irq, ioc3_interrupt,
-			     IRQF_SHARED, "ioc3-eth", dev)) {
-		dev_err(&pdev->dev, "Can't get irq %d\n", dev->irq);
-		err = -ENODEV;
 		goto out_free;
 	}
 
@@ -1126,7 +1149,6 @@ static void ioc3_timeout(struct net_device *dev, unsigned int txqueue)
 	}
 	ioc3_start(ip);
 	ioc3_mii_init(ip);
-	ioc3_mii_start(ip);
 
 	spin_unlock_irq(&ip->ioc3_lock);
 

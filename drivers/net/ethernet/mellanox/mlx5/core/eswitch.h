@@ -370,6 +370,9 @@ struct mlx5_esw_functions {
 	bool			has_spf_sfs;
 	struct mlx5_esw_spf	*spfs;
 	int			num_spfs;
+	u32			controller_num;
+	u32			phys_port_cnum;
+	u32			self_pf_pfnum;
 };
 
 enum {
@@ -872,9 +875,10 @@ void mlx5_esw_set_spec_source_port(struct mlx5_eswitch *esw,
 int mlx5_esw_offloads_init_pf_vf_rep(struct mlx5_eswitch *esw, struct mlx5_vport *vport);
 void mlx5_esw_offloads_cleanup_pf_vf_rep(struct mlx5_eswitch *esw, struct mlx5_vport *vport);
 
-int mlx5_esw_offloads_init_sf_rep(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
+int mlx5_esw_offloads_init_sf_rep(struct mlx5_eswitch *esw,
+				  struct mlx5_vport *vport,
 				  struct mlx5_devlink_port *dl_port,
-				  u32 controller, u32 sfnum);
+				  u32 controller, u32 pfnum, u32 sfnum);
 void mlx5_esw_offloads_cleanup_sf_rep(struct mlx5_eswitch *esw, struct mlx5_vport *vport);
 
 int mlx5_esw_offloads_load_rep(struct mlx5_eswitch *esw, struct mlx5_vport *vport);
@@ -882,7 +886,8 @@ void mlx5_esw_offloads_unload_rep(struct mlx5_eswitch *esw, struct mlx5_vport *v
 
 int mlx5_eswitch_load_sf_vport(struct mlx5_eswitch *esw, u16 vport_num,
 			       enum mlx5_eswitch_vport_event enabled_events,
-			       struct mlx5_devlink_port *dl_port, u32 controller, u32 sfnum);
+			       struct mlx5_devlink_port *dl_port,
+			       u32 controller, u32 pfnum, u32 sfnum);
 void mlx5_eswitch_unload_sf_vport(struct mlx5_eswitch *esw, u16 vport_num);
 
 int mlx5_eswitch_load_vf_vports(struct mlx5_eswitch *esw, u16 num_vfs,
@@ -894,9 +899,11 @@ int mlx5_esw_offloads_pf_vf_devlink_port_init(struct mlx5_eswitch *esw,
 void mlx5_esw_offloads_pf_vf_devlink_port_cleanup(struct mlx5_eswitch *esw,
 						  struct mlx5_vport *vport);
 
-int mlx5_esw_offloads_sf_devlink_port_init(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
+int mlx5_esw_offloads_sf_devlink_port_init(struct mlx5_eswitch *esw,
+					   struct mlx5_vport *vport,
 					   struct mlx5_devlink_port *dl_port,
-					   u32 controller, u32 sfnum);
+					   u32 controller, u32 pfnum,
+					   u32 sfnum);
 void mlx5_esw_offloads_sf_devlink_port_cleanup(struct mlx5_eswitch *esw, struct mlx5_vport *vport);
 
 int mlx5_esw_offloads_devlink_port_register(struct mlx5_eswitch *esw, struct mlx5_vport *vport);
@@ -912,7 +919,10 @@ int mlx5_esw_spf_get_host_number(struct mlx5_core_dev *dev, int spf_idx,
 				 u16 *host_number);
 u16 mlx5_esw_get_hpf_host_number(struct mlx5_core_dev *dev);
 u16 mlx5_esw_get_hpf_pf_num(struct mlx5_core_dev *dev);
-u16 mlx5_esw_sf_controller_to_pfnum(struct mlx5_core_dev *dev, u32 controller);
+u32 mlx5_esw_get_self_pf_ctrl_num(struct mlx5_eswitch *esw);
+u16 mlx5_esw_get_self_pf_pfnum(struct mlx5_eswitch *esw);
+bool mlx5_esw_sf_controller_to_pfnum_valid(struct mlx5_core_dev *dev,
+					   u32 controller, u32 pfnum);
 bool mlx5_esw_has_spf_sfs(struct mlx5_core_dev *dev);
 
 int mlx5_esw_vport_vhca_id_map(struct mlx5_eswitch *esw,
@@ -958,7 +968,8 @@ bool mlx5_esw_offloads_controller_valid(const struct mlx5_eswitch *esw, u32 cont
 int mlx5_eswitch_offloads_vport_lag_add_one(struct mlx5_eswitch *master_esw,
 					    struct mlx5_eswitch *slave_esw);
 void mlx5_eswitch_offloads_vport_lag_del_one(struct mlx5_eswitch *master_esw,
-					     struct mlx5_eswitch *slave_esw);
+					     struct mlx5_eswitch *slave_esw,
+					     int max_slaves);
 int mlx5_eswitch_offloads_single_fdb_add_one(struct mlx5_eswitch *master_esw,
 					     struct mlx5_eswitch *slave_esw, int max_slaves);
 void mlx5_eswitch_offloads_single_fdb_del_one(struct mlx5_eswitch *master_esw,

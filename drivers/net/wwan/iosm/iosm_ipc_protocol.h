@@ -175,14 +175,6 @@ int ipc_protocol_msg_send(struct iosm_protocol *ipc_protocol,
 bool ipc_protocol_suspend(struct iosm_protocol *ipc_protocol);
 
 /**
- * ipc_protocol_s2idle_sleep - Call PM function to set PM variables in s2idle
- *			       sleep/active case
- * @ipc_protocol:	Pointer to ipc_protocol instance
- * @sleep:		True for sleep/False for active
- */
-void ipc_protocol_s2idle_sleep(struct iosm_protocol *ipc_protocol, bool sleep);
-
-/**
  * ipc_protocol_resume - Signal to CP that host wants to resume operation.
  * @ipc_protocol:	Pointer to ipc_protocol instance
  *

@@ -248,7 +248,52 @@ void atl1c_reinit_locked(struct atl1c_adapter *adapter)
 	clear_bit(__AT_RESETTING, &adapter->flags);
 }
 
-static void atl1c_check_link_status(struct atl1c_adapter *adapter)
+#define ATL1C_POLL_SYNC_TRIES 500
+
+/* atl1c_clean_rx() looks at the carrier only when it is entered.  A poll
+ * that passed that test before the carrier went off keeps walking the RRD
+ * ring.  NAPI_STATE_SCHED is held for the whole poll, and a poll that
+ * starts later sees the carrier off and returns without touching the
+ * rings, so once the bit is observed clear on every RX queue no poll is
+ * running and none can start.
+ *
+ * Only the link-change work item needs the wait: atl1c_up() calls
+ * atl1c_check_link_status() before napi_enable(), when no poll can run,
+ * and a disabled NAPI keeps NAPI_STATE_SCHED set, so waiting there would
+ * only spin.
+ *
+ * Returns false when the caller must leave the rings alone:
+ *  - __AT_DOWN is set: a concurrent close, down or suspend is tearing the
+ *    device down and resets the rings itself, after napi_disable();
+ *  - the wait timed out: a poll is not finishing (threaded busy-poll
+ *    keeps NAPI_STATE_SCHED set while the interface is up).  Resetting
+ *    under a running poll is the race this wait exists to avoid.
+ */
+static bool atl1c_rx_poll_sync(struct atl1c_adapter *adapter)
+{
+	int i;
+
+	for (i = 0; i < adapter->rx_queue_count; ++i) {
+		int tries = ATL1C_POLL_SYNC_TRIES;
+
+		while (test_bit(NAPI_STATE_SCHED,
+				&adapter->rrd_ring[i].napi.state)) {
+			if (test_bit(__AT_DOWN, &adapter->flags))
+				return false;
+			if (!tries--) {
+				dev_warn_ratelimited(&adapter->pdev->dev,
+						     "RX poll won't finish, skipping link-down reset\n");
+				return false;
+			}
+			usleep_range(1000, 2000);
+		}
+	}
+
+	return true;
+}
+
+static void atl1c_check_link_status(struct atl1c_adapter *adapter,
+				    bool sync_polls)
 {
 	struct atl1c_hw *hw = &adapter->hw;
 	struct net_device *netdev = adapter->netdev;
@@ -265,6 +310,20 @@ static void atl1c_check_link_status(struct atl1c_adapter *adapter)
 	if (!link) {
 		/* link down */
 		netif_carrier_off(netdev);
+		if (sync_polls) {
+			/* Store-buffer pattern against the poll: we store
+			 * carrier-off and then load NAPI_STATE_SCHED, the
+			 * scheduling side stores NAPI_STATE_SCHED
+			 * (napi_schedule_prep()) and the poll then loads the
+			 * carrier.  A full barrier on each side guarantees that
+			 * either we see the poll or the poll sees the carrier
+			 * off.  The cmpxchg provides it there; do not depend on
+			 * how netif_carrier_off() sets its bit here.
+			 */
+			smp_mb();
+			if (!atl1c_rx_poll_sync(adapter))
+				return;
+		}
 		hw->hibernate = true;
 		if (atl1c_reset_mac(hw) != 0)
 			if (netif_msg_hw(adapter))
@@ -349,7 +408,7 @@ static void atl1c_common_task(struct work_struct *work)
 	if (test_and_clear_bit(ATL1C_WORK_EVENT_LINK_CHANGE,
 		&adapter->work_event)) {
 		atl1c_irq_disable(adapter);
-		atl1c_check_link_status(adapter);
+		atl1c_check_link_status(adapter, true);
 		atl1c_irq_enable(adapter);
 	}
 }
@@ -912,8 +971,9 @@ static void atl1c_clean_rx_ring(struct atl1c_adapter *adapter, u32 queue)
 		buffer_info = &rfd_ring->buffer_info[j];
 		atl1c_clean_buffer(pdev, buffer_info, 0);
 	}
-	/* zero out the descriptor ring */
+	/* zero out the descriptor rings */
 	memset(rfd_ring->desc, 0, rfd_ring->size);
+	memset(rrd_ring->desc, 0, rrd_ring->size);
 	rfd_ring->next_to_clean = 0;
 	rfd_ring->next_to_use = 0;
 	rrd_ring->next_to_use = 0;
@@ -1845,23 +1905,16 @@ static void atl1c_clean_rrd(struct atl1c_rrd_ring *rrd_ring,
 	}
 }
 
-static void atl1c_clean_rfd(struct atl1c_rfd_ring *rfd_ring,
-	struct atl1c_recv_ret_status *rrs, u16 num)
+/* Recycle the RFD the driver expects back next.  The caller owns the skb. */
+static void atl1c_clean_rfd(struct atl1c_rfd_ring *rfd_ring)
 {
-	u16 i;
-	u16 rfd_index;
-	struct atl1c_buffer *buffer_info = rfd_ring->buffer_info;
+	struct atl1c_buffer *buffer_info;
 
-	rfd_index = (rrs->word0 >> RRS_RX_RFD_INDEX_SHIFT) &
-			RRS_RX_RFD_INDEX_MASK;
-	for (i = 0; i < num; i++) {
-		buffer_info[rfd_index].skb = NULL;
-		ATL1C_SET_BUFFER_STATE(&buffer_info[rfd_index],
-					ATL1C_BUFFER_FREE);
-		if (++rfd_index == rfd_ring->count)
-			rfd_index = 0;
-	}
-	rfd_ring->next_to_clean = rfd_index;
+	buffer_info = &rfd_ring->buffer_info[rfd_ring->next_to_clean];
+	buffer_info->skb = NULL;
+	ATL1C_SET_BUFFER_STATE(buffer_info, ATL1C_BUFFER_FREE);
+	if (++rfd_ring->next_to_clean == rfd_ring->count)
+		rfd_ring->next_to_clean = 0;
 }
 
 /**
@@ -1875,6 +1928,7 @@ static int atl1c_clean_rx(struct napi_struct *napi, int budget)
 		container_of(napi, struct atl1c_rrd_ring, napi);
 	struct atl1c_adapter *adapter = rrd_ring->adapter;
 	u16 rfd_num, rfd_index;
+	u32 rrs_word0;
 	u16 length;
 	struct pci_dev *pdev = adapter->pdev;
 	struct net_device *netdev  = adapter->netdev;
@@ -1893,47 +1947,66 @@ static int atl1c_clean_rx(struct napi_struct *napi, int budget)
 		if (work_done >= budget)
 			break;
 		rrs = ATL1C_RRD_DESC(rrd_ring, rrd_ring->next_to_clean);
-		if (likely(RRS_RXD_IS_VALID(rrs->word3))) {
-			rfd_num = (rrs->word0 >> RRS_RX_RFD_CNT_SHIFT) &
-				RRS_RX_RFD_CNT_MASK;
-			if (unlikely(rfd_num != 1))
-				/* TODO support mul rfd*/
-				if (netif_msg_rx_err(adapter))
-					dev_warn(&pdev->dev,
-						"Multi rfd not support yet!\n");
-			goto rrs_checked;
-		} else {
+		if (!RRS_RXD_IS_VALID(rrs->word3))
+			break;
+
+		/* Order the rest of the descriptor after the valid bit: on
+		 * weakly ordered CPUs word0 can otherwise be read before
+		 * the device's write of this RRD is visible, and a stale
+		 * word0 (the ring is zeroed after a reset) would schedule
+		 * a spurious reset.
+		 */
+		dma_rmb();
+		rrs_word0 = le32_to_cpu(rrs->word0);
+		rfd_num = (rrs_word0 >> RRS_RX_RFD_CNT_SHIFT) &
+			RRS_RX_RFD_CNT_MASK;
+		rfd_index = (rrs_word0 >> RRS_RX_RFD_INDEX_SHIFT) &
+			RRS_RX_RFD_INDEX_MASK;
+		buffer_info = &rfd_ring->buffer_info[rfd_ring->next_to_clean];
+
+		/* The RRD is written by the device.  Its RFD index field is
+		 * wider than the ring, and only one RFD per frame is
+		 * supported.  Check both against the driver's own ring state,
+		 * and that the slot holds a buffer, before anything is
+		 * unmapped or freed.  When they disagree there is no telling
+		 * which buffers the device still owns: leave them all alone
+		 * and reset.
+		 */
+		if (unlikely(rfd_num != 1 ||
+			     rfd_index != rfd_ring->next_to_clean ||
+			     !buffer_info->skb)) {
+			dev_err_ratelimited(&pdev->dev,
+					    "RRD out of sync: RFD count %u index %u, expected index %u%s; resetting\n",
+					    rfd_num, rfd_index,
+					    rfd_ring->next_to_clean,
+					    buffer_info->skb ? "" : " (no buffer)");
+			set_bit(ATL1C_WORK_EVENT_RESET, &adapter->work_event);
+			schedule_work(&adapter->common_task);
 			break;
 		}
-rrs_checked:
-		atl1c_clean_rrd(rrd_ring, rrs, rfd_num);
+
+		atl1c_clean_rrd(rrd_ring, rrs, 1);
+		dma_unmap_single(&pdev->dev, buffer_info->dma,
+				 buffer_info->length, DMA_FROM_DEVICE);
+		skb = buffer_info->skb;
+		atl1c_clean_rfd(rfd_ring);
+
 		if (rrs->word3 & (RRS_RX_ERR_SUM | RRS_802_3_LEN_ERR)) {
-			atl1c_clean_rfd(rfd_ring, rrs, rfd_num);
 			if (netif_msg_rx_err(adapter))
 				dev_warn(&pdev->dev,
 					 "wrong packet! rrs word3 is %x\n",
 					 rrs->word3);
+			kfree_skb_reason(skb, SKB_DROP_REASON_NOT_SPECIFIED);
+			/* The RFD has been recycled, so count the drop as
+			 * work: the refill after the loop only runs when
+			 * some was done.
+			 */
+			work_done++;
 			continue;
 		}
 
 		length = le16_to_cpu((rrs->word3 >> RRS_PKT_SIZE_SHIFT) &
 				RRS_PKT_SIZE_MASK);
-		/* Good Receive */
-		if (likely(rfd_num == 1)) {
-			rfd_index = (rrs->word0 >> RRS_RX_RFD_INDEX_SHIFT) &
-					RRS_RX_RFD_INDEX_MASK;
-			buffer_info = &rfd_ring->buffer_info[rfd_index];
-			dma_unmap_single(&pdev->dev, buffer_info->dma,
-					 buffer_info->length, DMA_FROM_DEVICE);
-			skb = buffer_info->skb;
-		} else {
-			/* TODO */
-			if (netif_msg_rx_err(adapter))
-				dev_warn(&pdev->dev,
-					"Multi rfd not support yet!\n");
-			break;
-		}
-		atl1c_clean_rfd(rfd_ring, rrs, rfd_num);
 
 		/* A link partner whose l2mtu is larger than ours can hand us a
 		 * frame that does not fit the buffer the hardware was given:
@@ -2435,7 +2508,7 @@ static int atl1c_up(struct atl1c_adapter *adapter)
 	if (unlikely(err))
 		goto err_up;
 
-	atl1c_check_link_status(adapter);
+	atl1c_check_link_status(adapter, false);
 	clear_bit(__AT_DOWN, &adapter->flags);
 	for (i = 0; i < adapter->tx_queue_count; ++i)
 		napi_enable(&adapter->tpd_ring[i].napi);
@@ -2810,6 +2883,7 @@ static void atl1c_remove(struct pci_dev *pdev)
 	struct atl1c_adapter *adapter = netdev_priv(netdev);
 
 	unregister_netdev(netdev);
+	cancel_work_sync(&adapter->common_task);
 	/* restore permanent address */
 	atl1c_hw_set_mac_addr(&adapter->hw, adapter->hw.perm_mac_addr);
 	atl1c_phy_disable(&adapter->hw);

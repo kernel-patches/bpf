@@ -7,6 +7,7 @@
 #include <asm/byteorder.h>
 #include <linux/bits.h>
 #include <linux/const.h>
+#include <linux/sizes.h>
 #include <linux/types.h>
 
 struct fbnic_dev;
@@ -82,7 +83,8 @@ struct fbnic_tlv_index {
 	enum fbnic_tlv_type	type;
 };
 
-#define TLV_MAX_DATA			((PAGE_SIZE - 512) & 0xFFFF)
+/* FW mailbox messages are limited to a 4K page */
+#define TLV_MAX_DATA			(SZ_4K - 512)
 #define FBNIC_TLV_ATTR_ID_UNKNOWN	USHRT_MAX
 #define FBNIC_TLV_ATTR_STRING(id, len)	{ id, len, FBNIC_TLV_STRING }
 #define FBNIC_TLV_ATTR_FLAG(id)		{ id, 0, FBNIC_TLV_FLAG }

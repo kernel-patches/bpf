@@ -2237,7 +2237,7 @@ static bool tipc_sk_filter_connect(struct tipc_sock *tsk, struct sk_buff *skb,
 		/* Prepare for new setup attempt if we have a SYN clone */
 		if (skb_queue_empty(&sk->sk_write_queue))
 			break;
-		get_random_bytes(&delay, 2);
+		delay = get_random_u16();
 		if (tsk->conn_timeout < 4)
 			tsk->conn_timeout = 4;
 		delay %= (tsk->conn_timeout / 4);

@@ -936,6 +936,14 @@ static int bond_option_mode_set(struct bonding *bond,
 	WRITE_ONCE(bond->params.arp_validate, BOND_ARP_VALIDATE_NONE);
 	WRITE_ONCE(bond->params.mode, newval->value);
 
+	if (newval->value == BOND_MODE_BROADCAST) {
+		struct bond_up_slave *usable;
+
+		usable = rtnl_dereference(bond->usable_slaves);
+		RCU_INIT_POINTER(bond->usable_slaves, NULL);
+		kfree_rcu(usable, rcu);
+	}
+
 	/* When changing mode, the bond device is down, we may reduce
 	 * the bond_bcast_neigh_enabled in bond_close() if broadcast_neighbor
 	 * enabled in 8023ad mode. Therefore, only clear broadcast_neighbor

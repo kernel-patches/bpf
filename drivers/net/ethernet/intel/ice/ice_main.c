@@ -269,21 +269,18 @@ static bool ice_vsi_fltr_changed(struct ice_vsi *vsi)
  */
 static int ice_set_promisc(struct ice_vsi *vsi, u8 promisc_m)
 {
-	int status;
+	unsigned long bits = promisc_m;
+	int status, bit;
 
 	if (vsi->type != ICE_VSI_PF)
 		return 0;
 
-	if (ice_vsi_has_non_zero_vlans(vsi)) {
-		promisc_m |= (ICE_PROMISC_VLAN_RX | ICE_PROMISC_VLAN_TX);
-		status = ice_fltr_set_vlan_vsi_promisc(&vsi->back->hw, vsi,
-						       promisc_m);
-	} else {
+	for_each_set_bit(bit, &bits, BITS_PER_BYTE) {
 		status = ice_fltr_set_vsi_promisc(&vsi->back->hw, vsi->idx,
-						  promisc_m, 0);
+						  BIT(bit), 0);
+		if (status && status != -EEXIST)
+			return status;
 	}
-	if (status && status != -EEXIST)
-		return status;
 
 	netdev_dbg(vsi->netdev, "set promisc filter bits for VSI %i: 0x%x\n",
 		   vsi->vsi_num, promisc_m);
@@ -303,18 +300,28 @@ static int ice_clear_promisc(struct ice_vsi *vsi, u8 promisc_m)
 	if (vsi->type != ICE_VSI_PF)
 		return 0;
 
-	if (ice_vsi_has_non_zero_vlans(vsi)) {
-		promisc_m |= (ICE_PROMISC_VLAN_RX | ICE_PROMISC_VLAN_TX);
-		status = ice_fltr_clear_vlan_vsi_promisc(&vsi->back->hw, vsi,
-							 promisc_m);
-	} else {
-		status = ice_fltr_clear_vsi_promisc(&vsi->back->hw, vsi->idx,
-						    promisc_m, 0);
-	}
+	status = ice_fltr_clear_vsi_promisc(&vsi->back->hw, vsi->idx,
+					    promisc_m, 0);
 
 	netdev_dbg(vsi->netdev, "clear promisc filter bits for VSI %i: 0x%x\n",
 		   vsi->vsi_num, promisc_m);
 	return status;
+}
+
+/**
+ * ice_vsi_wants_mc_promisc - check if the VSI needs the multicast promisc rules
+ * @vsi: the VSI
+ *
+ * Return: true if the VSI needs the multicast promisc rules.
+ */
+static bool ice_vsi_wants_mc_promisc(struct ice_vsi *vsi)
+{
+	if (vsi->current_netdev_flags & IFF_ALLMULTI)
+		return true;
+	if (!(vsi->current_netdev_flags & IFF_PROMISC))
+		return false;
+	return ice_is_vsi_dflt_vsi(vsi) ||
+	       !ice_is_dflt_vsi_in_use(vsi->port_info);
 }
 
 /**
@@ -332,6 +339,8 @@ static int ice_vsi_sync_fltr(struct ice_vsi *vsi)
 	struct ice_pf *pf = vsi->back;
 	struct ice_hw *hw = &pf->hw;
 	u32 changed_flags = 0;
+	bool dflt_err = false;
+	bool promisc_changed;
 	int err;
 
 	if (!vsi->netdev)
@@ -394,84 +403,69 @@ static int ice_vsi_sync_fltr(struct ice_vsi *vsi)
 		}
 	}
 	err = 0;
-	/* check for changes in promiscuous modes */
-	if (changed_flags & IFF_ALLMULTI) {
-		if (vsi->current_netdev_flags & IFF_ALLMULTI) {
-			err = ice_set_promisc(vsi, ICE_MCAST_PROMISC_BITS);
-			if (err) {
-				vsi->current_netdev_flags &= ~IFF_ALLMULTI;
-				goto out_promisc;
-			}
-		} else {
-			/* !(vsi->current_netdev_flags & IFF_ALLMULTI) */
-			err = ice_clear_promisc(vsi, ICE_MCAST_PROMISC_BITS);
-			if (err) {
-				vsi->current_netdev_flags |= IFF_ALLMULTI;
-				goto out_promisc;
-			}
-		}
-	}
+	/* the eswitch owns the uplink promisc config during a session */
+	if (test_bit(ICE_VSI_ESWITCH_UPLINK, vsi->state))
+		goto exit;
 
-	if (((changed_flags & IFF_PROMISC) || promisc_forced_on) ||
-	    test_bit(ICE_VSI_PROMISC_CHANGED, vsi->state)) {
-		clear_bit(ICE_VSI_PROMISC_CHANGED, vsi->state);
-		if (vsi->current_netdev_flags & IFF_PROMISC) {
-			/* Apply Rx filter rule to get traffic from wire */
-			if (!ice_is_dflt_vsi_in_use(vsi->port_info)) {
-				err = ice_set_dflt_vsi(vsi);
-				if (err && err != -EEXIST) {
-					netdev_err(netdev, "Error %d setting default VSI %i Rx rule\n",
-						   err, vsi->vsi_num);
-					vsi->current_netdev_flags &=
-						~IFF_PROMISC;
-					goto out_promisc;
-				}
+	/* check for changes in promiscuous modes */
+	promisc_changed = test_and_clear_bit(ICE_VSI_PROMISC_CHANGED,
+					     vsi->state);
+	if ((changed_flags & IFF_PROMISC) || promisc_forced_on)
+		promisc_changed = true;
+
+	if (promisc_changed && (vsi->current_netdev_flags & IFF_PROMISC)) {
+		/* Apply Rx filter rule to get traffic from wire */
+		if (!ice_is_dflt_vsi_in_use(vsi->port_info)) {
+			err = ice_set_dflt_vsi(vsi);
+			if (err && err != -EEXIST) {
+				netdev_err(netdev, "Error %d setting default VSI %i Rx rule\n",
+					   err, vsi->vsi_num);
+				vsi->current_netdev_flags &= ~IFF_PROMISC;
+				set_bit(ICE_VSI_PROMISC_CHANGED, vsi->state);
+				dflt_err = true;
+			} else {
 				err = 0;
 				vlan_ops->dis_rx_filtering(vsi);
-
-				/* promiscuous mode implies allmulticast so
-				 * that VSIs that are in promiscuous mode are
-				 * subscribed to multicast packets coming to
-				 * the port
-				 */
-				err = ice_set_promisc(vsi,
-						      ICE_MCAST_PROMISC_BITS);
-				if (err)
-					goto out_promisc;
-			}
-		} else {
-			/* Clear Rx filter to remove traffic from wire */
-			if (ice_is_vsi_dflt_vsi(vsi)) {
-				err = ice_clear_dflt_vsi(vsi);
-				if (err) {
-					netdev_err(netdev, "Error %d clearing default VSI %i Rx rule\n",
-						   err, vsi->vsi_num);
-					vsi->current_netdev_flags |=
-						IFF_PROMISC;
-					goto out_promisc;
-				}
-				if (vsi->netdev->features &
-				    NETIF_F_HW_VLAN_CTAG_FILTER)
-					vlan_ops->ena_rx_filtering(vsi);
-			}
-
-			/* disable allmulti here, but only if allmulti is not
-			 * still enabled for the netdev
-			 */
-			if (!(vsi->current_netdev_flags & IFF_ALLMULTI)) {
-				err = ice_clear_promisc(vsi,
-							ICE_MCAST_PROMISC_BITS);
-				if (err) {
-					netdev_err(netdev, "Error %d clearing multicast promiscuous on VSI %i\n",
-						   err, vsi->vsi_num);
-				}
 			}
 		}
-	}
-	goto exit;
+	} else if (promisc_changed) {
+		/* Clear Rx filter to remove traffic from wire */
+		if (ice_is_vsi_dflt_vsi(vsi)) {
+			err = ice_clear_dflt_vsi(vsi);
+			if (err) {
+				netdev_err(netdev, "Error %d clearing default VSI %i Rx rule\n",
+					   err, vsi->vsi_num);
+				vsi->current_netdev_flags |= IFF_PROMISC;
+				set_bit(ICE_VSI_PROMISC_CHANGED, vsi->state);
+			}
+		}
 
-out_promisc:
-	set_bit(ICE_VSI_PROMISC_CHANGED, vsi->state);
+		/* pruning can be off even without our DFLT rule */
+		if (!(vsi->current_netdev_flags & IFF_PROMISC) &&
+		    vsi->netdev->features & NETIF_F_HW_VLAN_CTAG_FILTER)
+			vlan_ops->ena_rx_filtering(vsi);
+	}
+
+	/* promiscuous mode implies allmulticast */
+	if (promisc_changed || (changed_flags & IFF_ALLMULTI)) {
+		int mc_err = 0;
+
+		/* a failed DFLT install leaves the netdev promiscuous */
+		if (ice_vsi_wants_mc_promisc(vsi))
+			mc_err = ice_set_promisc(vsi, ICE_MCAST_PROMISC_BITS);
+		else if (!dflt_err)
+			mc_err = ice_clear_promisc(vsi, ICE_MCAST_PROMISC_BITS);
+		if (mc_err) {
+			netdev_err(netdev, "Error %d syncing multicast promiscuous on VSI %i\n",
+				   mc_err, vsi->vsi_num);
+			/* retried by the next sync, with the allmulti change */
+			vsi->current_netdev_flags ^=
+				changed_flags & IFF_ALLMULTI;
+			set_bit(ICE_VSI_PROMISC_CHANGED, vsi->state);
+			if (!err)
+				err = mc_err;
+		}
+	}
 	goto exit;
 out:
 	/* if something went wrong then set the changed flag so we try again */
@@ -2944,6 +2938,8 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
 			}
 		}
 		xdp_features_set_redirect_target(vsi->netdev, true);
+		if (ice_is_feature_supported(vsi->back, ICE_F_GCS))
+			netdev_info(vsi->netdev, "XDP program attached, Rx CHECKSUM_COMPLETE disabled\n");
 	} else if (ice_is_xdp_ena_vsi(vsi) && !prog) {
 		xdp_features_clear_redirect_target(vsi->netdev);
 		xdp_ring_err = ice_destroy_xdp_rings(vsi, ICE_XDP_CFG_FULL);
@@ -3675,17 +3671,6 @@ int ice_vlan_rx_add_vid(struct net_device *netdev, __be16 proto, u16 vid)
 	while (test_and_set_bit(ICE_CFG_BUSY, vsi->state))
 		usleep_range(1000, 2000);
 
-	/* Add multicast promisc rule for the VLAN ID to be added if
-	 * all-multicast is currently enabled.
-	 */
-	if (vsi->current_netdev_flags & IFF_ALLMULTI) {
-		ret = ice_fltr_set_vsi_promisc(&vsi->back->hw, vsi->idx,
-					       ICE_MCAST_VLAN_PROMISC_BITS,
-					       vid);
-		if (ret && ret != -EEXIST)
-			goto finish;
-	}
-
 	vlan_ops = ice_get_compat_vsi_vlan_ops(vsi);
 
 	/* Add a switch rule for this VLAN ID so its corresponding VLAN tagged
@@ -3693,22 +3678,7 @@ int ice_vlan_rx_add_vid(struct net_device *netdev, __be16 proto, u16 vid)
 	 */
 	vlan = ICE_VLAN(be16_to_cpu(proto), vid, 0);
 	ret = vlan_ops->add_vlan(vsi, &vlan);
-	if (ret)
-		goto finish;
 
-	/* If all-multicast is currently enabled and this VLAN ID is only one
-	 * besides VLAN-0 we have to update look-up type of multicast promisc
-	 * rule for VLAN-0 from ICE_SW_LKUP_PROMISC to ICE_SW_LKUP_PROMISC_VLAN.
-	 */
-	if ((vsi->current_netdev_flags & IFF_ALLMULTI) &&
-	    ice_vsi_num_non_zero_vlans(vsi) == 1) {
-		ice_fltr_clear_vsi_promisc(&vsi->back->hw, vsi->idx,
-					   ICE_MCAST_PROMISC_BITS, 0);
-		ice_fltr_set_vsi_promisc(&vsi->back->hw, vsi->idx,
-					 ICE_MCAST_VLAN_PROMISC_BITS, 0);
-	}
-
-finish:
 	clear_bit(ICE_CFG_BUSY, vsi->state);
 
 	return ret;
@@ -3737,46 +3707,11 @@ int ice_vlan_rx_kill_vid(struct net_device *netdev, __be16 proto, u16 vid)
 	while (test_and_set_bit(ICE_CFG_BUSY, vsi->state))
 		usleep_range(1000, 2000);
 
-	ret = ice_clear_vsi_promisc(&vsi->back->hw, vsi->idx,
-				    ICE_MCAST_VLAN_PROMISC_BITS, vid);
-	if (ret) {
-		netdev_err(netdev, "Error clearing multicast promiscuous mode on VSI %i\n",
-			   vsi->vsi_num);
-		vsi->current_netdev_flags |= IFF_ALLMULTI;
-	}
-
 	vlan_ops = ice_get_compat_vsi_vlan_ops(vsi);
 
-	/* Make sure VLAN delete is successful before updating VLAN
-	 * information
-	 */
 	vlan = ICE_VLAN(be16_to_cpu(proto), vid, 0);
 	ret = vlan_ops->del_vlan(vsi, &vlan);
-	if (ret)
-		goto finish;
 
-	/* Remove multicast promisc rule for the removed VLAN ID if
-	 * all-multicast is enabled.
-	 */
-	if (vsi->current_netdev_flags & IFF_ALLMULTI)
-		ice_fltr_clear_vsi_promisc(&vsi->back->hw, vsi->idx,
-					   ICE_MCAST_VLAN_PROMISC_BITS, vid);
-
-	if (!ice_vsi_has_non_zero_vlans(vsi)) {
-		/* Update look-up type of multicast promisc rule for VLAN 0
-		 * from ICE_SW_LKUP_PROMISC_VLAN to ICE_SW_LKUP_PROMISC when
-		 * all-multicast is enabled and VLAN 0 is the only VLAN rule.
-		 */
-		if (vsi->current_netdev_flags & IFF_ALLMULTI) {
-			ice_fltr_clear_vsi_promisc(&vsi->back->hw, vsi->idx,
-						   ICE_MCAST_VLAN_PROMISC_BITS,
-						   0);
-			ice_fltr_set_vsi_promisc(&vsi->back->hw, vsi->idx,
-						 ICE_MCAST_PROMISC_BITS, 0);
-		}
-	}
-
-finish:
 	clear_bit(ICE_CFG_BUSY, vsi->state);
 
 	return ret;
@@ -4945,7 +4880,12 @@ static int ice_init_devlink(struct ice_pf *pf)
 		return err;
 
 	ice_devlink_init_regions(pf);
-	ice_devlink_register(pf);
+	err = ice_devlink_register(pf);
+	if (err) {
+		ice_devlink_destroy_regions(pf);
+		ice_devlink_unregister_params(pf);
+		return err;
+	}
 	ice_health_init(pf);
 
 	return 0;
@@ -5290,7 +5230,7 @@ unroll_init:
 unroll_dev_init:
 	need_dev_deinit = true;
 unroll_adapter:
-	ice_adapter_put(pdev);
+	ice_adapter_put(adapter);
 unroll_hw_init:
 	ice_deinit_hw(hw);
 	if (need_dev_deinit)
@@ -5387,6 +5327,9 @@ static void ice_remove(struct pci_dev *pdev)
 		ice_free_vfs(pf);
 	}
 
+	ice_service_task_stop(pf);
+	ice_aq_cancel_waiting_tasks(pf);
+
 	if (!ice_is_safe_mode(pf))
 		ice_remove_arfs(pf);
 
@@ -5403,11 +5346,10 @@ static void ice_remove(struct pci_dev *pdev)
 	ice_setup_mc_magic_wake(pf);
 	ice_set_wake(pf);
 
-	ice_adapter_put(pdev);
+	ice_adapter_put(pf->adapter);
 	ice_deinit_hw(&pf->hw);
 
 	ice_deinit_dev(pf);
-	ice_aq_cancel_waiting_tasks(pf);
 	set_bit(ICE_DOWN, pf->state);
 }
 

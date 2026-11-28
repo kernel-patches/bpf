@@ -2673,11 +2673,17 @@ static int emac_init_phy(struct emac_instance *dev)
 				return res;
 
 			res = of_phy_register_fixed_link(np);
-			ndev->phydev = of_phy_find_device(np);
-			if (res || !ndev->phydev)
-				return res ? res : -EINVAL;
-			emac_adjust_link(dev->ndev);
-			put_device(&ndev->phydev->mdio.dev);
+			if (res)
+				return res;
+
+			if (!of_phy_connect(ndev, np, &emac_adjust_link, 0,
+					    dev->phy_mode))
+				return -ENODEV;
+
+			/* Start it the same way as a real PHY. */
+			res = emac_mdio_init_phy(&dev->phy);
+			if (res)
+				return res;
 		}
 		return 0;
 	}
@@ -3190,6 +3196,10 @@ static int emac_probe(struct platform_device *ofdev)
 	/* I have a bad feeling about this ... */
 
  err_detach_tah:
+	if (ndev->phydev)
+		phy_disconnect(ndev->phydev);
+	if (of_phy_is_fixed_link(np))
+		of_phy_deregister_fixed_link(np);
 	if (emac_has_feature(dev, EMAC_FTR_HAS_TAH))
 		tah_detach(dev->tah_dev, dev->tah_port);
  err_detach_rgmii:
@@ -3214,6 +3224,14 @@ static void emac_remove(struct platform_device *ofdev)
 
 	DBG(dev, "remove" NL);
 
+	/* Stop the PHY first: phy_stop() turns the carrier off and queues a
+	 * linkwatch event, which unregister_netdev() then drains.
+	 * phy_disconnect() has to stay below, detaching a PHY from a
+	 * registered netdev wants RTNL and we do not hold it here.
+	 */
+	if (dev->ndev->phydev)
+		phy_stop(dev->ndev->phydev);
+
 	/* Unregister network device before tearing down hardware
 	 * to prevent use-after-free during deferred cleanup. This ensures
 	 * the network stack stops all operations before hardware resources
@@ -3222,6 +3240,11 @@ static void emac_remove(struct platform_device *ofdev)
 	unregister_netdev(dev->ndev);
 
 	cancel_work_sync(&dev->reset_work);
+
+	if (dev->ndev->phydev)
+		phy_disconnect(dev->ndev->phydev);
+	if (of_phy_is_fixed_link(ofdev->dev.of_node))
+		of_phy_deregister_fixed_link(ofdev->dev.of_node);
 
 	if (emac_has_feature(dev, EMAC_FTR_HAS_TAH))
 		tah_detach(dev->tah_dev, dev->tah_port);

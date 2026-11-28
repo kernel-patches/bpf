@@ -535,6 +535,13 @@ struct rxrpc_bundle {
 };
 
 /*
+ * Maximum number of out-of-band messages that may be queued against a
+ * connection.  A connection cannot make progress while a CHALLENGE is
+ * outstanding, so a deeper queue only represents a peer flooding us.
+ */
+#define RXRPC_OOB_MAX_QUEUED	4
+
+/*
  * RxRPC connection definition
  * - matched by { local, peer, epoch, conn_id, direction }
  * - each connection can only handle four simultaneous calls
@@ -575,6 +582,7 @@ struct rxrpc_connection {
 	struct list_head	proc_link;	/* link in procfs list */
 	struct list_head	link;		/* link in master connection list */
 	struct sk_buff_head	rx_queue;	/* received conn-level packets */
+	atomic_t		n_oobq;		/* Number of OOB messages queued */
 	struct page_frag_cache	tx_data_alloc;	/* Tx DATA packet allocation */
 	struct mutex		tx_data_alloc_lock;
 
@@ -1264,7 +1272,7 @@ void rxrpc_tlp_send_probe(struct rxrpc_call *call);
 void rxrpc_tlp_process_ack(struct rxrpc_call *call, struct rxrpc_ack_summary *summary);
 void rxrpc_rack_timer_expired(struct rxrpc_call *call, ktime_t overran_by);
 
-/* Initialise TLP state [RFC8958 7.1]. */
+/* Initialise TLP state [RFC8985 7.1]. */
 static inline void rxrpc_tlp_init(struct rxrpc_call *call)
 {
 	call->tlp_serial = 0;
@@ -1580,7 +1588,7 @@ static inline u32 latest(u32 seq1, u32 seq2)
 
 static inline bool rxrpc_seq_in_txq(const struct rxrpc_txqueue *tq, rxrpc_seq_t seq)
 {
-	return (seq & (RXRPC_NR_TXQUEUE - 1)) == tq->qbase;
+	return (seq & ~(rxrpc_seq_t)RXRPC_TXQ_MASK) == tq->qbase;
 }
 
 static inline void rxrpc_queue_rx_call_packet(struct rxrpc_call *call, struct sk_buff *skb)

@@ -348,9 +348,11 @@ idpf_ptp_update_phctime_rxq_grp(const struct idpf_rxq_group *grp, bool split,
 		}
 	} else {
 		for (i = 0; i < grp->splitq.num_rxq_sets; i++) {
+			if (!grp->splitq.rxq_sets[i])
+				continue;
+
 			rxq = &grp->splitq.rxq_sets[i]->rxq;
-			if (rxq)
-				WRITE_ONCE(rxq->cached_phc_time, systime);
+			WRITE_ONCE(rxq->cached_phc_time, systime);
 		}
 	}
 }
@@ -387,10 +389,17 @@ static int idpf_ptp_update_cached_phctime(struct idpf_adapter *adapter)
 		struct idpf_q_vec_rsrc *rsrc;
 		bool split;
 
-		if (!vport || !vport->dflt_qv_rsrc.rxq_grps)
+		if (!vport)
 			continue;
 
 		rsrc = &vport->dflt_qv_rsrc;
+
+		spin_lock(&vport->rxq_grps_lock);
+		if (!rsrc->rxq_grps) {
+			spin_unlock(&vport->rxq_grps_lock);
+			continue;
+		}
+
 		split = idpf_is_queue_model_split(rsrc->rxq_model);
 
 		for (u16 i = 0; i < rsrc->num_rxq_grp; i++) {
@@ -398,6 +407,7 @@ static int idpf_ptp_update_cached_phctime(struct idpf_adapter *adapter)
 
 			idpf_ptp_update_phctime_rxq_grp(grp, split, systime);
 		}
+		spin_unlock(&vport->rxq_grps_lock);
 	}
 
 	return 0;

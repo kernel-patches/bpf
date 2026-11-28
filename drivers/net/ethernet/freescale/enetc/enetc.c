@@ -674,6 +674,17 @@ static void enetc_tso_complete_csum(struct enetc_bdr *tx_ring, struct tso_t *tso
 	}
 }
 
+static int enetc_tso_count_descs(const struct sk_buff *skb)
+{
+	int count = tso_count_descs(skb);
+
+	/* Each segment also needs an extension BD for VLAN insertion */
+	if (skb_vlan_tag_present(skb))
+		count += skb_shinfo(skb)->gso_segs;
+
+	return count;
+}
+
 static int enetc_lso_count_descs(const struct sk_buff *skb)
 {
 	/* 4 BDs: 1 BD for LSO header + 1 BD for extended BD + 1 BD
@@ -693,6 +704,14 @@ static int enetc_lso_get_hdr_len(const struct sk_buff *skb)
 	hdr_len = skb_transport_offset(skb) + tlen;
 
 	return hdr_len;
+}
+
+static bool enetc_skb_uses_lso(const struct enetc_ndev_priv *priv,
+			       const struct sk_buff *skb)
+{
+	/* LSO data unit lengths of up to 256KB are supported */
+	return priv->active_offloads & ENETC_F_LSO &&
+	       (skb->len - enetc_lso_get_hdr_len(skb)) <= ENETC_LSO_MAX_DATA_LEN;
 }
 
 static void enetc_lso_start(struct sk_buff *skb, struct enetc_lso_t *lso)
@@ -1018,10 +1037,7 @@ static netdev_tx_t enetc_start_xmit(struct sk_buff *skb,
 	tx_ring = priv->tx_ring[skb->queue_mapping];
 
 	if (skb_is_gso(skb)) {
-		/* LSO data unit lengths of up to 256KB are supported */
-		if (priv->active_offloads & ENETC_F_LSO &&
-		    (skb->len - enetc_lso_get_hdr_len(skb)) <=
-		    ENETC_LSO_MAX_DATA_LEN) {
+		if (enetc_skb_uses_lso(priv, skb)) {
 			if (enetc_bd_unused(tx_ring) < enetc_lso_count_descs(skb)) {
 				netif_stop_subqueue(ndev, tx_ring->index);
 				return NETDEV_TX_BUSY;
@@ -1029,7 +1045,7 @@ static netdev_tx_t enetc_start_xmit(struct sk_buff *skb,
 
 			count = enetc_lso_hw_offload(tx_ring, skb);
 		} else {
-			if (enetc_bd_unused(tx_ring) < tso_count_descs(skb)) {
+			if (enetc_bd_unused(tx_ring) < enetc_tso_count_descs(skb)) {
 				netif_stop_subqueue(ndev, tx_ring->index);
 				return NETDEV_TX_BUSY;
 			}
@@ -1097,6 +1113,52 @@ netdev_tx_t enetc_xmit(struct sk_buff *skb, struct net_device *ndev)
 	return enetc_start_xmit(skb, ndev);
 }
 EXPORT_SYMBOL_GPL(enetc_xmit);
+
+static bool enetc_skb_l4_too_deep(const struct sk_buff *skb)
+{
+	unsigned int l4_offset = skb_checksum_start_offset(skb);
+
+	if (skb_vlan_tag_present(skb))
+		l4_offset += VLAN_HLEN;
+
+	return l4_offset >= ENETC_TX_CSUM_MAX_L4_OFFSET;
+}
+
+netdev_features_t enetc_features_check(struct sk_buff *skb,
+				       struct net_device *ndev,
+				       netdev_features_t features)
+{
+	struct enetc_ndev_priv *priv = netdev_priv(ndev);
+
+	features = vlan_features_check(skb, features);
+
+	if (priv->active_offloads & ENETC_F_TXCSUM &&
+	    skb->ip_summed == CHECKSUM_PARTIAL && enetc_skb_l4_too_deep(skb)) {
+		features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
+		return features;
+	}
+
+	if (!skb_is_gso(skb))
+		return features;
+
+	/* In case NETIF_F_HW_VLAN_CTAG_TX is disabled, validate_xmit_vlan()
+	 * has not yet run and a VLAN may still be in the hwaccel area, so we
+	 * need to be one step ahead
+	 */
+	if (enetc_lso_get_hdr_len(skb) > TSO_HEADER_SIZE - VLAN_HLEN) {
+		features &= ~NETIF_F_GSO_MASK;
+		return features;
+	}
+
+	if (enetc_skb_uses_lso(priv, skb))
+		return features;
+
+	if (enetc_tso_count_descs(skb) >= priv->tx_bd_count)
+		features &= ~NETIF_F_GSO_MASK;
+
+	return features;
+}
+EXPORT_SYMBOL_GPL(enetc_features_check);
 
 static irqreturn_t enetc_msix(int irq, void *data)
 {
@@ -3641,6 +3703,13 @@ int enetc_alloc_msix(struct enetc_ndev_priv *priv)
 	if (n != nvec)
 		return -EPERM;
 
+	priv->int_vector = devm_kcalloc(&pdev->dev, priv->bdr_int_num,
+					sizeof(*priv->int_vector), GFP_KERNEL);
+	if (!priv->int_vector) {
+		err = -ENOMEM;
+		goto fail_int_vector;
+	}
+
 	/* # of tx rings per int vector */
 	v_tx_rings = priv->num_tx_rings / priv->bdr_int_num;
 	v_remainder = priv->num_tx_rings % priv->bdr_int_num;
@@ -3676,6 +3745,7 @@ fail:
 	while (i--)
 		enetc_int_vector_destroy(priv, i);
 
+fail_int_vector:
 	pci_free_irq_vectors(pdev);
 
 	return err;
@@ -3812,6 +3882,14 @@ static const struct enetc_drvdata enetc4_pf_data = {
 	.eth_ops = &enetc4_pf_ethtool_ops,
 };
 
+static const struct enetc_drvdata enetc4_6_pf_data = {
+	.sysclk_freq = ENETC_CLK_133M,
+	.tx_csum = true,
+	.max_frags = ENETC4_MAX_SKB_FRAGS,
+	.pmac_offset = ENETC4_PMAC_OFFSET,
+	.eth_ops = &enetc4_pf_ethtool_ops,
+};
+
 static const struct enetc_drvdata enetc4_ppm_data = {
 	.sysclk_freq = ENETC_CLK_333M,
 	.tx_csum = true,
@@ -3827,6 +3905,27 @@ static const struct enetc_drvdata enetc_vf_data = {
 
 static const struct enetc_drvdata enetc4_vf_data = {
 	.sysclk_freq = ENETC_CLK_333M,
+	.tx_csum = true,
+	.max_frags = ENETC4_MAX_SKB_FRAGS,
+	.eth_ops = &enetc_vf_ethtool_ops,
+};
+
+static const struct enetc_drvdata enetc4_s32n79_ppm_data = {
+	.sysclk_freq = ENETC_CLK_500M,
+	.tx_csum = true,
+	.max_frags = ENETC4_MAX_SKB_FRAGS,
+	.eth_ops = &enetc4_ppm_ethtool_ops,
+};
+
+static const struct enetc_drvdata enetc4_s32n79_vf_data = {
+	.sysclk_freq = ENETC_CLK_500M,
+	.tx_csum = true,
+	.max_frags = ENETC4_MAX_SKB_FRAGS,
+	.eth_ops = &enetc_vf_ethtool_ops,
+};
+
+static const struct enetc_drvdata enetc4_6_vf_data = {
+	.sysclk_freq = ENETC_CLK_133M,
 	.tx_csum = true,
 	.max_frags = ENETC4_MAX_SKB_FRAGS,
 	.eth_ops = &enetc_vf_ethtool_ops,
@@ -3861,6 +3960,26 @@ static const struct enetc_platform_info enetc_info[] = {
 	{ .revision = ENETC_REV_4_3,
 	  .dev_id = NXP_ENETC_VF_DEV_ID,
 	  .data = &enetc4_vf_data,
+	},
+	{ .revision = ENETC_REV_4_4,
+	  .dev_id = NXP_ENETC_PPM_DEV_ID,
+	  .data = &enetc4_s32n79_ppm_data,
+	},
+	{ .revision = ENETC_REV_4_4,
+	  .dev_id = NXP_ENETC_PF_DEV_ID,
+	  .data = &enetc4_s32n79_ppm_data,
+	},
+	{ .revision = ENETC_REV_4_4,
+	  .dev_id = NXP_ENETC_VF_DEV_ID,
+	  .data = &enetc4_s32n79_vf_data,
+	},
+	{ .revision = ENETC_REV_4_6,
+	  .dev_id = NXP_ENETC_PF_DEV_ID,
+	  .data = &enetc4_6_pf_data,
+	},
+	{ .revision = ENETC_REV_4_6,
+	  .dev_id = NXP_ENETC_VF_DEV_ID,
+	  .data = &enetc4_6_vf_data,
 	},
 };
 

@@ -183,7 +183,8 @@ struct sctp_datamsg *sctp_datamsg_from_user(struct sctp_association *asoc,
 	 * we need to account for bundling of the AUTH chunks along with
 	 * DATA.
 	 */
-	if (sctp_auth_send_cid(SCTP_CID_DATA, asoc)) {
+	if (sctp_auth_send_cid(asoc->peer.intl_capable ? SCTP_CID_I_DATA :
+							 SCTP_CID_DATA, asoc)) {
 		const struct sctp_hmac *hmac_desc =
 			sctp_auth_asoc_get_hmac(asoc);
 

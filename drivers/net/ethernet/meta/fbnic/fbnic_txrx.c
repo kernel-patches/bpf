@@ -22,6 +22,7 @@ enum {
 	FBNIC_XDP_PASS = 0,
 	FBNIC_XDP_CONSUME,
 	FBNIC_XDP_TX,
+	FBNIC_XDP_REDIRECT,
 	FBNIC_XDP_LEN_ERR,
 };
 
@@ -1211,10 +1212,15 @@ xdp_pass:
 		return fbnic_build_skb(nv, pkt);
 	case XDP_TX:
 		return ERR_PTR(fbnic_pkt_tx(nv, pkt));
+	case XDP_REDIRECT:
+		if (xdp_do_redirect(nv->napi.dev, &pkt->buff, xdp_prog))
+			goto xdp_exception;
+		return ERR_PTR(-FBNIC_XDP_REDIRECT);
 	default:
 		bpf_warn_invalid_xdp_action(nv->napi.dev, xdp_prog, act);
 		fallthrough;
 	case XDP_ABORTED:
+xdp_exception:
 		trace_xdp_exception(nv->napi.dev, xdp_prog, act);
 		fallthrough;
 	case XDP_DROP:
@@ -1334,6 +1340,8 @@ static int fbnic_clean_rcq(struct fbnic_napi_vector *nv,
 				napi_gro_receive(&nv->napi, skb);
 			} else if (skb == ERR_PTR(-FBNIC_XDP_TX)) {
 				pkt_tail = nv->qt[0].sub1.tail;
+			} else if (skb == ERR_PTR(-FBNIC_XDP_REDIRECT)) {
+				nv->xdp_flush = true;
 			} else if (PTR_ERR(skb) == -FBNIC_XDP_CONSUME) {
 				fbnic_put_pkt_buff(qt, pkt, 1);
 			} else {
@@ -1386,6 +1394,11 @@ next_dont_count:
 	if (head1 >= 0)
 		fbnic_clean_bdq(&qt->sub1, head1, budget);
 	fbnic_fill_bdq(&qt->sub1);
+
+	if (nv->xdp_flush) {
+		nv->xdp_flush = false;
+		xdp_do_flush();
+	}
 
 	/* Record the current head/tail of the queue */
 	if (rcq->head != head) {
@@ -2326,6 +2339,50 @@ fbnic_nv_disable(struct fbnic_net *fbn, struct fbnic_napi_vector *nv)
 	fbnic_wrfl(fbn->fbd);
 }
 
+static void fbnic_reenable_twq(struct fbnic_ring *twq, u32 csr)
+{
+	u32 twq_ctl;
+
+	if (!twq->size_mask)
+		return;
+
+	twq_ctl = fbnic_ring_rd32(twq, csr);
+	fbnic_ring_wr32(twq, csr, twq_ctl | FBNIC_QUEUE_TWQ_CTL_ENABLE);
+}
+
+static void
+fbnic_nv_reenable(struct fbnic_net *fbn, struct fbnic_napi_vector *nv)
+{
+	int j, t;
+
+	for (t = 0; t < nv->txt_count; t++) {
+		struct fbnic_q_triad *qt = &nv->qt[t];
+
+		if (qt->cmpl.size_mask) {
+			fbnic_ring_wr32(&qt->cmpl, FBNIC_QUEUE_TIM_MASK, 0);
+			fbnic_ring_wr32(&qt->cmpl, FBNIC_QUEUE_TCQ_CTL,
+					FBNIC_QUEUE_TCQ_CTL_ENABLE);
+		}
+		fbnic_reenable_twq(&qt->sub1, FBNIC_QUEUE_TWQ1_CTL);
+		fbnic_reenable_twq(&qt->sub0, FBNIC_QUEUE_TWQ0_CTL);
+	}
+
+	for (j = 0; j < nv->rxt_count; j++, t++) {
+		struct fbnic_q_triad *qt = &nv->qt[t];
+		u32 bdq_ctl;
+
+		fbnic_ring_wr32(&qt->cmpl, FBNIC_QUEUE_RIM_MASK, 0);
+		fbnic_ring_wr32(&qt->cmpl, FBNIC_QUEUE_RCQ_CTL,
+				FBNIC_QUEUE_RCQ_CTL_ENABLE);
+
+		bdq_ctl = fbnic_ring_rd32(&qt->sub0, FBNIC_QUEUE_BDQ_CTL);
+		fbnic_ring_wr32(&qt->sub0, FBNIC_QUEUE_BDQ_CTL,
+				bdq_ctl | FBNIC_QUEUE_BDQ_CTL_ENABLE);
+	}
+
+	fbnic_wrfl(fbn->fbd);
+}
+
 void fbnic_dbg_down(struct fbnic_net *fbn)
 {
 	int i;
@@ -2488,36 +2545,44 @@ int fbnic_wait_all_queues_idle(struct fbnic_dev *fbd, bool may_fail)
 	return err;
 }
 
+struct fbnic_queue_idle_reg {
+	u32 reg;
+	u8 bits_per_q;
+};
+
 static int
 fbnic_wait_queue_idle(struct fbnic_net *fbn, bool rx, unsigned int idx)
 {
-	static const unsigned int tx_regs[] = {
-		FBNIC_QM_TWQ_IDLE(0), FBNIC_QM_TQS_IDLE(0),
-		FBNIC_QM_TDE_IDLE(0), FBNIC_QM_TCQ_IDLE(0),
+	static const struct fbnic_queue_idle_reg tx_regs[] = {
+		{ FBNIC_QM_TWQ_IDLE(0), 2 }, { FBNIC_QM_TQS_IDLE(0), 2 },
+		{ FBNIC_QM_TDE_IDLE(0), 2 }, { FBNIC_QM_TCQ_IDLE(0), 1 },
 	}, rx_regs[] = {
-		FBNIC_QM_HPQ_IDLE(0), FBNIC_QM_PPQ_IDLE(0),
-		FBNIC_QM_RCQ_IDLE(0),
+		{ FBNIC_QM_HPQ_IDLE(0), 1 }, { FBNIC_QM_PPQ_IDLE(0), 1 },
+		{ FBNIC_QM_RCQ_IDLE(0), 1 },
 	};
+	const struct fbnic_queue_idle_reg *regs;
 	struct fbnic_dev *fbd = fbn->fbd;
 	unsigned int val, mask, off;
-	const unsigned int *regs;
 	unsigned int reg_cnt;
 	int i, err;
 
 	regs = rx ? rx_regs : tx_regs;
 	reg_cnt = rx ? ARRAY_SIZE(rx_regs) : ARRAY_SIZE(tx_regs);
 
-	off = idx / 32;
-	mask = BIT(idx % 32);
-
 	for (i = 0; i < reg_cnt; i++) {
-		err = read_poll_timeout_atomic(fbnic_rd32, val, val & mask,
+		unsigned int bit = idx * regs[i].bits_per_q;
+
+		off = bit / 32;
+		mask = GENMASK(regs[i].bits_per_q - 1, 0) << (bit % 32);
+
+		err = read_poll_timeout_atomic(fbnic_rd32, val,
+					       (val & mask) == mask,
 					       2, 500000, false,
-					       fbd, regs[i] + off);
+					       fbd, regs[i].reg + off);
 		if (err) {
 			netdev_err(fbd->netdev,
 				   "wait for queue %s%d idle failed 0x%04x(%d): %08x (mask: %08x)\n",
-				   rx ? "Rx" : "Tx", idx, regs[i] + off, i,
+				   rx ? "Rx" : "Tx", idx, regs[i].reg + off, i,
 				   val, mask);
 			return err;
 		}
@@ -3092,9 +3157,6 @@ static void __fbnic_nv_restart(struct fbnic_net *fbn,
 	struct fbnic_dev *fbd = fbn->fbd;
 	int i;
 
-	fbnic_nv_enable(fbn, nv);
-	fbnic_nv_fill(nv);
-
 	napi_enable_locked(&nv->napi);
 	fbnic_nv_irq_enable(nv);
 	fbnic_wr32(fbd, FBNIC_INTR_SET(nv->v_idx / 32), BIT(nv->v_idx % 32));
@@ -3125,6 +3187,8 @@ static int fbnic_queue_start(struct net_device *dev,
 
 	memcpy(real, qmem, sizeof(*real));
 
+	fbnic_nv_enable(fbn, nv);
+	fbnic_nv_fill(nv);
 	__fbnic_nv_restart(fbn, nv);
 
 	return 0;
@@ -3148,7 +3212,7 @@ static int fbnic_queue_stop(struct net_device *dev, void *qmem, int idx)
 	for (i = 0; i < nv->txt_count; i++) {
 		if (nv->qt[i].sub0.flags & FBNIC_RING_F_DISABLED)
 			continue;
-		netif_stop_subqueue(dev, nv->qt[i].sub0.q_idx);
+		netif_disable_subqueue(dev, nv->qt[i].sub0.q_idx);
 	}
 	fbnic_nv_disable(fbn, nv);
 
@@ -3170,6 +3234,7 @@ static int fbnic_queue_stop(struct net_device *dev, void *qmem, int idx)
 	return 0;
 
 err_restart:
+	fbnic_nv_reenable(fbn, nv);
 	__fbnic_nv_restart(fbn, nv);
 	return err;
 }

@@ -173,7 +173,6 @@ static void gen_lo_setup(struct net_device *dev,
 {
 	dev->mtu		= mtu;
 	dev->hard_header_len	= ETH_HLEN;	/* 14	*/
-	dev->min_header_len	= ETH_HLEN;	/* 14	*/
 	dev->addr_len		= ETH_ALEN;	/* 6	*/
 	dev->type		= ARPHRD_LOOPBACK;	/* 0x0001*/
 	dev->flags		= IFF_LOOPBACK;
@@ -207,6 +206,8 @@ static void loopback_setup(struct net_device *dev)
 {
 	gen_lo_setup(dev, (64 * 1024), &loopback_ethtool_ops, &eth_header_ops,
 		     &loopback_ops, loopback_dev_free);
+
+	dev->request_ops_lock	= true;
 }
 
 /* Setup and register the loopback device. */

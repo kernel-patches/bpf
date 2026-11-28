@@ -143,13 +143,14 @@ int                             sysctl_udp_rmem_min
 u8                              sysctl_fib_notify_on_flag_change
 u8                              sysctl_udp_l3mdev_accept
 u8                              sysctl_igmp_llm_reports
+u8                              sysctl_igmp_qrv
 int                             sysctl_igmp_max_memberships
 int                             sysctl_igmp_max_msf
-int                             sysctl_igmp_qrv
 struct_ping_group_range         ping_group_range
 atomic_t                        dev_addr_genid
 unsigned_int                    sysctl_udp_child_hash_entries
 unsigned_long*                  sysctl_local_reserved_ports
+unsigned_long*                  sysctl_tcp_l3mdev_exempt_ports
 int                             sysctl_ip_prot_sock
 struct_mr_table*                mrt
 struct_list_head                mr_tables

@@ -9,13 +9,20 @@ search=
 while [ ! -z "$1" ]; do
   case "$1" in
     -f ) force=yes; shift ;;
-    -p ) search=$2; shift 2 ;;
+    -p )
+      if [ $# -lt 2 ]; then
+        echo "Option -p requires a path" >&2
+        exit 1
+      fi
+      search=$2
+      shift 2
+      ;;
     * )  echo "Unrecognized option '$1'"; exit 1 ;;
   esac
 done
 
 KDIR=$(dirname $(dirname $(dirname $(dirname $(realpath $0)))))
-pushd ${search:-$KDIR} >>/dev/null
+pushd "${search:-$KDIR}" >>/dev/null || exit 1
 
 files=$(git grep --files-with-matches '^/\* YNL-GEN \(kernel\|uapi\|user\)')
 for f in $files; do

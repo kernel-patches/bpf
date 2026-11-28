@@ -18,6 +18,7 @@
 #include <net/ip.h>
 #include <linux/skbuff.h>
 #include <net/page_pool/helpers.h>
+#include <linux/cpu_rmap.h>
 
 #include "bnge.h"
 #include "bnge_hwrm.h"
@@ -25,6 +26,8 @@
 #include "bnge_ethtool.h"
 #include "bnge_rmem.h"
 #include "bnge_txrx.h"
+#include "bnge_vnic.h"
+#include "bnge_filter.h"
 
 #define BNGE_RING_TO_TC_OFF(bd, tx)	\
 	((tx) % (bd)->tx_nr_rings_per_tc)
@@ -301,6 +304,12 @@ static void bnge_timer(struct timer_list *t)
 	if (BNGE_LINK_IS_UP(bd) && bn->stats_coal_ticks)
 		bnge_queue_sp_work(bn, BNGE_PERIODIC_STATS_SP_EVENT);
 
+#ifdef CONFIG_RFS_ACCEL
+	if ((bn->priv_flags & BNGE_NET_EN_NTUPLE) &&
+	    READ_ONCE(bn->ntp_fltr_count))
+		bnge_queue_sp_work(bn, BNGE_RX_NTP_FLTR_SP_EVENT);
+#endif
+
 	mod_timer(&bn->timer, jiffies + bn->current_interval);
 }
 
@@ -442,6 +451,9 @@ static void bnge_sp_task(struct work_struct *work)
 			bnge_init_ethtool_link_settings(bn);
 	}
 
+	if (test_and_clear_bit(BNGE_RX_NTP_FLTR_SP_EVENT, &bn->sp_event))
+		bnge_cfg_ntp_filters(bn);
+
 	netdev_unlock(bn->netdev);
 }
 
@@ -503,52 +515,87 @@ err_free_desc_ring:
 	return -ENOMEM;
 }
 
-static void bnge_free_nq_arrays(struct bnge_net *bn)
+static void bnge_free_nq(struct bnge_net *bn, struct bnge_napi *bnapi)
+{
+	struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
+
+	bnge_free_ring(bn->bd, &nqr->ring_struct.ring_mem);
+	bnge_free_nq_desc_arr(nqr);
+}
+
+static int bnge_alloc_nq(struct bnge_net *bn, struct bnge_napi *bnapi,
+			 u16 aux_msix)
+{
+	struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
+	struct bnge_ring_mem_info *rmem;
+	struct bnge_ring_struct *ring;
+	int rc;
+
+	ring = &nqr->ring_struct;
+	rmem = &ring->ring_mem;
+
+	rc = bnge_alloc_nq_desc_arr(nqr, bn->cp_nr_pages);
+	if (rc)
+		return rc;
+
+	nqr->bnapi = bnapi;
+	rmem->nr_pages = bn->cp_nr_pages;
+	rmem->page_size = HW_CMPD_RING_SIZE;
+	rmem->pg_arr = (void **)nqr->desc_ring;
+	rmem->dma_arr = nqr->desc_mapping;
+	rmem->vmem_size = 0;
+	rmem->flags = BNGE_RMEM_RING_PTE_FLAG;
+	rc = bnge_alloc_ring(bn->bd, rmem);
+	if (rc) {
+		bnge_free_nq_desc_arr(nqr);
+		return rc;
+	}
+
+	ring->fw_ring_id = INVALID_HW_RING_ID_32BIT;
+	ring->map_idx = bnge_nq_irq_idx(aux_msix, bnapi->index);
+	return 0;
+}
+
+static void bnge_free_nqs(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
-	for (i = 0; i < bd->nq_nr_rings; i++) {
-		struct bnge_napi *bnapi = bn->bnapi[i];
-
-		bnge_free_nq_desc_arr(&bnapi->nq_ring);
-	}
+	bnge_for_each_open_nq(i, bd)
+		bnge_free_nq(bn, bn->bnapi[i]);
 }
 
-static int bnge_alloc_nq_arrays(struct bnge_net *bn)
+static int bnge_alloc_nqs(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
+	u16 aux_msix;
 	int i, rc;
 
-	for (i = 0; i < bd->nq_nr_rings; i++) {
-		struct bnge_napi *bnapi = bn->bnapi[i];
-
-		rc = bnge_alloc_nq_desc_arr(&bnapi->nq_ring, bn->cp_nr_pages);
+	/* RoCE can be disabled concurrently; sample the aux vector count once
+	 * so every NQ gets a distinct irq_tbl index.
+	 */
+	aux_msix = bnge_aux_get_msix(bd);
+	bnge_for_each_open_nq(i, bd) {
+		rc = bnge_alloc_nq(bn, bn->bnapi[i], aux_msix);
 		if (rc)
-			goto err_free_nq_arrays;
+			goto err_free_nqs;
 	}
 	return 0;
 
-err_free_nq_arrays:
-	bnge_free_nq_arrays(bn);
+err_free_nqs:
+	while (--i >= BNGE_FIRST_OPEN_NQ)
+		bnge_free_nq(bn, bn->bnapi[i]);
 	return rc;
 }
 
-static void bnge_free_nq_tree(struct bnge_net *bn)
+static void bnge_free_cp_rings(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
 	for (i = 0; i < bd->nq_nr_rings; i++) {
-		struct bnge_napi *bnapi = bn->bnapi[i];
-		struct bnge_nq_ring_info *nqr;
-		struct bnge_ring_struct *ring;
+		struct bnge_nq_ring_info *nqr = &bn->bnapi[i]->nq_ring;
 		int j;
-
-		nqr = &bnapi->nq_ring;
-		ring = &nqr->ring_struct;
-
-		bnge_free_ring(bd, &ring->ring_mem);
 
 		if (!nqr->cp_ring_arr)
 			continue;
@@ -556,8 +603,7 @@ static void bnge_free_nq_tree(struct bnge_net *bn)
 		for (j = 0; j < nqr->cp_ring_count; j++) {
 			struct bnge_cp_ring_info *cpr = &nqr->cp_ring_arr[j];
 
-			ring = &cpr->ring_struct;
-			bnge_free_ring(bd, &ring->ring_mem);
+			bnge_free_ring(bd, &cpr->ring_struct.ring_mem);
 			bnge_free_cp_desc_arr(cpr);
 		}
 		kfree(nqr->cp_ring_arr);
@@ -594,31 +640,21 @@ err_free_cp_desc_arr:
 	return rc;
 }
 
-static int bnge_alloc_nq_tree(struct bnge_net *bn)
+static int bnge_alloc_cp_rings(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
-	int i, j, ulp_msix, rc;
+	int i, j, rc;
 	int tcs = 1;
 
-	ulp_msix = bnge_aux_get_msix(bd);
 	for (i = 0, j = 0; i < bd->nq_nr_rings; i++) {
 		bool sh = !!(bd->flags & BNGE_EN_SHARED_CHNL);
 		struct bnge_napi *bnapi = bn->bnapi[i];
 		struct bnge_nq_ring_info *nqr;
 		struct bnge_cp_ring_info *cpr;
-		struct bnge_ring_struct *ring;
 		int cp_count = 0, k;
 		int rx = 0, tx = 0;
 
 		nqr = &bnapi->nq_ring;
-		nqr->bnapi = bnapi;
-		ring = &nqr->ring_struct;
-
-		rc = bnge_alloc_ring(bd, &ring->ring_mem);
-		if (rc)
-			goto err_free_nq_tree;
-
-		ring->map_idx = ulp_msix + i;
 
 		if (i < bd->rx_nr_rings) {
 			cp_count++;
@@ -634,7 +670,7 @@ static int bnge_alloc_nq_tree(struct bnge_net *bn)
 		nqr->cp_ring_arr = kzalloc_objs(*cpr, cp_count);
 		if (!nqr->cp_ring_arr) {
 			rc = -ENOMEM;
-			goto err_free_nq_tree;
+			goto err_free_cp_rings;
 		}
 
 		nqr->cp_ring_count = cp_count;
@@ -643,7 +679,7 @@ static int bnge_alloc_nq_tree(struct bnge_net *bn)
 			cpr = &nqr->cp_ring_arr[k];
 			rc = alloc_one_cp_ring(bn, cpr);
 			if (rc)
-				goto err_free_nq_tree;
+				goto err_free_cp_rings;
 
 			cpr->bnapi = bnapi;
 			cpr->cp_idx = k;
@@ -663,8 +699,8 @@ static int bnge_alloc_nq_tree(struct bnge_net *bn)
 	}
 	return 0;
 
-err_free_nq_tree:
-	bnge_free_nq_tree(bn);
+err_free_cp_rings:
+	bnge_free_cp_rings(bn);
 	return rc;
 }
 
@@ -1100,13 +1136,13 @@ static int bnge_alloc_vnic_attributes(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
 	struct bnge_vnic_info *vnic;
-	int i, size;
+	int i;
 
 	for (i = 0; i < bn->nr_vnics; i++) {
 		vnic = &bn->vnic_info[i];
 
 		if (vnic->flags & BNGE_VNIC_UCAST_FLAG) {
-			int mem_size = (BNGE_MAX_UC_ADDRS - 1) * ETH_ALEN;
+			int mem_size = (BNGE_MAX_L2_FLTRS - 1) * ETH_ALEN;
 
 			vnic->uc_list = kmalloc(mem_size, GFP_KERNEL);
 			if (!vnic->uc_list)
@@ -1125,18 +1161,8 @@ static int bnge_alloc_vnic_attributes(struct bnge_net *bn)
 		}
 
 		/* Allocate rss table and hash key */
-		size = L1_CACHE_ALIGN(BNGE_MAX_RSS_TABLE_SIZE);
-
-		vnic->rss_table_size = size + HW_HASH_KEY_SIZE;
-		vnic->rss_table = dma_alloc_coherent(bd->dev,
-						     vnic->rss_table_size,
-						     &vnic->rss_table_dma_addr,
-						     GFP_KERNEL);
-		if (!vnic->rss_table)
+		if (bnge_alloc_vnic_rss_table(bn, vnic))
 			goto err_free_vnic_attributes;
-
-		vnic->rss_hash_key = ((void *)vnic->rss_table) + size;
-		vnic->rss_hash_key_dma_addr = vnic->rss_table_dma_addr + size;
 	}
 	return 0;
 
@@ -1147,12 +1173,7 @@ err_free_vnic_attributes:
 
 static int bnge_alloc_vnics(struct bnge_net *bn)
 {
-	int num_vnics;
-
-	/* Allocate only 1 VNIC for now
-	 * Additional VNICs will be added based on RFS/NTUPLE in future patches
-	 */
-	num_vnics = 1;
+	int num_vnics = BNGE_BASE_VNICS;
 
 	bn->vnic_info = kzalloc_objs(struct bnge_vnic_info, num_vnics);
 	if (!bn->vnic_info)
@@ -1191,8 +1212,18 @@ static int bnge_init_ring_grps(struct bnge_net *bn)
 		bn->grp_info[i].agg_fw_ring_id = INVALID_HW_RING_ID;
 		bn->grp_info[i].nq_fw_ring_id = INVALID_HW_RING_ID;
 	}
+	/* NQ0 stays allocated in FW across open/close */
+	bn->grp_info[0].nq_fw_ring_id =
+		(u16)bn->nq0->nq_ring.ring_struct.fw_ring_id;
 
 	return 0;
+}
+
+static void bnge_nq0_clear_rings(struct bnge_net *bn)
+{
+	bn->nq0->rx_ring = NULL;
+	memset(bn->nq0->tx_ring, 0, sizeof(bn->nq0->tx_ring));
+	bn->nq0->events = 0;
 }
 
 static void bnge_free_core(struct bnge_net *bn)
@@ -1200,17 +1231,22 @@ static void bnge_free_core(struct bnge_net *bn)
 	bnge_free_vnic_attributes(bn);
 	bnge_free_tx_rings(bn);
 	bnge_free_rx_rings(bn);
-	bnge_free_nq_tree(bn);
-	bnge_free_nq_arrays(bn);
+	bnge_free_cp_rings(bn);
+	bnge_free_nqs(bn);
 	bnge_free_ring_stats(bn);
 	bnge_free_ring_grps(bn);
 	bnge_free_vnics(bn);
+
+	/* Free non-user filters only */
+	bnge_free_ntp_fltrs(bn, true);
+
 	kfree(bn->tx_ring_map);
 	bn->tx_ring_map = NULL;
 	kfree(bn->tx_ring);
 	bn->tx_ring = NULL;
 	kfree(bn->rx_ring);
 	bn->rx_ring = NULL;
+	bnge_nq0_clear_rings(bn);
 	kfree(bn->bnapi);
 	bn->bnapi = NULL;
 }
@@ -1225,20 +1261,20 @@ static int bnge_alloc_core(struct bnge_net *bn)
 	arr_size = L1_CACHE_ALIGN(sizeof(struct bnge_napi *) *
 			bd->nq_nr_rings);
 	size = L1_CACHE_ALIGN(sizeof(struct bnge_napi));
-	bnapi = kzalloc(arr_size + size * bd->nq_nr_rings, GFP_KERNEL);
+	bnapi = kzalloc(arr_size +
+			size * (bd->nq_nr_rings - BNGE_FIRST_OPEN_NQ),
+			GFP_KERNEL);
 	if (!bnapi)
 		return rc;
 
 	bn->bnapi = bnapi;
 	bnapi += arr_size;
-	for (i = 0; i < bd->nq_nr_rings; i++, bnapi += size) {
-		struct bnge_nq_ring_info *nqr;
-
+	bn->bnapi[0] = bn->nq0;
+	bnge_for_each_open_nq(i, bd) {
 		bn->bnapi[i] = bnapi;
 		bn->bnapi[i]->index = i;
 		bn->bnapi[i]->bn = bn;
-		nqr = &bn->bnapi[i]->nq_ring;
-		nqr->ring_struct.ring_mem.flags = BNGE_RMEM_RING_PTE_FLAG;
+		bnapi += size;
 	}
 
 	bn->rx_ring = kzalloc_objs(struct bnge_rx_ring_info, bd->rx_nr_rings);
@@ -1293,11 +1329,15 @@ static int bnge_alloc_core(struct bnge_net *bn)
 
 	bnge_init_stats(bn);
 
+	rc = bnge_fltrs_mem(bn);
+	if (rc)
+		goto err_free_ring_stats;
+
 	rc = bnge_alloc_vnics(bn);
 	if (rc)
 		goto err_free_ring_stats;
 
-	rc = bnge_alloc_nq_arrays(bn);
+	rc = bnge_alloc_nqs(bn);
 	if (rc)
 		goto err_free_vnics;
 
@@ -1305,32 +1345,35 @@ static int bnge_alloc_core(struct bnge_net *bn)
 
 	rc = bnge_alloc_rx_rings(bn);
 	if (rc)
-		goto err_free_nq_arrays;
+		goto err_free_nqs;
 
 	rc = bnge_alloc_tx_rings(bn);
 	if (rc)
 		goto err_free_rx_rings;
 
-	rc = bnge_alloc_nq_tree(bn);
+	rc = bnge_alloc_cp_rings(bn);
 	if (rc)
 		goto err_free_tx_rings;
 
 	bn->vnic_info[BNGE_VNIC_DEFAULT].flags |= BNGE_VNIC_RSS_FLAG |
 						  BNGE_VNIC_MCAST_FLAG |
 						  BNGE_VNIC_UCAST_FLAG;
+	bn->vnic_info[BNGE_VNIC_NTUPLE].flags |= BNGE_VNIC_RSS_FLAG |
+						 BNGE_VNIC_NTUPLE_FLAG;
+
 	rc = bnge_alloc_vnic_attributes(bn);
 	if (rc)
-		goto err_free_nq_tree;
+		goto err_free_cp_rings;
 	return 0;
 
-err_free_nq_tree:
-	bnge_free_nq_tree(bn);
+err_free_cp_rings:
+	bnge_free_cp_rings(bn);
 err_free_tx_rings:
 	bnge_free_tx_rings(bn);
 err_free_rx_rings:
 	bnge_free_rx_rings(bn);
-err_free_nq_arrays:
-	bnge_free_nq_arrays(bn);
+err_free_nqs:
+	bnge_free_nqs(bn);
 err_free_vnics:
 	bnge_free_vnics(bn);
 err_free_ring_stats:
@@ -1345,6 +1388,7 @@ err_free_rx_ring:
 	kfree(bn->rx_ring);
 	bn->rx_ring = NULL;
 err_free_bnapi:
+	bnge_nq0_clear_rings(bn);
 	kfree(bn->bnapi);
 	bn->bnapi = NULL;
 	return rc;
@@ -1389,21 +1433,18 @@ static int bnge_cp_num_to_irq_num(struct bnge_net *bn, int n)
 	return nqr->ring_struct.map_idx;
 }
 
-static void bnge_init_nq_tree(struct bnge_net *bn)
+static void bnge_init_cp_rings(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
 	int i, j;
 
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_nq_ring_info *nqr = &bn->bnapi[i]->nq_ring;
-		struct bnge_ring_struct *ring = &nqr->ring_struct;
 
-		ring->fw_ring_id = INVALID_HW_RING_ID_32BIT;
 		for (j = 0; j < nqr->cp_ring_count; j++) {
 			struct bnge_cp_ring_info *cpr = &nqr->cp_ring_arr[j];
 
-			ring = &cpr->ring_struct;
-			ring->fw_ring_id = INVALID_HW_RING_ID_32BIT;
+			cpr->ring_struct.fw_ring_id = INVALID_HW_RING_ID_32BIT;
 		}
 	}
 }
@@ -1757,13 +1798,6 @@ static void bnge_init_vnics(struct bnge_net *bn)
 				u8 *key = (void *)vnic->rss_hash_key;
 				int k;
 
-				if (!bn->rss_hash_key_valid &&
-				    !bn->rss_hash_key_updated) {
-					get_random_bytes(bn->rss_hash_key,
-							 HW_HASH_KEY_SIZE);
-					bn->rss_hash_key_updated = true;
-				}
-
 				memcpy(vnic->rss_hash_key, bn->rss_hash_key,
 				       HW_HASH_KEY_SIZE);
 
@@ -1771,7 +1805,6 @@ static void bnge_init_vnics(struct bnge_net *bn)
 					continue;
 
 				bn->rss_hash_key_updated = false;
-				bn->rss_hash_key_valid = true;
 
 				bn->toeplitz_prefix = 0;
 				for (k = 0; k < 8; k++) {
@@ -1914,6 +1947,44 @@ static int bnge_hwrm_rx_ring_alloc(struct bnge_net *bn,
 	return 0;
 }
 
+static int bnge_hwrm_nq_alloc(struct bnge_net *bn, struct bnge_napi *bnapi)
+{
+	struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
+	u32 type = HWRM_RING_ALLOC_NQ;
+	struct bnge_ring_struct *ring;
+	unsigned int vector;
+	u32 map_idx;
+	int rc;
+
+	ring = &nqr->ring_struct;
+	map_idx = ring->map_idx;
+
+	vector = bn->bd->irq_tbl[map_idx].vector;
+	disable_irq_nosync(vector);
+	rc = hwrm_ring_alloc_send_msg(bn, ring, type, map_idx);
+	if (rc) {
+		enable_irq(vector);
+		return rc;
+	}
+	bnge_set_db(bn, &nqr->nq_db, type, map_idx, ring->fw_ring_id);
+	bnge_db_nq(bn, &nqr->nq_db, nqr->nq_raw_cons);
+	enable_irq(vector);
+
+	return 0;
+}
+
+static void bnge_hwrm_nq_free(struct bnge_net *bn, struct bnge_napi *bnapi)
+{
+	struct bnge_ring_struct *ring = &bnapi->nq_ring.ring_struct;
+
+	if (ring->fw_ring_id == INVALID_HW_RING_ID_32BIT)
+		return;
+
+	hwrm_ring_free_send_msg(bn, ring, RING_FREE_REQ_RING_TYPE_NQ,
+				INVALID_HW_RING_ID);
+	ring->fw_ring_id = INVALID_HW_RING_ID_32BIT;
+}
+
 static int bnge_hwrm_ring_alloc(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
@@ -1921,31 +1992,14 @@ static int bnge_hwrm_ring_alloc(struct bnge_net *bn)
 	int i, rc = 0;
 
 	agg_rings = !!(bnge_is_agg_reqd(bd));
-	for (i = 0; i < bd->nq_nr_rings; i++) {
+	bnge_for_each_open_nq(i, bd) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
-		struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
-		struct bnge_ring_struct *ring = &nqr->ring_struct;
-		u32 type = HWRM_RING_ALLOC_NQ;
-		u32 map_idx = ring->map_idx;
-		unsigned int vector;
 
-		vector = bd->irq_tbl[map_idx].vector;
-		disable_irq_nosync(vector);
-		rc = hwrm_ring_alloc_send_msg(bn, ring, type, map_idx);
-		if (rc) {
-			enable_irq(vector);
+		rc = bnge_hwrm_nq_alloc(bn, bnapi);
+		if (rc)
 			goto err_out;
-		}
-		bnge_set_db(bn, &nqr->nq_db, type, map_idx, ring->fw_ring_id);
-		bnge_db_nq(bn, &nqr->nq_db, nqr->nq_raw_cons);
-		enable_irq(vector);
-		bn->grp_info[i].nq_fw_ring_id = (u16)ring->fw_ring_id;
-
-		if (!i) {
-			rc = bnge_hwrm_set_async_event_cr(bd, ring->fw_ring_id);
-			if (rc)
-				netdev_warn(bn->netdev, "Failed to set async event completion ring.\n");
-		}
+		bn->grp_info[i].nq_fw_ring_id =
+			(u16)bnapi->nq_ring.ring_struct.fw_ring_id;
 	}
 
 	for (i = 0; i < bd->tx_nr_rings; i++) {
@@ -1996,174 +2050,6 @@ static int bnge_hwrm_ring_alloc(struct bnge_net *bn)
 		}
 	}
 err_out:
-	return rc;
-}
-
-void bnge_fill_hw_rss_tbl(struct bnge_net *bn, struct bnge_vnic_info *vnic)
-{
-	__le16 *ring_tbl = vnic->rss_table;
-	struct bnge_rx_ring_info *rxr;
-	struct bnge_dev *bd = bn->bd;
-	u16 tbl_size, i;
-
-	tbl_size = bnge_get_rxfh_indir_size(bd);
-
-	for (i = 0; i < tbl_size; i++) {
-		u32 j;
-
-		j = bd->rss_indir_tbl[i];
-		rxr = &bn->rx_ring[j];
-
-		*ring_tbl++ = cpu_to_le16(rxr->rx_ring_struct.fw_ring_id);
-		*ring_tbl++ = cpu_to_le16(bnge_cp_ring_for_rx(rxr));
-	}
-}
-
-static int bnge_hwrm_vnic_rss_cfg(struct bnge_net *bn,
-				  struct bnge_vnic_info *vnic)
-{
-	int rc;
-
-	rc = bnge_hwrm_vnic_set_rss(bn, vnic, true);
-	if (rc) {
-		netdev_err(bn->netdev, "hwrm vnic %d set rss failure rc: %d\n",
-			   vnic->vnic_id, rc);
-		return rc;
-	}
-	rc = bnge_hwrm_vnic_cfg(bn, vnic);
-	if (rc)
-		netdev_err(bn->netdev, "hwrm vnic %d cfg failure rc: %d\n",
-			   vnic->vnic_id, rc);
-	return rc;
-}
-
-static int bnge_setup_vnic(struct bnge_net *bn, struct bnge_vnic_info *vnic)
-{
-	struct bnge_dev *bd = bn->bd;
-	int rc, i, nr_ctxs;
-
-	nr_ctxs = bnge_cal_nr_rss_ctxs(bd->rx_nr_rings);
-	for (i = 0; i < nr_ctxs; i++) {
-		rc = bnge_hwrm_vnic_ctx_alloc(bd, vnic, i);
-		if (rc) {
-			netdev_err(bn->netdev, "hwrm vnic %d ctx %d alloc failure rc: %d\n",
-				   vnic->vnic_id, i, rc);
-			return -ENOMEM;
-		}
-		bn->rsscos_nr_ctxs++;
-	}
-
-	rc = bnge_hwrm_vnic_rss_cfg(bn, vnic);
-	if (rc)
-		return rc;
-
-	if (bnge_is_agg_reqd(bd)) {
-		rc = bnge_hwrm_vnic_set_hds(bn, vnic);
-		if (rc)
-			netdev_err(bn->netdev, "hwrm vnic %d set hds failure rc: %d\n",
-				   vnic->vnic_id, rc);
-	}
-	return rc;
-}
-
-static void bnge_del_l2_filter(struct bnge_net *bn, struct bnge_l2_filter *fltr)
-{
-	if (!refcount_dec_and_test(&fltr->refcnt))
-		return;
-	hlist_del_rcu(&fltr->base.hash);
-	kfree_rcu(fltr, base.rcu);
-}
-
-static void bnge_init_l2_filter(struct bnge_net *bn,
-				struct bnge_l2_filter *fltr,
-				struct bnge_l2_key *key, u32 idx)
-{
-	struct hlist_head *head;
-
-	ether_addr_copy(fltr->l2_key.dst_mac_addr, key->dst_mac_addr);
-	fltr->l2_key.vlan = key->vlan;
-	fltr->base.type = BNGE_FLTR_TYPE_L2;
-
-	head = &bn->l2_fltr_hash_tbl[idx];
-	hlist_add_head_rcu(&fltr->base.hash, head);
-	refcount_set(&fltr->refcnt, 1);
-}
-
-static struct bnge_l2_filter *__bnge_lookup_l2_filter(struct bnge_net *bn,
-						      struct bnge_l2_key *key,
-						      u32 idx)
-{
-	struct bnge_l2_filter *fltr;
-	struct hlist_head *head;
-
-	head = &bn->l2_fltr_hash_tbl[idx];
-	hlist_for_each_entry_rcu(fltr, head, base.hash) {
-		struct bnge_l2_key *l2_key = &fltr->l2_key;
-
-		if (ether_addr_equal(l2_key->dst_mac_addr, key->dst_mac_addr) &&
-		    l2_key->vlan == key->vlan)
-			return fltr;
-	}
-	return NULL;
-}
-
-static struct bnge_l2_filter *bnge_lookup_l2_filter(struct bnge_net *bn,
-						    struct bnge_l2_key *key,
-						    u32 idx)
-{
-	struct bnge_l2_filter *fltr;
-
-	rcu_read_lock();
-	fltr = __bnge_lookup_l2_filter(bn, key, idx);
-	if (fltr)
-		refcount_inc(&fltr->refcnt);
-	rcu_read_unlock();
-	return fltr;
-}
-
-static struct bnge_l2_filter *bnge_alloc_l2_filter(struct bnge_net *bn,
-						   struct bnge_l2_key *key,
-						   gfp_t gfp)
-{
-	struct bnge_l2_filter *fltr;
-	u32 idx;
-
-	idx = jhash2(&key->filter_key, BNGE_L2_KEY_SIZE, bn->hash_seed) &
-	      BNGE_L2_FLTR_HASH_MASK;
-	fltr = bnge_lookup_l2_filter(bn, key, idx);
-	if (fltr)
-		return fltr;
-
-	fltr = kzalloc_obj(*fltr, gfp);
-	if (!fltr)
-		return ERR_PTR(-ENOMEM);
-
-	bnge_init_l2_filter(bn, fltr, key, idx);
-	return fltr;
-}
-
-static int bnge_hwrm_set_vnic_filter(struct bnge_net *bn, u16 vnic_id, u16 idx,
-				     const u8 *mac_addr)
-{
-	struct bnge_l2_filter *fltr;
-	struct bnge_l2_key key;
-	int rc;
-
-	ether_addr_copy(key.dst_mac_addr, mac_addr);
-	key.vlan = 0;
-	fltr = bnge_alloc_l2_filter(bn, &key, GFP_KERNEL);
-	if (IS_ERR(fltr))
-		return PTR_ERR(fltr);
-
-	fltr->base.fw_vnic_id = bn->vnic_info[vnic_id].fw_vnic_id;
-	rc = bnge_hwrm_l2_filter_alloc(bn->bd, fltr);
-	if (rc)
-		goto err_del_l2_filter;
-	bn->vnic_info[vnic_id].l2_filters[idx] = fltr;
-	return rc;
-
-err_del_l2_filter:
-	bnge_del_l2_filter(bn, fltr);
 	return rc;
 }
 
@@ -2234,6 +2120,7 @@ static int bnge_cfg_rx_mode(struct bnge_net *bn, struct netdev_hw_addr_list *uc,
 	int i, off = 0, rc, uc_count = 0;
 	struct bnge_dev *bd = bn->bd;
 	struct netdev_hw_addr *ha;
+	int l2_free;
 
 	if (!uc_update)
 		goto skip_uc;
@@ -2241,8 +2128,10 @@ static int bnge_cfg_rx_mode(struct bnge_net *bn, struct netdev_hw_addr_list *uc,
 	for (i = 1; i < vnic->uc_filter_count; i++) {
 		struct bnge_l2_filter *fltr = vnic->l2_filters[i];
 
+		if (!fltr)
+			continue;
 		bnge_hwrm_l2_filter_free(bd, fltr);
-		bnge_del_l2_filter(bn, fltr);
+		bnge_del_l2_filter_rcu(bn, fltr);
 	}
 
 	vnic->uc_filter_count = 1;
@@ -2250,14 +2139,24 @@ static int bnge_cfg_rx_mode(struct bnge_net *bn, struct netdev_hw_addr_list *uc,
 	if (!snapshot)
 		netif_addr_lock_bh(dev);
 	/* dev_addr is already programmed as L2 filter 0, so it takes neither a
-	 * uc_list slot nor an l2_filters[] slot. Count only the entries that
-	 * will actually be programmed so the overflow check matches the fill
-	 * loop below (and bnge_uc_list_updated()).
+	 * uc_list slot nor an l2_filters[] slot. Count the entries that go to
+	 * the fill loop below (and bnge_uc_list_updated()). An address that a
+	 * user ETHER_FLOW rule already serves gets -EEXIST there and needs no
+	 * filter of its own, but it is counted here and its rule's filter is
+	 * already taken from l2_free. Such addresses are counted twice, so the
+	 * VNIC can go promiscuous earlier than needed.
 	 */
 	netdev_hw_addr_list_for_each(ha, uc)
 		if (!ether_addr_equal(ha->addr, dev->dev_addr))
 			uc_count++;
-	if (uc_count > BNGE_MAX_UC_ADDRS - 1) {
+	/* The unicast addresses and the user ETHER_FLOW rules share the L2
+	 * filters. Receive the addresses that do not fit in promiscuous mode.
+	 * The firmware supports many more L2 filters than BNGE_MAX_L2_FLTRS,
+	 * so it is not expected to refuse a filter in the loop below.
+	 */
+	l2_free = BNGE_MAX_L2_FLTRS -
+		  bitmap_weight(bn->l2_fltr_bmap, BNGE_MAX_L2_FLTRS);
+	if (uc_count > BNGE_MAX_L2_FLTRS - 1 || uc_count > l2_free) {
 		vnic->rx_mask |= CFA_L2_SET_RX_MASK_REQ_MASK_PROMISCUOUS;
 	} else {
 		netdev_hw_addr_list_for_each(ha, uc) {
@@ -2273,6 +2172,11 @@ static int bnge_cfg_rx_mode(struct bnge_net *bn, struct netdev_hw_addr_list *uc,
 
 	for (i = 1, off = 0; i < vnic->uc_filter_count; i++, off += ETH_ALEN) {
 		rc = bnge_hwrm_set_vnic_filter(bn, 0, i, vnic->uc_list + off);
+		if (rc == -EEXIST) {
+			/* Already delivered by a user L2 rule */
+			vnic->l2_filters[i] = NULL;
+			continue;
+		}
 		if (rc) {
 			if (rc == -EAGAIN)
 				netdev_warn(dev, "FW busy while setting vnic filter, will retry\n");
@@ -2410,6 +2314,8 @@ static void bnge_disable_napi(struct bnge_net *bn)
 
 		napi_disable_locked(&bnapi->napi);
 	}
+
+	synchronize_net();
 }
 
 static void bnge_enable_napi(struct bnge_net *bn)
@@ -2459,15 +2365,38 @@ static void bnge_hwrm_clear_vnic_filter(struct bnge_net *bn)
 	for (i = 0; i < vnic->uc_filter_count; i++) {
 		struct bnge_l2_filter *fltr = vnic->l2_filters[i];
 
+		if (!fltr)
+			continue;
 		bnge_hwrm_l2_filter_free(bn->bd, fltr);
-		bnge_del_l2_filter(bn, fltr);
+		bnge_del_l2_filter_rcu(bn, fltr);
 	}
 
 	vnic->uc_filter_count = 0;
 }
 
+/* User ETHER_FLOW rules are L2 filters whose destination is the NTUPLE VNIC.
+ * Free them in firmware before that VNIC goes away, as is done for the
+ * default VNIC filters. The rules stay in usr_fltr_list and are programmed
+ * again by bnge_cfg_usr_fltrs() on the next open.
+ */
+static void bnge_hwrm_clear_usr_l2_fltrs(struct bnge_net *bn)
+{
+	struct bnge_filter_base *fltr;
+
+	list_for_each_entry(fltr, &bn->usr_fltr_list, list_node) {
+		if (fltr->type != BNGE_FLTR_TYPE_L2 ||
+		    !test_and_clear_bit(BNGE_FLTR_VALID, &fltr->state))
+			continue;
+		bnge_hwrm_l2_filter_free(bn->bd,
+					 container_of(fltr,
+						      struct bnge_l2_filter,
+						      base));
+	}
+}
+
 static void bnge_clear_vnic(struct bnge_net *bn)
 {
+	bnge_hwrm_clear_usr_l2_fltrs(bn);
 	bnge_hwrm_clear_vnic_filter(bn);
 	bnge_hwrm_vnic_free(bn);
 	bnge_hwrm_vnic_ctx_free(bn);
@@ -2559,6 +2488,10 @@ static void bnge_hwrm_ring_free(struct bnge_net *bn, bool close_path)
 		bnge_hwrm_rx_agg_ring_free(bn, &bn->rx_ring[i], close_path);
 	}
 
+	/* Keep after ring frees: their HWRM completions need NAPI. */
+	if (close_path)
+		bnge_disable_napi(bn);
+
 	/* The completion rings are about to be freed.  After that the
 	 * IRQ doorbell will not work anymore.  So we need to disable
 	 * IRQ here.
@@ -2566,23 +2499,16 @@ static void bnge_hwrm_ring_free(struct bnge_net *bn, bool close_path)
 	bnge_disable_int_sync(bn);
 
 	for (i = 0; i < bd->nq_nr_rings; i++) {
-		struct bnge_napi *bnapi = bn->bnapi[i];
-		struct bnge_nq_ring_info *nqr;
-		struct bnge_ring_struct *ring;
+		struct bnge_nq_ring_info *nqr = &bn->bnapi[i]->nq_ring;
 		int j;
 
-		nqr = &bnapi->nq_ring;
 		for (j = 0; j < nqr->cp_ring_count && nqr->cp_ring_arr; j++)
 			bnge_hwrm_cp_ring_free(bn, &nqr->cp_ring_arr[j]);
+	}
 
-		ring = &nqr->ring_struct;
-		if (ring->fw_ring_id != INVALID_HW_RING_ID_32BIT) {
-			hwrm_ring_free_send_msg(bn, ring,
-						RING_FREE_REQ_RING_TYPE_NQ,
-						INVALID_HW_RING_ID);
-			ring->fw_ring_id = INVALID_HW_RING_ID_32BIT;
-			bn->grp_info[i].nq_fw_ring_id = INVALID_HW_RING_ID;
-		}
+	bnge_for_each_open_nq(i, bd) {
+		bnge_hwrm_nq_free(bn, bn->bnapi[i]);
+		bn->grp_info[i].nq_fw_ring_id = INVALID_HW_RING_ID;
 	}
 }
 
@@ -2593,7 +2519,7 @@ static void bnge_setup_msix(struct bnge_net *bn)
 	int len, i;
 
 	len = sizeof(bd->irq_tbl[0].name);
-	for (i = 0; i < bd->nq_nr_rings; i++) {
+	bnge_for_each_open_nq(i, bd) {
 		int map_idx = bnge_cp_num_to_irq_num(bn, i);
 		char *attr;
 
@@ -2614,10 +2540,23 @@ static int bnge_setup_interrupts(struct bnge_net *bn)
 {
 	struct net_device *dev = bn->netdev;
 	struct bnge_dev *bd = bn->bd;
+	int rc;
 
 	bnge_setup_msix(bn);
 
-	return netif_set_real_num_queues(dev, bd->tx_nr_rings, bd->rx_nr_rings);
+	rc = netif_set_real_num_queues(dev, bd->tx_nr_rings, bd->rx_nr_rings);
+	if (rc)
+		return rc;
+
+#ifdef CONFIG_RFS_ACCEL
+	if (bn->priv_flags & BNGE_NET_EN_NTUPLE) {
+		dev->rx_cpu_rmap = alloc_irq_cpu_rmap(bd->rx_nr_rings);
+		if (!dev->rx_cpu_rmap)
+			netdev_warn(dev, "Unable to allocate the CPU rmap, aRFS disabled\n");
+	}
+#endif
+
+	return rc;
 }
 
 static void bnge_hwrm_resource_free(struct bnge_net *bn, bool close_path)
@@ -2627,27 +2566,106 @@ static void bnge_hwrm_resource_free(struct bnge_net *bn, bool close_path)
 	bnge_hwrm_stat_ctx_free(bn);
 }
 
+static void bnge_nq_free_irq(struct bnge_net *bn, struct bnge_napi *bnapi)
+{
+	int map_idx = bnapi->nq_ring.ring_struct.map_idx;
+	struct bnge_irq *irq = &bn->bd->irq_tbl[map_idx];
+
+	if (irq->requested) {
+		if (irq->have_cpumask) {
+			irq_set_affinity_hint(irq->vector, NULL);
+			free_cpumask_var(irq->cpu_mask);
+			irq->have_cpumask = 0;
+		}
+		free_irq(irq->vector, bnapi);
+	}
+
+	irq->requested = 0;
+}
+
+#ifdef CONFIG_RFS_ACCEL
+/* set_rps_cpu() reads rx_cpu_rmap under rcu_read_lock(). Hide the pointer and
+ * wait for readers that already loaded it before the rmap is freed.
+ */
+static void bnge_free_cpu_rmap(struct bnge_net *bn)
+{
+	struct cpu_rmap *rmap = bn->netdev->rx_cpu_rmap;
+
+	if (!rmap)
+		return;
+
+	WRITE_ONCE(bn->netdev->rx_cpu_rmap, NULL);
+	synchronize_net();
+	free_irq_cpu_rmap(rmap);
+}
+#else
+static void bnge_free_cpu_rmap(struct bnge_net *bn)
+{
+}
+#endif
+
+/* The index of a vector in the aRFS cpu_rmap is the index of its RX ring, so
+ * the vectors must be added in ring order, starting with NQ0 (ring 0).
+ */
+static void bnge_nq_add_cpu_rmap(struct bnge_net *bn, struct bnge_napi *bnapi)
+{
+#ifdef CONFIG_RFS_ACCEL
+	int map_idx = bnapi->nq_ring.ring_struct.map_idx;
+	struct cpu_rmap *rmap = bn->netdev->rx_cpu_rmap;
+	int rc;
+
+	if (!rmap || !bnapi->rx_ring)
+		return;
+
+	rc = irq_cpu_rmap_add(rmap, bn->bd->irq_tbl[map_idx].vector);
+	if (rc) {
+		netdev_warn(bn->netdev,
+			    "failed adding irq rmap for ring %d, disabling aRFS\n",
+			    bnapi->index);
+		bnge_free_cpu_rmap(bn);
+	}
+#endif
+}
+
+static int bnge_nq_request_irq(struct bnge_net *bn, struct bnge_napi *bnapi)
+{
+	int map_idx = bnapi->nq_ring.ring_struct.map_idx;
+	struct bnge_dev *bd = bn->bd;
+	struct bnge_irq *irq;
+	int rc;
+
+	irq = &bd->irq_tbl[map_idx];
+
+	bnge_nq_add_cpu_rmap(bn, bnapi);
+
+	rc = request_irq(irq->vector, irq->handler, 0, irq->name, bnapi);
+	if (rc)
+		return rc;
+
+	irq->requested = 1;
+
+	if (zalloc_cpumask_var(&irq->cpu_mask, GFP_KERNEL)) {
+		int numa_node = dev_to_node(&bd->pdev->dev);
+
+		irq->have_cpumask = 1;
+		cpumask_set_cpu(cpumask_local_spread(bnapi->index, numa_node),
+				irq->cpu_mask);
+		if (irq_set_affinity_hint(irq->vector, irq->cpu_mask))
+			bnge_warn(bd, "Set affinity failed, IRQ = %d\n",
+				  irq->vector);
+	}
+	return 0;
+}
+
 static void bnge_free_irq(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
-	struct bnge_irq *irq;
 	int i;
 
-	for (i = 0; i < bd->nq_nr_rings; i++) {
-		int map_idx = bnge_cp_num_to_irq_num(bn, i);
+	bnge_free_cpu_rmap(bn);
 
-		irq = &bd->irq_tbl[map_idx];
-		if (irq->requested) {
-			if (irq->have_cpumask) {
-				irq_set_affinity_hint(irq->vector, NULL);
-				free_cpumask_var(irq->cpu_mask);
-				irq->have_cpumask = 0;
-			}
-			free_irq(irq->vector, bn->bnapi[i]);
-		}
-
-		irq->requested = 0;
-	}
+	bnge_for_each_open_nq(i, bd)
+		bnge_nq_free_irq(bn, bn->bnapi[i]);
 }
 
 static int bnge_request_irq(struct bnge_net *bn)
@@ -2660,30 +2678,17 @@ static int bnge_request_irq(struct bnge_net *bn)
 		netdev_err(bn->netdev, "bnge_setup_interrupts err: %d\n", rc);
 		return rc;
 	}
-	for (i = 0; i < bd->nq_nr_rings; i++) {
-		int map_idx = bnge_cp_num_to_irq_num(bn, i);
-		struct bnge_irq *irq = &bd->irq_tbl[map_idx];
 
-		rc = request_irq(irq->vector, irq->handler, 0, irq->name,
-				 bn->bnapi[i]);
+	/* NQ0 is requested at probe, before the rmap exists, and is not one
+	 * of the open NQs below. Add it first, so that the rmap index of
+	 * every vector is its RX ring index.
+	 */
+	bnge_nq_add_cpu_rmap(bn, bn->bnapi[0]);
+
+	bnge_for_each_open_nq(i, bd) {
+		rc = bnge_nq_request_irq(bn, bn->bnapi[i]);
 		if (rc)
 			goto err_free_irq;
-
-		netif_napi_set_irq_locked(&bn->bnapi[i]->napi, irq->vector);
-		irq->requested = 1;
-
-		if (zalloc_cpumask_var(&irq->cpu_mask, GFP_KERNEL)) {
-			int numa_node = dev_to_node(&bd->pdev->dev);
-
-			irq->have_cpumask = 1;
-			cpumask_set_cpu(cpumask_local_spread(i, numa_node),
-					irq->cpu_mask);
-			if (irq_set_affinity_hint(irq->vector, irq->cpu_mask)) {
-				netdev_warn(bn->netdev,
-					    "Set affinity failed, IRQ = %d\n",
-					    irq->vector);
-			}
-		}
 	}
 	return 0;
 
@@ -2744,8 +2749,12 @@ static int bnge_init_chip(struct bnge_net *bn)
 	if (rc)
 		goto err_out;
 
-	if (bd->rss_cap & BNGE_RSS_CAP_RSS_HASH_TYPE_DELTA)
-		bnge_hwrm_update_rss_hash_cfg(bn);
+	rc = bnge_alloc_rfs_vnic(bn);
+	if (rc) {
+		netdev_err(bn->netdev,
+			   "hwrm aRFS vnic alloc failure rc: %d\n", rc);
+		goto err_out;
+	}
 
 	if (bn->priv_flags & BNGE_NET_EN_TPA) {
 		rc = bnge_set_tpa(bn, true);
@@ -2800,9 +2809,14 @@ static void bnge_init_napi(struct bnge_net *bn)
 	int i;
 
 	for (i = 0; i < bd->nq_nr_rings; i++) {
+		int map_idx;
+
 		bnapi = bn->bnapi[i];
+		map_idx = bnapi->nq_ring.ring_struct.map_idx;
 		netif_napi_add_config_locked(bn->netdev, &bnapi->napi,
 					     bnge_napi_poll, bnapi->index);
+		netif_napi_set_irq_locked(&bnapi->napi,
+					  bd->irq_tbl[map_idx].vector);
 	}
 }
 
@@ -2826,11 +2840,96 @@ static void bnge_del_napi(struct bnge_net *bn)
 	synchronize_net();
 }
 
+static int bnge_nq0_init(struct bnge_net *bn)
+{
+	struct bnge_nq_ring_info *nqr;
+	struct bnge_dev *bd = bn->bd;
+	struct bnge_napi *bnapi;
+	struct bnge_irq *irq;
+	int rc;
+
+	/* NQ0 helpers hard-code NQ index 0 */
+	BUILD_BUG_ON(BNGE_FIRST_OPEN_NQ != 1);
+
+	bnapi = kzalloc_obj(*bnapi);
+	if (!bnapi)
+		return -ENOMEM;
+
+	bnapi->bn = bn;
+	bnapi->index = 0;
+	bn->nq0 = bnapi;
+	nqr = &bnapi->nq_ring;
+
+	/* NQ0 always sits at irq_tbl[0], independent of the aux vector count.
+	 * Its ring size is fixed here; a later change to bn->cp_* must
+	 * re-create NQ0.
+	 */
+	rc = bnge_alloc_nq(bn, bnapi, 0);
+	if (rc)
+		goto err_free_bnapi;
+
+	irq = &bd->irq_tbl[nqr->ring_struct.map_idx];
+	irq->handler = bnge_nq0_msix;
+	snprintf(irq->name, sizeof(irq->name), "%s-nq0", pci_name(bd->pdev));
+
+	rc = bnge_nq_request_irq(bn, bnapi);
+	if (rc)
+		goto err_free_nq;
+
+	rc = bnge_hwrm_nq_alloc(bn, bnapi);
+	if (rc)
+		goto err_free_irq;
+
+	rc = bnge_hwrm_set_async_event_cr(bd, nqr->ring_struct.fw_ring_id);
+	if (rc) {
+		bnge_err(bd, "Failed to set async event completion ring: %d\n",
+			 rc);
+		goto err_free_hwrm;
+	}
+
+	/* BNGE_STATE_NQ0_NAPI is clear, so from here on the ISR queues
+	 * nq0_work. nq0_wq must already exist.
+	 * This is the first arm, so keep it last: the unwind above does not
+	 * cancel nq0_work.
+	 */
+	BNGE_DB_NQ_ARM(bd, &nqr->nq_db, nqr->nq_raw_cons);
+	return 0;
+
+err_free_hwrm:
+	bnge_hwrm_nq_free(bn, bnapi);
+err_free_irq:
+	bnge_nq_free_irq(bn, bnapi);
+err_free_nq:
+	bnge_free_nq(bn, bnapi);
+err_free_bnapi:
+	kfree(bnapi);
+	bn->nq0 = NULL;
+	return rc;
+}
+
+static void bnge_nq0_quiesce(struct bnge_net *bn)
+{
+	bnge_nq_free_irq(bn, bn->nq0);
+	cancel_work_sync(&bn->nq0_work);
+}
+
+static void bnge_nq0_uninit(struct bnge_net *bn)
+{
+	struct bnge_napi *bnapi = bn->nq0;
+
+	bnge_nq0_quiesce(bn);
+
+	bnge_hwrm_nq_free(bn, bnapi);
+	bnge_free_nq(bn, bnapi);
+	kfree(bnapi);
+	bn->nq0 = NULL;
+}
+
 static int bnge_init_nic(struct bnge_net *bn)
 {
 	int rc;
 
-	bnge_init_nq_tree(bn);
+	bnge_init_cp_rings(bn);
 
 	bnge_init_rx_rings(bn);
 	rc = bnge_alloc_rx_ring_pair_bufs(bn);
@@ -2913,10 +3012,27 @@ static int bnge_hwrm_if_change(struct bnge_dev *bd, bool up)
 	return bnge_hwrm_req_send(bd, req);
 }
 
+/* Hand NQ0 from nq0_work to NAPI. NQ0's NAPI was already enabled by
+ * bnge_enable_napi(). The caller keeps NQ0's IRQ disabled; it is re-enabled
+ * here.
+ */
+static void bnge_nq0_wq_to_napi(struct bnge_net *bn)
+{
+	struct bnge_nq_ring_info *nqr = &bn->nq0->nq_ring;
+	struct bnge_dev *bd = bn->bd;
+
+	set_bit(BNGE_STATE_NQ0_NAPI, &bn->state);
+	enable_irq(bd->irq_tbl[nqr->ring_struct.map_idx].vector);
+}
+
 static int bnge_open_core(struct bnge_net *bn)
 {
+	struct bnge_nq_ring_info *nqr0 = &bn->nq0->nq_ring;
 	struct bnge_dev *bd = bn->bd;
+	unsigned int vector0;
 	int rc;
+
+	vector0 = bd->irq_tbl[nqr0->ring_struct.map_idx].vector;
 
 	netif_carrier_off(bn->netdev);
 
@@ -2932,10 +3048,19 @@ static int bnge_open_core(struct bnge_net *bn)
 		goto err_if_change;
 	}
 
+	disable_irq(vector0);
+	cancel_work_sync(&bn->nq0_work);
+
+	/* Clear sp_event bits left by events seen while down. Nothing can set
+	 * them here: NQ0's IRQ is off, nq0_work is cancelled and the timer is
+	 * stopped. Link state is read again at the end of open.
+	 */
+	WRITE_ONCE(bn->sp_event, 0);
+
 	rc = bnge_alloc_core(bn);
 	if (rc) {
 		netdev_err(bn->netdev, "bnge_alloc_core err: %d\n", rc);
-		goto err_if_change;
+		goto err_nq0_resume;
 	}
 
 	bnge_init_napi(bn);
@@ -2967,6 +3092,7 @@ static int bnge_open_core(struct bnge_net *bn)
 	set_bit(BNGE_STATE_STATS_ENABLE, &bn->state);
 
 	bnge_enable_int(bn);
+	bnge_nq0_wq_to_napi(bn);
 
 	bnge_tx_enable(bn);
 
@@ -2975,6 +3101,9 @@ static int bnge_open_core(struct bnge_net *bn)
 	/* Poll link status and check for SFP+ module status */
 	bnge_get_port_module_status(bn);
 
+	bnge_hwrm_realloc_rss_ctx_vnic(bn);
+	bnge_cfg_usr_fltrs(bn);
+
 	return 0;
 
 err_free_irq:
@@ -2982,6 +3111,10 @@ err_free_irq:
 err_del_napi:
 	bnge_del_napi(bn);
 	bnge_free_core(bn);
+err_nq0_resume:
+	/* Drop CQ notifications left by the failed bring-up; re-arms NQ0 */
+	bnge_nq0_poll(bn);
+	enable_irq(vector0);
 err_if_change:
 	bnge_hwrm_if_change(bd, false);
 	return rc;
@@ -3183,8 +3316,33 @@ static void bnge_save_ring_stats(struct bnge_net *bn)
 	}
 }
 
+/* Hand NQ0 from NAPI to nq0_work. Call with the netdev lock held, after the
+ * rings were destroyed in FW (bnge_shutdown_nic()), which also stopped NQ0's
+ * NAPI through bnge_disable_napi(). The IRQ is off while NQ0 changes hands
+ * and is re-enabled last, so the ISR queues nq0_work from then on.
+ */
+static void bnge_nq0_napi_to_wq(struct bnge_net *bn)
+{
+	struct bnge_nq_ring_info *nqr = &bn->nq0->nq_ring;
+	struct bnge_dev *bd = bn->bd;
+	unsigned int vector;
+
+	vector = bd->irq_tbl[nqr->ring_struct.map_idx].vector;
+
+	disable_irq(vector);
+	/* Nothing should be pending; cancel so bnge_nq0_poll() below cannot
+	 * overlap the worker
+	 */
+	cancel_work_sync(&bn->nq0_work);
+	clear_bit(BNGE_STATE_NQ0_NAPI, &bn->state);
+	/* Drop CQ notifications left by the destroyed rings; re-arms NQ0 */
+	bnge_nq0_poll(bn);
+	enable_irq(vector);
+}
+
 static void bnge_close_core(struct bnge_net *bn)
 {
+	struct bnge_filter_base *fltr;
 	struct bnge_dev *bd = bn->bd;
 
 	bnge_tx_disable(bn);
@@ -3192,8 +3350,25 @@ static void bnge_close_core(struct bnge_net *bn)
 	clear_bit(BNGE_STATE_OPEN, &bd->state);
 
 	timer_delete_sync(&bn->timer);
+
+	bnge_clear_rss_ctxs(bn);
 	bnge_shutdown_nic(bn);
-	bnge_disable_napi(bn);
+
+	bnge_nq0_napi_to_wq(bn);
+
+	/* Invalidate user L2 filters now that NAPI is disabled so that
+	 * subsequent re-enabling during open cannot read a stale or torn
+	 * filter_id before bnge_cfg_usr_fltrs() completes reallocation.
+	 */
+	/* Only the driver's tracking is reset here. The user filters are
+	 * programmed again by bnge_cfg_usr_fltrs() on the next open.
+	 */
+	list_for_each_entry(fltr, &bn->usr_fltr_list, list_node) {
+		if (fltr->type == BNGE_FLTR_TYPE_L2)
+			clear_bit(BNGE_FLTR_VALID, &fltr->state);
+		else
+			fltr->filter_id = BNGE_FLTR_ID_INVALID;
+	}
 
 	/* Save ring stats before shutdown */
 	spin_lock_bh(&bn->stats_lock);
@@ -3215,7 +3390,11 @@ static int bnge_close(struct net_device *dev)
 	bnge_close_core(bn);
 	bnge_hwrm_shutdown_link(bn->bd);
 	bnge_hwrm_if_change(bn->bd, false);
-	bn->sp_event = 0;
+
+	/* netif_running() is false now. Apply an NTUPLE change that
+	 * bnge_fix_features() held back while the interface was up.
+	 */
+	netdev_update_features(dev);
 
 	return 0;
 }
@@ -3299,6 +3478,179 @@ static const struct netdev_stat_ops bnge_stat_ops = {
 	.get_base_stats		= bnge_get_base_stats,
 };
 
+static netdev_features_t bnge_fix_features(struct net_device *dev,
+					   netdev_features_t features)
+{
+	/* NTUPLE can only be changed while the interface is down. */
+	if (netif_running(dev)) {
+		if (dev->features & NETIF_F_NTUPLE)
+			features |= NETIF_F_NTUPLE;
+		else
+			features &= ~NETIF_F_NTUPLE;
+	}
+	return features;
+}
+
+static int bnge_set_features(struct net_device *dev, netdev_features_t features)
+{
+	struct bnge_net *bn = netdev_priv(dev);
+	u32 flags = bn->priv_flags;
+
+	flags &= ~BNGE_NET_EN_NTUPLE;
+	if (features & NETIF_F_NTUPLE)
+		flags |= BNGE_NET_EN_NTUPLE;
+
+	if (flags == bn->priv_flags)
+		return 0;
+
+	if (!(flags & BNGE_NET_EN_NTUPLE))
+		bnge_clear_usr_fltrs(bn);
+
+	bn->priv_flags = flags;
+
+	return 0;
+}
+
+#ifdef CONFIG_RFS_ACCEL
+/* Called with ntp_fltr_lock held. Returns true if sp_task must be queued. */
+static bool bnge_ntp_fltr_retarget(struct bnge_net *bn,
+				   struct bnge_ntuple_filter *fltr,
+				   u16 rxq_index, u32 flow_id)
+{
+	if ((fltr->base.flags & BNGE_ACT_NO_AGING) ||
+	    READ_ONCE(fltr->base.rxq) == rxq_index)
+		return false;
+
+	WRITE_ONCE(fltr->base.rxq, rxq_index);
+	WRITE_ONCE(fltr->flow_id, flow_id);
+	/* Pairs with test_and_clear_bit() in sp_task */
+	smp_mb__before_atomic();
+	set_bit(BNGE_FLTR_RXQ_UPDATE, &fltr->base.state);
+	return true;
+}
+
+static int bnge_rx_flow_steer(struct net_device *dev, const struct sk_buff *skb,
+			      u16 rxq_index, u32 flow_id)
+{
+	struct ethhdr *eth = (struct ethhdr *)skb_mac_header(skb);
+	struct bnge_ntuple_filter *fltr, *new_fltr;
+	struct bnge_net *bn = netdev_priv(dev);
+	struct flow_keys *fkeys;
+	__le64 filter_id;
+	u32 flags, idx;
+	int rc = 0;
+
+	/* Hold rcu_read_lock() across the L2 filter lookup and check
+	 * BNGE_STATE_OPEN inside it. bnge_close_core() clears the
+	 * flag before bnge_shutdown_nic() frees the L2 filters via
+	 * kfree_rcu(), so if we observe the device open here the
+	 * filter cannot be freed under us for the duration of
+	 * this critical section.
+	 */
+	rcu_read_lock();
+	if (!test_bit(BNGE_STATE_OPEN, &bn->bd->state)) {
+		rcu_read_unlock();
+		return -EINVAL;
+	}
+
+	if (ether_addr_equal(dev->dev_addr, eth->h_dest)) {
+		struct bnge_vnic_info *vnic = &bn->vnic_info[BNGE_VNIC_DEFAULT];
+		struct bnge_l2_filter *l2_filter;
+
+		if (!vnic->uc_filter_count) {
+			rcu_read_unlock();
+			return -EINVAL;
+		}
+		l2_filter = vnic->l2_filters[0];
+		filter_id = l2_filter->base.filter_id;
+	} else {
+		struct bnge_l2_key key;
+
+		ether_addr_copy(key.dst_mac_addr, eth->h_dest);
+		key.vlan = 0;
+
+		filter_id = bnge_lookup_l2_filter_from_key(bn, &key);
+		if (filter_id == BNGE_FLTR_ID_INVALID) {
+			rcu_read_unlock();
+			return -EINVAL;
+		}
+	}
+	rcu_read_unlock();
+
+	new_fltr = kzalloc_obj(*new_fltr, GFP_ATOMIC);
+	if (!new_fltr)
+		return -ENOMEM;
+
+	fkeys = &new_fltr->fkeys;
+	if (!skb_flow_dissect_flow_keys(skb, fkeys, 0)) {
+		rc = -EPROTONOSUPPORT;
+		goto err_free;
+	}
+
+	if ((fkeys->basic.n_proto != htons(ETH_P_IP) &&
+	     fkeys->basic.n_proto != htons(ETH_P_IPV6)) ||
+	    (fkeys->basic.ip_proto != IPPROTO_TCP &&
+	     fkeys->basic.ip_proto != IPPROTO_UDP)) {
+		rc = -EPROTONOSUPPORT;
+		goto err_free;
+	}
+	new_fltr->fmasks = BNGE_FLOW_IPV4_MASK_ALL;
+	if (fkeys->basic.n_proto == htons(ETH_P_IPV6))
+		new_fltr->fmasks = BNGE_FLOW_IPV6_MASK_ALL;
+
+	flags = fkeys->control.flags;
+	if (flags & FLOW_DIS_IS_FRAGMENT) {
+		rc = -EPROTONOSUPPORT;
+		goto err_free;
+	}
+
+	new_fltr->l2_filter_id = filter_id;
+	/* Both branches above look the L2 filter up by eth->h_dest, vlan 0 */
+	ether_addr_copy(new_fltr->l2_key.dst_mac_addr, eth->h_dest);
+	new_fltr->l2_key.vlan = 0;
+
+	idx = bnge_get_ntp_filter_idx(bn, fkeys, skb);
+	rcu_read_lock();
+	fltr = bnge_lookup_ntp_filter_from_idx(bn, new_fltr, idx);
+	/* Filter already exists. If the flow moved to another queue,
+	 * retarget it, sp_task reprograms it in hardware.
+	 */
+	if (fltr) {
+		bool kick = false;
+
+		spin_lock_bh(&bn->ntp_fltr_lock);
+		/* sp_task unlinked it to expire it, treat it as not found */
+		if (hlist_unhashed(&fltr->base.hlist)) {
+			fltr = NULL;
+		} else {
+			kick = bnge_ntp_fltr_retarget(bn, fltr, rxq_index,
+						      flow_id);
+			rc = fltr->base.sw_id;
+		}
+		spin_unlock_bh(&bn->ntp_fltr_lock);
+		if (kick)
+			bnge_queue_sp_work(bn, BNGE_RX_NTP_FLTR_SP_EVENT);
+		if (fltr) {
+			rcu_read_unlock();
+			goto err_free;
+		}
+	}
+	rcu_read_unlock();
+
+	new_fltr->flow_id = flow_id;
+	new_fltr->base.rxq = rxq_index;
+	rc = bnge_insert_ntp_filter(bn, new_fltr, idx);
+	if (!rc) {
+		bnge_queue_sp_work(bn, BNGE_RX_NTP_FLTR_SP_EVENT);
+		return new_fltr->base.sw_id;
+	}
+
+err_free:
+	kfree(new_fltr);
+	return rc;
+}
+#endif
+
 static const struct net_device_ops bnge_netdev_ops = {
 	.ndo_open		= bnge_open,
 	.ndo_stop		= bnge_close,
@@ -3306,6 +3658,11 @@ static const struct net_device_ops bnge_netdev_ops = {
 	.ndo_get_stats64	= bnge_get_stats64,
 	.ndo_set_rx_mode_async	= bnge_set_rx_mode,
 	.ndo_features_check	= bnge_features_check,
+	.ndo_fix_features	= bnge_fix_features,
+	.ndo_set_features	= bnge_set_features,
+#ifdef CONFIG_RFS_ACCEL
+	.ndo_rx_flow_steer	= bnge_rx_flow_steer,
+#endif
 };
 
 static void bnge_init_mac_addr(struct bnge_dev *bd)
@@ -3431,6 +3788,13 @@ static void bnge_init_ring_params(struct bnge_net *bn)
 	bn->netdev->cfg->hds_thresh = max(BNGE_DEFAULT_RX_COPYBREAK, rx_size);
 }
 
+static void bnge_set_dflt_rfs(struct bnge_net *bn)
+{
+	bn->netdev->hw_features |= NETIF_F_NTUPLE;
+	bn->netdev->features |= NETIF_F_NTUPLE;
+	bn->priv_flags |= BNGE_NET_EN_NTUPLE;
+}
+
 int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 {
 	struct net_device *netdev;
@@ -3517,6 +3881,7 @@ int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 		netif_set_tso_max_segs(netdev, bd->tso_max_segs);
 
 	INIT_WORK(&bn->sp_task, bnge_sp_task);
+	INIT_WORK(&bn->nq0_work, bnge_nq0_work);
 	timer_setup(&bn->timer, bnge_timer, 0);
 	bn->current_interval = BNGE_TIMER_INTERVAL;
 
@@ -3528,37 +3893,64 @@ int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 		goto err_netdev;
 	}
 
+	bn->nq0_wq = alloc_ordered_workqueue("bnge_nq0_wq-%s", WQ_MEM_RECLAIM,
+					     dev_name(bd->dev));
+	if (!bn->nq0_wq) {
+		bnge_err(bd, "Unable to create NQ0 workqueue.\n");
+		rc = -ENOMEM;
+		goto err_free_workq;
+	}
+
 	bn->rx_ring_size = BNGE_DEFAULT_RX_RING_SIZE;
 	bn->tx_ring_size = BNGE_DEFAULT_TX_RING_SIZE;
 	bn->rx_dir = DMA_FROM_DEVICE;
+
+	netdev_rss_key_fill(bn->rss_hash_key, sizeof(bn->rss_hash_key));
+	bn->rss_hash_key_updated = true;
 
 	bnge_set_tpa_flags(bd);
 	bnge_init_ring_params(bn);
 	bnge_set_ring_params(bd);
 
 	bnge_init_l2_fltr_tbl(bn);
+	bnge_set_dflt_rfs(bn);
+
 	bnge_init_mac_addr(bd);
 
 	rc = bnge_probe_phy(bn, true);
 	if (rc)
-		goto err_free_workq;
+		goto err_free_nq0_wq;
 
 	rc = bnge_alloc_port_stats(bn);
 	if (rc)
-		goto err_free_workq;
+		goto err_free_nq0_wq;
 	spin_lock_init(&bn->stats_lock);
 
+	spin_lock_init(&bn->ntp_fltr_lock);
+	INIT_LIST_HEAD(&bn->usr_fltr_list);
+
 	netdev->request_ops_lock = true;
+
+	rc = bnge_nq0_init(bn);
+	if (rc) {
+		bnge_err(bd, "NQ0 init failed rc: %d\n", rc);
+		goto err_free_port_stats;
+	}
+
 	rc = register_netdev(netdev);
 	if (rc) {
 		dev_err(bd->dev, "Register netdev failed rc: %d\n", rc);
-		goto err_free_port_stats;
+		goto err_uninit_nq0;
 	}
 
 	return 0;
 
+err_uninit_nq0:
+	bnge_nq0_uninit(bn);
 err_free_port_stats:
 	bnge_free_port_stats(bn);
+err_free_nq0_wq:
+	destroy_workqueue(bn->nq0_wq);
 err_free_workq:
 	destroy_workqueue(bn->bnge_pf_wq);
 err_netdev:
@@ -3575,6 +3967,13 @@ void bnge_netdev_free(struct bnge_dev *bd)
 	bn = netdev_priv(netdev);
 
 	unregister_netdev(netdev);
+
+	/* NQ0 can queue sp_task; destroy it before the timer and workqueue */
+	bnge_nq0_uninit(bn);
+	destroy_workqueue(bn->nq0_wq);
+
+	bnge_free_ntp_fltrs(bn, false);
+	bnge_free_l2_filters(bn);
 
 	timer_shutdown_sync(&bn->timer);
 	cancel_work_sync(&bn->sp_task);

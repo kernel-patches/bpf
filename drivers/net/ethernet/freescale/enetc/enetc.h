@@ -75,6 +75,7 @@ struct enetc_lso_t {
 	int	total_len; /* total data length, not include LSO header */
 };
 
+#define ENETC_TX_CSUM_MAX_L4_OFFSET	127
 #define ENETC_LSO_MAX_DATA_LEN		SZ_256K
 
 #define ENETC_RX_MAXFRM_SIZE	ENETC_MAC_MAXFRM_SIZE
@@ -407,7 +408,6 @@ struct enetc_cls_rule {
 	int used;
 };
 
-#define ENETC_MAX_BDR_INT	6 /* fixed to max # of available cpus */
 struct psfp_cap {
 	u32 max_streamid;
 	u32 max_psfp_filter;
@@ -456,7 +456,7 @@ struct enetc_ndev_priv {
 	struct enetc_si *si;
 
 	int bdr_int_num; /* number of Rx/Tx ring interrupts */
-	struct enetc_int_vector *int_vector[ENETC_MAX_BDR_INT];
+	struct enetc_int_vector **int_vector;
 	u16 num_rx_rings, num_tx_rings;
 	u16 rx_bd_count, tx_bd_count;
 
@@ -529,6 +529,9 @@ int enetc_close(struct net_device *ndev);
 void enetc_start(struct net_device *ndev);
 void enetc_stop(struct net_device *ndev);
 netdev_tx_t enetc_xmit(struct sk_buff *skb, struct net_device *ndev);
+netdev_features_t enetc_features_check(struct sk_buff *skb,
+				       struct net_device *ndev,
+				       netdev_features_t features);
 struct net_device_stats *enetc_get_stats(struct net_device *ndev);
 void enetc_set_features(struct net_device *ndev, netdev_features_t features);
 int enetc_ioctl(struct net_device *ndev, struct ifreq *rq, int cmd);

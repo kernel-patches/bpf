@@ -195,7 +195,7 @@ static inline void dev_base_seq_inc(struct net *net)
 
 static inline struct hlist_head *dev_name_hash(struct net *net, const char *name)
 {
-	unsigned int hash = full_name_hash(net, name, strnlen(name, IFNAMSIZ));
+	unsigned int hash = full_name_hash(NULL, name, strnlen(name, IFNAMSIZ));
 
 	return &net->dev_name_head[hash_32(hash, NETDEV_HASHBITS)];
 }
@@ -1244,6 +1244,7 @@ void netdev_copy_name(struct net_device *dev, char *name)
 		strscpy(name, dev->name, IFNAMSIZ);
 	} while (read_seqretry(&netdev_rename_lock, seq));
 }
+EXPORT_SYMBOL_GPL(netdev_copy_name);
 
 /**
  *	netdev_get_name - get a netdevice name, knowing its ifindex.
@@ -1901,23 +1902,6 @@ void netif_disable_lro(struct net_device *dev)
 		netif_disable_lro(lower_dev);
 		netdev_unlock_ops(lower_dev);
 	}
-}
-
-/**
- *	dev_disable_gro_hw - disable HW Generic Receive Offload on a device
- *	@dev: device
- *
- *	Disable HW Generic Receive Offload (GRO_HW) on a net device.  Must be
- *	called under RTNL.  This is needed if Generic XDP is installed on
- *	the device.
- */
-static void dev_disable_gro_hw(struct net_device *dev)
-{
-	dev->wanted_features &= ~NETIF_F_GRO_HW;
-	netdev_update_features(dev);
-
-	if (unlikely(dev->features & NETIF_F_GRO_HW))
-		netdev_WARN(dev, "failed to disable GRO_HW!\n");
 }
 
 const char *netdev_cmd_to_name(enum netdev_cmd cmd)
@@ -3667,7 +3651,7 @@ void skb_warn_bad_offload(const struct sk_buff *skb)
  */
 int skb_checksum_help(struct sk_buff *skb)
 {
-	__wsum csum;
+	__wsum csum = 0;
 	int ret = 0, offset;
 
 	if (skb->ip_summed == CHECKSUM_COMPLETE)
@@ -3699,13 +3683,16 @@ int skb_checksum_help(struct sk_buff *skb)
 			  offset, skb_headlen(skb));
 		goto out;
 	}
-	csum = skb_checksum(skb, offset, skb->len - offset, 0);
+	ret = skb_checksum_full(skb, offset, skb->len - offset, &csum);
+	if (ret)
+		goto out;
 
 	offset += skb->csum_offset;
 	if (unlikely(offset + sizeof(__sum16) > skb_headlen(skb))) {
 		DO_ONCE_LITE(skb_dump, KERN_ERR, skb, false);
 		WARN_ONCE(true, "offset+2 (%zu) > skb_headlen() (%u)\n",
 			  offset + sizeof(__sum16), skb_headlen(skb));
+		ret = -EINVAL;
 		goto out;
 	}
 	ret = skb_ensure_writable(skb, offset + sizeof(__sum16));
@@ -3751,8 +3738,11 @@ int skb_crc32c_csum_help(struct sk_buff *skb)
 	if (ret)
 		goto out;
 
-	crc = ~skb_crc32c(skb, start, skb->len - start, ~0);
-	*(__le32 *)(skb->data + offset) = cpu_to_le32(crc);
+	crc = ~0;
+	ret = skb_crc32c_full(skb, start, skb->len - start, &crc);
+	if (ret)
+		goto out;
+	*(__le32 *)(skb->data + offset) = cpu_to_le32(~crc);
 	skb_reset_csum_not_inet(skb);
 out:
 	return ret;
@@ -4183,9 +4173,11 @@ static struct sk_buff *validate_xmit_unreadable_skb(struct sk_buff *skb,
 
 	shinfo = skb_shinfo(skb);
 
+	/* All net_iovs in an unreadable skb share the same binding. */
 	if (shinfo->nr_frags > 0) {
-		niov = netmem_to_net_iov(skb_frag_netmem(&shinfo->frags[0]));
-		if (net_is_devmem_iov(niov) &&
+		niov = skb_frag_net_iov(&shinfo->frags[0]);
+		if (!niov || !net_is_devmem_iov(niov) ||
+		    net_devmem_iov_binding(niov)->direction != DMA_TO_DEVICE ||
 		    READ_ONCE(net_devmem_iov_binding(niov)->dev) != dev)
 			goto out_free;
 	}
@@ -4208,6 +4200,15 @@ static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device 
 	skb = validate_xmit_unreadable_skb(skb, dev);
 	if (unlikely(!skb))
 		goto out_null;
+
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		if (skb->encapsulation)
+			skb_set_inner_transport_header(skb,
+						       skb_checksum_start_offset(skb));
+		else
+			skb_set_transport_header(skb,
+						 skb_checksum_start_offset(skb));
+	}
 
 	/* Only fraglist GSO, whose segments already carry valid checksums,
 	 * can be handed to a device as CHECKSUM_UNNECESSARY. Any other GSO
@@ -4253,16 +4254,9 @@ static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device 
 		 * support checksumming for this protocol, complete
 		 * checksumming here.
 		 */
-		if (skb->ip_summed == CHECKSUM_PARTIAL) {
-			if (skb->encapsulation)
-				skb_set_inner_transport_header(skb,
-							       skb_checksum_start_offset(skb));
-			else
-				skb_set_transport_header(skb,
-							 skb_checksum_start_offset(skb));
-			if (skb_csum_hwoffload_help(skb, features))
-				goto out_kfree_skb;
-		}
+		if (skb->ip_summed == CHECKSUM_PARTIAL &&
+		    skb_csum_hwoffload_help(skb, features))
+			goto out_kfree_skb;
 	}
 
 	skb = validate_xmit_xfrm(skb, features, again);
@@ -5229,6 +5223,10 @@ EXPORT_SYMBOL(rps_needed);
 struct static_key_false rfs_needed __read_mostly;
 EXPORT_SYMBOL(rfs_needed);
 
+#ifdef CONFIG_RFS_ACCEL
+struct static_key_false arfs_llc_affinity __read_mostly;
+#endif
+
 static u32 rfs_slot(u32 hash, rps_tag_ptr tag_ptr)
 {
 	return hash_32(hash, rps_tag_to_log(tag_ptr));
@@ -5266,7 +5264,7 @@ static bool rps_flow_is_active(struct rps_dev_flow *rflow,
 
 static struct rps_dev_flow *
 set_rps_cpu(struct net_device *dev, struct sk_buff *skb,
-	    struct rps_dev_flow *rflow, u16 next_cpu, u32 hash)
+	    struct rps_dev_flow *rflow, u16 old_cpu, u16 next_cpu, u32 hash)
 {
 	if (next_cpu < nr_cpu_ids) {
 		u32 head;
@@ -5285,6 +5283,13 @@ set_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		if (!skb_rx_queue_recorded(skb) || !dev->rx_cpu_rmap ||
 		    !(dev->features & NETIF_F_NTUPLE))
 			goto out;
+
+		if (static_branch_unlikely(&arfs_llc_affinity) &&
+		    old_cpu < nr_cpu_ids && cpu_online(old_cpu) &&
+		    cpus_share_cache(old_cpu, next_cpu) &&
+		    READ_ONCE(rflow->filter) != RPS_NO_FILTER)
+			goto out;
+
 		rxq_index = cpu_rmap_lookup_index(dev->rx_cpu_rmap, next_cpu);
 		if (rxq_index == skb_get_rx_queue(skb))
 			goto out;
@@ -5414,8 +5419,8 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		    (tcpu >= nr_cpu_ids || !cpu_online(tcpu) ||
 		     ((int)(READ_ONCE(per_cpu(softnet_data, tcpu).input_queue_head) -
 		      rflow->last_qtail)) >= 0)) {
+			rflow = set_rps_cpu(dev, skb, rflow, tcpu, next_cpu, hash);
 			tcpu = next_cpu;
-			rflow = set_rps_cpu(dev, skb, rflow, next_cpu, hash);
 		}
 
 		if (tcpu < nr_cpu_ids && cpu_online(tcpu)) {
@@ -5737,7 +5742,7 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	/* check if bpf_xdp_adjust_tail was used */
 	off = xdp->data_end - orig_data_end;
 	if (off != 0) {
-		skb_set_tail_pointer(skb, xdp->data_end - xdp->data);
+		skb_set_tail_pointer(skb, xdp->data_end - xdp->data - mac_len);
 		skb->len += off; /* positive on grow, negative on shrink */
 	}
 
@@ -5825,6 +5830,10 @@ static u32 netif_receive_generic_xdp(struct sk_buff **pskb,
 	if (skb_is_redirected(skb))
 		return XDP_PASS;
 
+	/* XDP is Ethernet only, skip skbs without an Ethernet header. */
+	if (skb->data - skb_mac_header(skb) != ETH_HLEN)
+		return XDP_PASS;
+
 	/* XDP packets must have sufficient headroom of XDP_PACKET_HEADROOM
 	 * bytes. This is the guarantee that also native XDP provides,
 	 * thus we need to do it here as well.
@@ -5867,26 +5876,48 @@ static u32 netif_receive_generic_xdp(struct sk_buff **pskb,
  * and DDOS attacks will be more effective. In-driver-XDP use dedicated TX
  * queues, so they do not have this starvation issue.
  */
-void generic_xdp_tx(struct sk_buff *skb, const struct bpf_prog *xdp_prog)
+void generic_xdp_tx(struct sk_buff *skb, const struct bpf_prog *xdp_prog,
+		    u32 act)
 {
 	struct net_device *dev = skb->dev;
+	enum skb_drop_reason reason;
 	struct netdev_queue *txq;
-	bool free_skb = true;
+	bool again = false;
 	int cpu, rc;
 
+	reason = qdisc_pkt_len_segs_init(skb);
+	if (unlikely(reason)) {
+		trace_xdp_exception(dev, xdp_prog, act);
+		dev_core_stats_tx_dropped_inc(dev);
+		kfree_skb_reason(skb, reason);
+		return;
+	}
+
 	txq = netdev_core_pick_tx(dev, skb, NULL);
+	skb = validate_xmit_skb_list(skb, dev, &again);
+	if (!skb) {
+		trace_xdp_exception(dev, xdp_prog, act);
+		return;
+	}
+
 	cpu = smp_processor_id();
 	HARD_TX_LOCK(dev, txq, cpu);
-	if (!netif_xmit_frozen_or_drv_stopped(txq)) {
-		rc = netdev_start_xmit(skb, dev, txq, 0);
-		if (dev_xmit_complete(rc))
-			free_skb = false;
+	while (skb && !netif_xmit_frozen_or_drv_stopped(txq)) {
+		struct sk_buff *next = skb->next;
+
+		skb_mark_not_on_list(skb);
+		rc = netdev_start_xmit(skb, dev, txq, false);
+		if (!dev_xmit_complete(rc)) {
+			skb->next = next;
+			break;
+		}
+		skb = next;
 	}
 	HARD_TX_UNLOCK(dev, txq);
-	if (free_skb) {
-		trace_xdp_exception(dev, xdp_prog, XDP_TX);
+	if (skb) {
+		trace_xdp_exception(dev, xdp_prog, act);
 		dev_core_stats_tx_dropped_inc(dev);
-		kfree_skb(skb);
+		kfree_skb_list(skb);
 	}
 }
 
@@ -5912,7 +5943,7 @@ int do_xdp_generic(const struct bpf_prog *xdp_prog, struct sk_buff **pskb)
 					goto out_redir;
 				break;
 			case XDP_TX:
-				generic_xdp_tx(*pskb, xdp_prog);
+				generic_xdp_tx(*pskb, xdp_prog, XDP_TX);
 				break;
 			}
 			bpf_net_ctx_clear(bpf_net_ctx);
@@ -6614,8 +6645,6 @@ static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 			static_branch_dec(&generic_xdp_needed_key);
 		} else if (new && !old) {
 			static_branch_inc(&generic_xdp_needed_key);
-			netif_disable_lro(dev);
-			dev_disable_gro_hw(dev);
 		}
 		break;
 
@@ -7019,6 +7048,19 @@ void __napi_schedule_irqoff(struct napi_struct *n)
 }
 EXPORT_SYMBOL(__napi_schedule_irqoff);
 
+/* Callers do not own @n, which can be deleted concurrently. */
+static void napi_timer_start(struct napi_struct *n, unsigned long timeout)
+{
+	hrtimer_start(&n->timer, ns_to_ktime(timeout),
+		      HRTIMER_MODE_REL_PINNED);
+	/* Pairs with test_and_clear_bit(NAPI_STATE_LISTED)
+	 * in __netif_napi_del_locked().
+	 */
+	smp_mb();
+	if (unlikely(!test_bit(NAPI_STATE_LISTED, &n->state)))
+		hrtimer_cancel(&n->timer);
+}
+
 bool napi_complete_done(struct napi_struct *n, int work_done)
 {
 	unsigned long flags, val, new, timeout = 0;
@@ -7083,8 +7125,7 @@ bool napi_complete_done(struct napi_struct *n, int work_done)
 	}
 
 	if (timeout)
-		hrtimer_start(&n->timer, ns_to_ktime(timeout),
-			      HRTIMER_MODE_REL_PINNED);
+		napi_timer_start(n, timeout);
 	return ret;
 }
 EXPORT_SYMBOL(napi_complete_done);
@@ -7171,8 +7212,7 @@ static void busy_poll_stop(struct napi_struct *napi, void *have_poll_lock,
 		gro_flush_normal(&napi->gro, HZ >= 1000);
 
 		clear_bit(NAPI_STATE_SCHED, &napi->state);
-		hrtimer_start(&napi->timer, ns_to_ktime(timeout),
-			      HRTIMER_MODE_REL_PINNED);
+		napi_timer_start(napi, timeout);
 	} else {
 		/* Use driver poll to re-enable device interrupts. */
 		rc = napi->poll(napi, budget);
@@ -7309,8 +7349,7 @@ void napi_suspend_irqs(unsigned int napi_id)
 		unsigned long timeout = napi_get_irq_suspend_timeout(napi);
 
 		if (timeout)
-			hrtimer_start(&napi->timer, ns_to_ktime(timeout),
-				      HRTIMER_MODE_REL_PINNED);
+			napi_timer_start(napi, timeout);
 	}
 	rcu_read_unlock();
 }
@@ -7962,6 +8001,11 @@ void __netif_napi_del_locked(struct napi_struct *napi)
 
 	if (!test_and_clear_bit(NAPI_STATE_LISTED, &napi->state))
 		return;
+
+	/* Full barrier implied by test_and_clear_bit()
+	 * pairs with napi_timer_start().
+	 */
+	hrtimer_cancel(&napi->timer);
 
 	/* Make sure NAPI is disabled (or was never enabled). */
 	WARN_ON(!test_bit(NAPI_STATE_SCHED, &napi->state));
@@ -9300,6 +9344,9 @@ static void __netdev_upper_dev_unlink(struct net_device *dev,
 
 	__netdev_adjacent_dev_unlink_neighbour(dev, upper_dev);
 
+	if (changeupper_info.master)
+		dev->xdp_from_upper = 0;
+
 	call_netdevice_notifiers_info(NETDEV_CHANGEUPPER,
 				      &changeupper_info.info);
 
@@ -10196,7 +10243,7 @@ EXPORT_SYMBOL(netif_set_mtu);
 int netif_change_tx_queue_len(struct net_device *dev, unsigned long new_len)
 {
 	unsigned int orig_len = dev->tx_queue_len;
-	int res;
+	int res, err;
 
 	if (new_len > S16_MAX)
 		return -ERANGE;
@@ -10217,6 +10264,11 @@ int netif_change_tx_queue_len(struct net_device *dev, unsigned long new_len)
 err_rollback:
 	netdev_err(dev, "refused to change device tx_queue_len\n");
 	WRITE_ONCE(dev->tx_queue_len, orig_len);
+	/* Notify everyone again so that they have a chance to revert. */
+	err = call_netdevice_notifiers(NETDEV_CHANGE_TX_QUEUE_LEN, dev);
+	err = notifier_to_errno(err);
+	if (err)
+		netdev_err(dev, "tx_queue_len rollback failed: %d\n", err);
 	return res;
 }
 
@@ -10531,9 +10583,18 @@ u8 dev_xdp_prog_count(struct net_device *dev)
 	for (i = 0; i < __MAX_XDP_MODE; i++)
 		if (dev->xdp_state[i].prog || dev->xdp_state[i].link)
 			count++;
-	return count;
+	return count ?: !!dev->xdp_pending;
 }
 EXPORT_SYMBOL_GPL(dev_xdp_prog_count);
+
+/* Does the device have an XDP program, and was it installed directly on the
+ * device rather than propagated down by an upper with netif_xdp_propagate()?
+ */
+bool dev_xdp_has_own_prog(struct net_device *dev)
+{
+	return dev_xdp_prog_count(dev) && !dev->xdp_from_upper;
+}
+EXPORT_SYMBOL_GPL(dev_xdp_has_own_prog);
 
 u8 dev_xdp_sb_prog_count(struct net_device *dev)
 {
@@ -10549,35 +10610,6 @@ u8 dev_xdp_sb_prog_count(struct net_device *dev)
 	return count;
 }
 
-int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
-{
-	if (!dev->netdev_ops->ndo_bpf)
-		return -EOPNOTSUPP;
-
-	if (dev->cfg->hds_config == ETHTOOL_TCP_DATA_SPLIT_ENABLED &&
-	    bpf->command == XDP_SETUP_PROG &&
-	    bpf->prog && !bpf->prog->aux->xdp_has_frags) {
-		NL_SET_ERR_MSG(bpf->extack,
-			       "unable to propagate XDP to device using tcp-data-split");
-		return -EBUSY;
-	}
-
-	if (dev_get_min_mp_channel_count(dev)) {
-		NL_SET_ERR_MSG(bpf->extack, "unable to propagate XDP to device using memory provider");
-		return -EBUSY;
-	}
-
-	return dev->netdev_ops->ndo_bpf(dev, bpf);
-}
-EXPORT_SYMBOL_GPL(netif_xdp_propagate);
-
-u32 dev_xdp_prog_id(struct net_device *dev, enum bpf_xdp_mode mode)
-{
-	struct bpf_prog *prog = dev_xdp_prog(dev, mode);
-
-	return prog ? prog->aux->id : 0;
-}
-
 static void dev_xdp_set_link(struct net_device *dev, enum bpf_xdp_mode mode,
 			     struct bpf_xdp_link *link)
 {
@@ -10590,6 +10622,123 @@ static void dev_xdp_set_prog(struct net_device *dev, enum bpf_xdp_mode mode,
 {
 	dev->xdp_state[mode].link = NULL;
 	dev->xdp_state[mode].prog = prog;
+}
+
+static const char *dev_xdp_rx_agg_name(netdev_features_t features)
+{
+	return features & NETIF_F_GRO_HW ? "HW-GRO" : "LRO";
+}
+
+/* Try to clear HW-GRO and LRO before the driver reconfigures for XDP.
+ * Driver may add features back in via ndo_fix_features(), due to feature
+ * dependencies. In that case we can't run XDP at all.
+ */
+static int dev_xdp_clear_rx_agg(struct net_device *dev,
+				struct netlink_ext_ack *extack)
+{
+	netdev_features_t agg = dev->features & NETIF_F_XDP_DISABLES;
+
+	if (!agg)
+		return 0;
+	if (agg & ~dev->hw_features) {
+		NL_SET_ERR_MSG_FMT(extack, "unable to disable %s, fixed on",
+				   dev_xdp_rx_agg_name(agg & ~dev->hw_features));
+		return -EOPNOTSUPP;
+	}
+
+	netdev_update_features(dev);
+
+	agg = dev->features & NETIF_F_XDP_DISABLES;
+	if (agg) {
+		NL_SET_ERR_MSG_FMT(extack,
+				   "unable to disable %s, required by another feature",
+				   dev_xdp_rx_agg_name(agg));
+		return -EBUSY;
+	}
+
+	return 0;
+}
+
+int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
+{
+	struct bpf_prog *old_prog;
+	int err;
+
+	netdev_assert_locked_ops_compat(dev);
+
+	if (!dev->netdev_ops->ndo_bpf)
+		return -EOPNOTSUPP;
+
+	/* setup requires extra handling, bypass those for other commands */
+	if (bpf->command != XDP_SETUP_PROG)
+		return dev->netdev_ops->ndo_bpf(dev, bpf);
+
+	if (dev_xdp_has_own_prog(dev)) {
+		NL_SET_ERR_MSG(bpf->extack,
+			       "unable to propagate XDP to device with an XDP program of its own");
+		return -EBUSY;
+	}
+
+	if (bpf->prog) {
+		if (dev->cfg->hds_config == ETHTOOL_TCP_DATA_SPLIT_ENABLED &&
+		    !bpf->prog->aux->xdp_has_frags) {
+			NL_SET_ERR_MSG(bpf->extack,
+				       "unable to propagate XDP to device using tcp-data-split");
+			return -EBUSY;
+		}
+
+		if (dev_get_min_mp_channel_count(dev)) {
+			NL_SET_ERR_MSG(bpf->extack,
+				       "unable to propagate XDP to device using memory provider");
+			return -EBUSY;
+		}
+
+		dev->xdp_pending = 1;
+
+		err = dev_xdp_clear_rx_agg(dev, bpf->extack);
+		if (err)
+			goto err_clear_pending;
+	}
+
+	err = dev->netdev_ops->ndo_bpf(dev, bpf);
+	if (err)
+		goto err_clear_pending;
+	if (bpf->prog)
+		bpf_prog_inc(bpf->prog);
+
+	/* Record it like a program of our own, so that everything which asks
+	 * whether XDP is running here gets the right answer. @xdp_from_upper
+	 * keeps the two apart where it matters. Register it with the
+	 * dispatcher too, dev_xdp_uninstall() will drop it from there if this
+	 * device goes away first.
+	 */
+	old_prog = dev_xdp_prog(dev, XDP_MODE_DRV);
+	bpf_prog_change_xdp(old_prog, bpf->prog);
+	dev_xdp_set_prog(dev, XDP_MODE_DRV, bpf->prog);
+	dev->xdp_pending = 0;
+	dev->xdp_from_upper = !!bpf->prog;
+
+	if (old_prog) {
+		bpf_prog_put(old_prog);
+		/* No program left, HW-GRO and LRO may be available again */
+		if (!bpf->prog)
+			netdev_update_features(dev);
+	}
+
+	return 0;
+
+err_clear_pending:
+	dev->xdp_pending = 0;
+	netdev_update_features(dev);
+	return err;
+}
+EXPORT_SYMBOL_GPL(netif_xdp_propagate);
+
+u32 dev_xdp_prog_id(struct net_device *dev, enum bpf_xdp_mode mode)
+{
+	struct bpf_prog *prog = dev_xdp_prog(dev, mode);
+
+	return prog ? prog->aux->id : 0;
 }
 
 static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
@@ -10630,17 +10779,17 @@ static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
 			NL_SET_ERR_MSG(extack, "BPF_XDP_CPUMAP programs can not be attached to a device");
 			return -EINVAL;
 		}
-	}
-
-	if (dev->cfg->hds_config == ETHTOOL_TCP_DATA_SPLIT_ENABLED &&
-	    prog && !prog->aux->xdp_has_frags) {
-		NL_SET_ERR_MSG(extack, "unable to install XDP to device using tcp-data-split");
-		return -EBUSY;
-	}
-
-	if (dev_get_min_mp_channel_count(dev)) {
-		NL_SET_ERR_MSG(extack, "unable to install XDP to device using memory provider");
-		return -EBUSY;
+		if (dev->cfg->hds_config == ETHTOOL_TCP_DATA_SPLIT_ENABLED &&
+		    !prog->aux->xdp_has_frags) {
+			NL_SET_ERR_MSG(extack,
+				       "unable to install XDP to device using tcp-data-split");
+			return -EBUSY;
+		}
+		if (dev_get_min_mp_channel_count(dev)) {
+			NL_SET_ERR_MSG(extack,
+				       "unable to install XDP to device using memory provider");
+			return -EBUSY;
+		}
 	}
 
 	memset(&xdp, 0, sizeof(xdp));
@@ -10699,6 +10848,7 @@ static void dev_xdp_uninstall(struct net_device *dev)
 
 		dev_xdp_set_link(dev, mode, NULL);
 	}
+	dev->xdp_from_upper = 0;
 }
 
 static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack,
@@ -10741,6 +10891,10 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 	}
 
 	mode = dev_xdp_mode(dev, flags);
+	if (dev->xdp_from_upper) {
+		NL_SET_ERR_MSG(extack, "Can't replace an XDP program installed by an upper device");
+		return -EBUSY;
+	}
 	/* can't replace attached link */
 	if (dev_xdp_link(dev, mode)) {
 		NL_SET_ERR_MSG(extack, "Can't replace active BPF XDP link");
@@ -10775,6 +10929,12 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 			NL_SET_ERR_MSG(extack, "XDP program already attached");
 			return -EBUSY;
 		}
+		/* lo is ARPHRD_LOOPBACK but uses Ethernet framing. */
+		if (mode == XDP_MODE_SKB && dev->type != ARPHRD_ETHER &&
+		    dev->type != ARPHRD_LOOPBACK) {
+			NL_SET_ERR_MSG(extack, "Generic XDP only supports Ethernet devices");
+			return -EOPNOTSUPP;
+		}
 	}
 
 	/* don't call drivers if the effective program didn't change */
@@ -10785,19 +10945,36 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 			return -EOPNOTSUPP;
 		}
 
+		if (new_prog) {
+			dev->xdp_pending = 1;
+			err = dev_xdp_clear_rx_agg(dev, extack);
+			if (err)
+				goto err_clear_pending;
+		}
+
 		err = dev_xdp_install(dev, mode, bpf_op, extack, flags, new_prog);
 		if (err)
-			return err;
+			goto err_clear_pending;
 	}
 
 	if (link)
 		dev_xdp_set_link(dev, mode, link);
 	else
 		dev_xdp_set_prog(dev, mode, new_prog);
-	if (cur_prog)
+	dev->xdp_pending = 0;
+	if (cur_prog) {
 		bpf_prog_put(cur_prog);
+		/* No program left, HW-GRO and LRO may be available again */
+		if (!new_prog)
+			netdev_update_features(dev);
+	}
 
 	return 0;
+
+err_clear_pending:
+	dev->xdp_pending = 0;
+	netdev_update_features(dev);
+	return err;
 }
 
 static int dev_xdp_attach_link(struct net_device *dev,
@@ -10823,6 +11000,7 @@ static int dev_xdp_detach_link(struct net_device *dev,
 	bpf_op = dev_xdp_bpf_op(dev, mode);
 	WARN_ON(dev_xdp_install(dev, mode, bpf_op, NULL, 0, NULL));
 	dev_xdp_set_link(dev, mode, NULL);
+	netdev_update_features(dev);
 	return 0;
 }
 
@@ -11294,6 +11472,14 @@ int __netdev_update_features(struct net_device *dev)
 	netdev_assert_locked_ops_compat(dev);
 
 	features = netdev_get_wanted_features(dev);
+
+	/* GRO_HW may be added back in via ndo_fix_features e.g. if driver needs
+	 * it to honor the HDS config, clear it before the fix features call.
+	 */
+	if ((features & NETIF_F_XDP_DISABLES) && dev_xdp_prog_count(dev)) {
+		netdev_dbg(dev, "Dropping HW-GRO and LRO features since XDP is attached.\n");
+		features &= ~NETIF_F_XDP_DISABLES;
+	}
 
 	if (dev->netdev_ops->ndo_fix_features)
 		features = dev->netdev_ops->ndo_fix_features(dev, features);
@@ -12039,6 +12225,7 @@ void netdev_run_todo(void)
 	if (!list_empty(&list)) {
 		rt_flush_dev(NULL);
 		rt6_uncached_list_flush_dev(NULL);
+		synchronize_net();
 	}
 
 	cnt = 0;
@@ -13074,7 +13261,6 @@ int __dev_change_net_namespace(struct net_device *dev, struct net *net,
 	 * the device is just moving and can keep their slaves up.
 	 */
 	call_netdevice_notifiers(NETDEV_UNREGISTER, dev);
-	rcu_barrier();
 
 	new_nsid = peernet2id_alloc(dev_net(dev), net, GFP_KERNEL);
 

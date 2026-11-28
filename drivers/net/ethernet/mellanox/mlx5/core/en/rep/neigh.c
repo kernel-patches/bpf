@@ -167,7 +167,7 @@ static void mlx5e_rep_neigh_update(struct work_struct *work)
 	 * the next one.
 	 */
 	while ((e = mlx5e_get_next_init_encap(nhe, e)) != NULL)
-		mlx5e_rep_update_flows(netdev_priv(e->out_dev), e, neigh_connected, ha);
+		mlx5e_rep_update_flows(e->priv, e, neigh_connected, ha);
 
 out:
 	rtnl_unlock();

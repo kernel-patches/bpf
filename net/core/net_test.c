@@ -41,6 +41,17 @@ enum gso_test_nr {
 	GSO_TEST_RESEGMENT_MULTI,
 	GSO_TEST_RESEGMENT_TAIL,
 	GSO_TEST_RESEGMENT_ONE_MSS,
+	GSO_TEST_FRAG_LIST_NON_UNIFORM_SG,
+	GSO_TEST_FRAG_LIST_NESTED,
+	GSO_TEST_SHORT_LINEAR,
+	GSO_TEST_SHORT_LINEAR_STRADDLE,
+	GSO_TEST_SHORT_FRAG_LIST,
+	GSO_TEST_SHORT_GSO_BY_FRAGS,
+	GSO_TEST_FRAG_LIST_NESTED_NO_SG,
+	GSO_TEST_SHORT_LINEAR_NO_SG,
+	GSO_TEST_SHORT_LINEAR_STRADDLE_NO_SG,
+	GSO_TEST_SHORT_FRAG_LIST_NO_SG,
+	GSO_TEST_SHORT_GSO_BY_FRAGS_NO_SG,
 };
 
 struct gso_test_case {
@@ -58,11 +69,18 @@ struct gso_test_case {
 	unsigned int gso_type;
 	/* skbs from alloc_skb() instead of build_skb(), head_frag clear */
 	bool no_head_frag;
+	/* bytes that skb->len counts but the skb doesn't hold */
+	unsigned int missing_len;
+	/* segment without NETIF_F_SG */
+	bool no_sg;
 
 	/* output as expected */
 	unsigned int nr_segs;
 	const unsigned int *segs;
 	const unsigned int *gso_segs;
+
+	/* skb_segment() is expected to fail with this error */
+	int err;
 };
 
 static struct gso_test_case cases[] = {
@@ -241,6 +259,110 @@ static struct gso_test_case cases[] = {
 		},
 		.gso_segs = (const unsigned int[]) { 0, 0, 0, 0 },
 	},
+	{
+		/* frag_list members that don't end on gso_size boundaries
+		 * can't be segmented with SG
+		 */
+		.id = GSO_TEST_FRAG_LIST_NON_UNIFORM_SG,
+		.name = "frag_list_non_uniform_sg",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 4,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, 1, GSO_TEST_SIZE, 2 },
+		.err = -EINVAL,
+	},
+	{
+		/* the second frag_list member hangs off the first one's
+		 * frag_list instead of off the head's
+		 */
+		.id = GSO_TEST_FRAG_LIST_NESTED,
+		.name = "frag_list_nested",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE },
+		.err = -EINVAL,
+	},
+	{
+		/* the data runs out on a segment boundary */
+		.id = GSO_TEST_SHORT_LINEAR,
+		.name = "short_linear",
+		.linear_len = GSO_TEST_SIZE,
+		.missing_len = 50,
+		.err = -EINVAL,
+	},
+	{
+		/* the data runs out in the middle of a segment */
+		.id = GSO_TEST_SHORT_LINEAR_STRADDLE,
+		.name = "short_linear_straddle",
+		.linear_len = GSO_TEST_SIZE + 500,
+		.missing_len = 700,
+		.err = -EINVAL,
+	},
+	{
+		.id = GSO_TEST_SHORT_FRAG_LIST,
+		.name = "short_frag_list",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 1,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE },
+		.missing_len = 50,
+		.err = -EINVAL,
+	},
+	{
+		.id = GSO_TEST_SHORT_GSO_BY_FRAGS,
+		.name = "short_gso_by_frags",
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { 100, 200 },
+		.missing_len = 50,
+		.err = -EINVAL,
+	},
+	{
+		/* without SG the nested data is copied by skb_copy_bits(),
+		 * which does look inside a member's own frag_list
+		 */
+		.id = GSO_TEST_FRAG_LIST_NESTED_NO_SG,
+		.name = "frag_list_nested_no_sg",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE },
+		.no_sg = true,
+		.nr_segs = 3,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE, GSO_TEST_SIZE },
+	},
+	{
+		/* without SG it is skb_copy_bits() that runs out of data */
+		.id = GSO_TEST_SHORT_LINEAR_NO_SG,
+		.name = "short_linear_no_sg",
+		.linear_len = GSO_TEST_SIZE,
+		.missing_len = 50,
+		.no_sg = true,
+		.err = -EFAULT,
+	},
+	{
+		.id = GSO_TEST_SHORT_LINEAR_STRADDLE_NO_SG,
+		.name = "short_linear_straddle_no_sg",
+		.linear_len = GSO_TEST_SIZE + 500,
+		.missing_len = 700,
+		.no_sg = true,
+		.err = -EFAULT,
+	},
+	{
+		.id = GSO_TEST_SHORT_FRAG_LIST_NO_SG,
+		.name = "short_frag_list_no_sg",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 1,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE },
+		.missing_len = 50,
+		.no_sg = true,
+		.err = -EFAULT,
+	},
+	{
+		.id = GSO_TEST_SHORT_GSO_BY_FRAGS_NO_SG,
+		.name = "short_gso_by_frags_no_sg",
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { 100, 200 },
+		.missing_len = 50,
+		.no_sg = true,
+		.err = -EINVAL,
+	},
 };
 
 static void gso_test_case_to_desc(struct gso_test_case *t, char *desc)
@@ -337,21 +459,49 @@ static void gso_test_func(struct kunit *test)
 		skb->data_len += total_size;
 		skb->truesize += total_true_size;
 
-		if (tcase->id == GSO_TEST_GSO_BY_FRAGS)
+		if (tcase->id == GSO_TEST_GSO_BY_FRAGS ||
+		    tcase->id == GSO_TEST_SHORT_GSO_BY_FRAGS ||
+		    tcase->id == GSO_TEST_SHORT_GSO_BY_FRAGS_NO_SG)
 			skb_shinfo(skb)->gso_size = GSO_BY_FRAGS;
+
+		if (tcase->id == GSO_TEST_FRAG_LIST_NESTED ||
+		    tcase->id == GSO_TEST_FRAG_LIST_NESTED_NO_SG) {
+			struct sk_buff *first = skb_shinfo(skb)->frag_list;
+
+			skb_shinfo(first)->frag_list = first->next;
+			first->next = NULL;
+			first->len += tcase->frag_skbs[1];
+			first->data_len += tcase->frag_skbs[1];
+		}
 	}
+
+	skb->len += tcase->missing_len;
+	skb->data_len += tcase->missing_len;
 
 	features = NETIF_F_SG | NETIF_F_HW_CSUM;
 	if (tcase->id == GSO_TEST_GSO_PARTIAL)
 		features |= NETIF_F_GSO_PARTIAL;
 
-	/* TODO: this should also work with SG,
-	 * rather than hit BUG_ON(i >= nfrags)
+	/* TODO: this should also work with SG, rather than fail the
+	 * i >= nfrags check in skb_segment()
 	 */
-	if (tcase->id == GSO_TEST_FRAG_LIST_NON_UNIFORM)
+	if (tcase->id == GSO_TEST_FRAG_LIST_NON_UNIFORM || tcase->no_sg)
 		features &= ~NETIF_F_SG;
 
 	SKB_GSO_CB(skb)->max_segs = tcase->max_segs;
+
+	if (tcase->err) {
+		/* the suppression block doesn't run if it can't be set up */
+		segs = NULL;
+		kunit_warning_suppress(test) {
+			segs = skb_segment(skb, features);
+		}
+		KUNIT_EXPECT_EQ(test, PTR_ERR_OR_ZERO(segs), tcase->err);
+		if (!IS_ERR_OR_NULL(segs))
+			kfree_skb_list(segs);
+		goto free_gso_skb;
+	}
+
 	segs = skb_segment(skb, features);
 	if (IS_ERR(segs)) {
 		KUNIT_FAIL(test, "segs error %pe", segs);
@@ -513,6 +663,114 @@ static void ip_tunnel_flags_test_run(struct kunit *test)
 	KUNIT_ASSERT_TRUE(test, __ipt_flag_op(bitmap_equal, exp, out));
 }
 
+/* netif_tx_stop_queue() and txq->trans_start */
+
+#include <linux/etherdevice.h>
+#include <linux/jiffies.h>
+#include <linux/netdevice.h>
+
+/* dev_watchdog() reports a timeout when a queue stays stopped for longer
+ * than watchdog_timeo after txq->trans_start. A trans_start value this far
+ * in the past is distinguishable from a fresh one.
+ */
+#define TXQ_TEST_OLD_DELTA	(10 * HZ)
+
+KUNIT_DEFINE_ACTION_WRAPPER(txq_test_free_netdev, free_netdev,
+			    struct net_device *);
+
+static struct netdev_queue *txq_test_alloc(struct kunit *test)
+{
+	struct net_device *dev;
+
+	dev = alloc_etherdev(0);
+	KUNIT_ASSERT_NOT_NULL(test, dev);
+	KUNIT_ASSERT_EQ(test, 0,
+			kunit_add_action_or_reset(test, txq_test_free_netdev,
+						  dev));
+
+	return netdev_get_tx_queue(dev, 0);
+}
+
+static void txq_test_expect_fresh(struct kunit *test,
+				  struct netdev_queue *txq,
+				  unsigned long before)
+{
+	unsigned long stamp = READ_ONCE(txq->trans_start);
+
+	KUNIT_EXPECT_TRUE_MSG(test, time_in_range(stamp, before, jiffies),
+			      "trans_start=%lu not in [%lu, %lu]",
+			      stamp, before, jiffies);
+}
+
+/* A stop on a running queue records the stop time in trans_start */
+static void txq_stop_stamps_running_queue(struct kunit *test)
+{
+	struct netdev_queue *txq = txq_test_alloc(test);
+	unsigned long before;
+
+	WRITE_ONCE(txq->trans_start, jiffies - TXQ_TEST_OLD_DELTA);
+	before = jiffies;
+	netif_tx_stop_queue(txq);
+
+	KUNIT_EXPECT_TRUE(test, netif_tx_queue_stopped(txq));
+	txq_test_expect_fresh(test, txq, before);
+}
+
+/* A stop on a queue that is already stopped keeps the first stop time, so
+ * repeated stops from a driver hang check do not postpone dev_watchdog()
+ */
+static void txq_stop_keeps_stamp_stopped_queue(struct kunit *test)
+{
+	struct netdev_queue *txq = txq_test_alloc(test);
+	unsigned long old, stamp;
+
+	netif_tx_stop_queue(txq);
+	old = jiffies - TXQ_TEST_OLD_DELTA;
+	WRITE_ONCE(txq->trans_start, old);
+	netif_tx_stop_queue(txq);
+	stamp = READ_ONCE(txq->trans_start);
+
+	KUNIT_EXPECT_TRUE(test, netif_tx_queue_stopped(txq));
+	KUNIT_EXPECT_EQ_MSG(test, stamp, old,
+			    "second stop moved trans_start forward by %lu jiffies",
+			    stamp - old);
+}
+
+/* A stop after a restart records a new stop time */
+static void txq_stop_stamps_restarted_queue(struct kunit *test)
+{
+	struct netdev_queue *txq = txq_test_alloc(test);
+	unsigned long before;
+
+	netif_tx_stop_queue(txq);
+	netif_tx_start_queue(txq);
+	KUNIT_EXPECT_FALSE(test, netif_tx_queue_stopped(txq));
+
+	WRITE_ONCE(txq->trans_start, jiffies - TXQ_TEST_OLD_DELTA);
+	before = jiffies;
+	netif_tx_stop_queue(txq);
+
+	KUNIT_EXPECT_TRUE(test, netif_tx_queue_stopped(txq));
+	txq_test_expect_fresh(test, txq, before);
+}
+
+/* Only the driver XOFF bit decides whether the stop is a transition. A queue
+ * stopped by BQL (stack XOFF) gets a new stop time when the driver stops it.
+ */
+static void txq_stop_stamps_stack_stopped_queue(struct kunit *test)
+{
+	struct netdev_queue *txq = txq_test_alloc(test);
+	unsigned long before;
+
+	set_bit(__QUEUE_STATE_STACK_XOFF, &txq->state);
+	WRITE_ONCE(txq->trans_start, jiffies - TXQ_TEST_OLD_DELTA);
+	before = jiffies;
+	netif_tx_stop_queue(txq);
+
+	KUNIT_EXPECT_TRUE(test, netif_tx_queue_stopped(txq));
+	txq_test_expect_fresh(test, txq, before);
+}
+
 /* Netmem & SKB fragment refcounting */
 
 #include <linux/skbuff_ref.h>
@@ -577,6 +835,11 @@ static void netmem_ref_test_page(struct kunit *test)
 }
 
 #ifdef CONFIG_PAGE_POOL
+static long net_test_pp_ref_count(netmem_ref netmem)
+{
+	return atomic_long_read(netmem_get_pp_ref_count_ref(netmem));
+}
+
 static void netmem_ref_test_pp_page(struct kunit *test)
 {
 	struct page_pool_params pp_params = {
@@ -598,39 +861,39 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, page);
 	netmem = page_to_netmem(page);
 	base_ref = page_ref_count(page);
-	base_pp_ref = atomic_long_read(&page->pp_ref_count);
+	base_pp_ref = net_test_pp_ref_count(netmem);
 
 	/* Layer 1: netmem_inc/dec_ref always use non-pp refcount */
 	netmem_inc_ref(netmem);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref + 1);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 	netmem_dec_ref(netmem);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 
 	/* Layer 2: napi_pp_get/put_page use pp_ref_count */
 	KUNIT_EXPECT_TRUE(test, napi_pp_get_page(netmem));
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	KUNIT_EXPECT_TRUE(test, napi_pp_put_page(netmem));
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 
 	/* Layer 3: skb_netmem_ref / unref obey recycle flag */
 	skb_netmem_ref(netmem, false);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref + 1);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 	skb_netmem_unref(netmem, false);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 
 	skb_netmem_ref(netmem, true);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	skb_netmem_unref(netmem, true);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 
 	/* Layer 4: skb_frag_ref / skb_frag_unref match on pp_recycle=1 & 0 */
@@ -642,23 +905,23 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 
 	skb->pp_recycle = 1;
 	skb_frag_ref(skb, 0);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	skb_frag_unref(skb, 0);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 
 	/* pskb_copy on pp_recycle=1 skb propagates pp_recycle & pp_ref_count */
 	copy = pskb_copy(skb, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, copy);
 	KUNIT_EXPECT_TRUE(test, copy->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	consume_skb(copy);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 
 	/* skb_zerocopy on pp_recycle=1 skb propagates pp_ref_count */
@@ -669,12 +932,12 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, skb_zerocopy(copy, skb, skb->len, 0), 0);
 	skb->head_frag = 0;
 	KUNIT_EXPECT_TRUE(test, copy->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	consume_skb(copy);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 
 	/* skb_clone + pskb_expand_head preserves pp_recycle and pp_ref_count */
@@ -682,12 +945,12 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, clone);
 	KUNIT_ASSERT_EQ(test, pskb_expand_head(clone, 32, 0, GFP_KERNEL), 0);
 	KUNIT_EXPECT_TRUE(test, clone->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	consume_skb(clone);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 
 	/* skb_split inside linear header & inside nonlinear page_pool frags */
@@ -703,7 +966,7 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, split);
 	skb_split(skb, split, 16);
 	KUNIT_EXPECT_TRUE(test, split->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	skb_shinfo(split)->nr_frags = 0;
@@ -719,12 +982,12 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, split);
 	skb_split(skb, split, 32);
 	KUNIT_EXPECT_TRUE(test, split->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	consume_skb(split);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 
 	/* skb_segment on pp_recycle=1 skb propagates pp_recycle to segments */
@@ -735,12 +998,12 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	split = skb_segment(skb, NETIF_F_SG | NETIF_F_HW_CSUM);
 	KUNIT_ASSERT_FALSE(test, IS_ERR_OR_NULL(split));
 	KUNIT_EXPECT_TRUE(test, split->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	kfree_skb_list(split);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 
 	/* skb_shift balances pp_ref_count across split, partial coalesce,
@@ -755,17 +1018,17 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, split);
 	split->pp_recycle = 1;
 	KUNIT_EXPECT_EQ(test, skb_shift(split, skb, 16), 16);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, skb_shift(split, skb, 8), 8);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, skb_shift(split, skb, 24), 24);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	KUNIT_EXPECT_EQ(test, skb_shift(split, skb, 16), 16);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	skb_shinfo(split)->nr_frags = 0;
 	consume_skb(split);
@@ -777,7 +1040,7 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	skb->pp_recycle = 0;
 	skb_frag_ref(skb, 0);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref + 1);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 	skb_frag_unref(skb, 0);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
@@ -796,15 +1059,15 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	page = page_pool_dev_alloc_pages(pool);
 	KUNIT_ASSERT_NOT_NULL(test, page);
 	base_ref = page_ref_count(page);
-	base_pp_ref = atomic_long_read(&page->pp_ref_count);
+	base_pp_ref = net_test_pp_ref_count(page_to_netmem(page));
 
 	netmem = page_to_netmem(page + 1);
 	KUNIT_EXPECT_TRUE(test, napi_pp_get_page(netmem));
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(page_to_netmem(page)),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	KUNIT_EXPECT_TRUE(test, napi_pp_put_page(netmem));
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(page_to_netmem(page)),
 			base_pp_ref);
 
 	skb = build_skb(page_address(page), PAGE_SIZE);
@@ -818,14 +1081,14 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 	skb_put(copy, skb_tailroom(copy));
 	KUNIT_ASSERT_EQ(test, skb_zerocopy(copy, skb, skb->len, 0), 0);
 	KUNIT_EXPECT_TRUE(test, copy->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(page_to_netmem(page)),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	consume_skb(copy);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(page_to_netmem(page)),
 			base_pp_ref + 1);
 	consume_skb(skb);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(page_to_netmem(page)),
 			base_pp_ref);
 
 	page_pool_put_full_page(pool, page, false);
@@ -949,6 +1212,9 @@ static void netmem_ref_test_net_iov(struct kunit *test)
 	copy = alloc_skb(0, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, copy);
 	copy->pp_recycle = 1;
+	skb_fill_netmem_desc(copy, 0, netmem, 64, 16);
+	copy->len = 16;
+	copy->data_len = 16;
 	KUNIT_EXPECT_EQ(test, skb_shift(copy, skb, 16), 16);
 	KUNIT_EXPECT_EQ(test, atomic_long_read(&niov.desc.pp_ref_count), 3L);
 	KUNIT_EXPECT_EQ(test, atomic_long_read(&binding.ref.data->count),
@@ -1022,7 +1288,7 @@ static void netmem_ref_test_release_data(struct kunit *test)
 	skb->len += 64;
 	skb->data_len = 64;
 	base_ref = page_ref_count(page);
-	base_pp_ref = atomic_long_read(&page->pp_ref_count);
+	base_pp_ref = net_test_pp_ref_count(netmem);
 
 	page_pool_ref_netmem(netmem);
 	clone1 = skb_clone(skb, GFP_KERNEL);
@@ -1034,14 +1300,14 @@ static void netmem_ref_test_release_data(struct kunit *test)
 	consume_skb(skb);
 	KUNIT_EXPECT_TRUE(test, clone1->pp_recycle);
 	KUNIT_EXPECT_TRUE(test, clone2->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	consume_skb(clone2);
 	KUNIT_EXPECT_TRUE(test, clone1->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	consume_skb(clone1);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref);
 
 	/* All 4 combinations of (unclone skb vs clone) x (free order) */
@@ -1062,24 +1328,24 @@ static void netmem_ref_test_release_data(struct kunit *test)
 						 32, 0, GFP_KERNEL), 0);
 		KUNIT_EXPECT_TRUE(test, skb->pp_recycle);
 		KUNIT_EXPECT_TRUE(test, clone1->pp_recycle);
-		KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+		KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 				base_pp_ref + 2);
 		KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 
 		if (i & 2) {
 			consume_skb(clone1);
 			KUNIT_EXPECT_EQ(test,
-					atomic_long_read(&page->pp_ref_count),
+					net_test_pp_ref_count(netmem),
 					base_pp_ref + 1);
 			consume_skb(skb);
 		} else {
 			consume_skb(skb);
 			KUNIT_EXPECT_EQ(test,
-					atomic_long_read(&page->pp_ref_count),
+					net_test_pp_ref_count(netmem),
 					base_pp_ref + 1);
 			consume_skb(clone1);
 		}
-		KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+		KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 				base_pp_ref);
 		KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	}
@@ -1098,18 +1364,18 @@ static void netmem_ref_test_release_data(struct kunit *test)
 	ext = pskb_extract(skb, 16, skb->len - 16, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, ext);
 	KUNIT_EXPECT_TRUE(test, ext->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	consume_skb(ext);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 
 	/* Carve + trim + skb_condense ref/unrefs pp_ref_count cleanly */
 	ext = pskb_extract(skb, 16, 48, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, ext);
 	KUNIT_EXPECT_TRUE(test, ext->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	consume_skb(ext);
@@ -1118,11 +1384,11 @@ static void netmem_ref_test_release_data(struct kunit *test)
 	ext = pskb_extract(skb, 48, skb->len - 48, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, ext);
 	KUNIT_EXPECT_TRUE(test, ext->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(page), base_ref);
 	consume_skb(ext);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 
 	/* skb_morph drops old skb data via skb_release_data */
@@ -1135,7 +1401,7 @@ static void netmem_ref_test_release_data(struct kunit *test)
 	clone1->data_len = 64;
 	skb_morph(clone1, skb);
 	KUNIT_EXPECT_TRUE(test, clone1->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(netmem),
 			base_pp_ref + 1);
 	consume_skb(clone1);
 	kfree_skb(skb);
@@ -1214,7 +1480,7 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	netmem_or_pp_magic(niov_nm, PP_SIGNATURE);
 	atomic_long_set(&niov.desc.pp_ref_count, 2);
 
-	base_pp_ref = atomic_long_read(&pp_page->pp_ref_count);
+	base_pp_ref = net_test_pp_ref_count(pp_nm);
 	base_pp_page_ref = page_ref_count(pp_page);
 	base_reg_ref = page_ref_count(reg_page);
 	base_iov_ref = atomic_long_read(&binding.ref.data->count);
@@ -1274,14 +1540,14 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	KUNIT_ASSERT_FALSE(test, IS_ERR_OR_NULL(segs));
 	for (seg = segs; seg; seg = seg->next)
 		KUNIT_EXPECT_TRUE(test, seg->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref + 4);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pp_page), base_pp_page_ref);
 	kfree_skb_list(segs);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref + 2);
 	consume_skb(head);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref);
 
 	/* 3. Mixed GRO frag_list (head pp_recycle=1 + list pp_recycle=0):
@@ -1318,13 +1584,13 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, segs->pp_recycle);
 	KUNIT_EXPECT_FALSE(test, segs->next->pp_recycle);
 	KUNIT_EXPECT_FALSE(test, segs->next->next->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pp_page), base_pp_page_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(reg_page), base_reg_ref + 3);
 	kfree_skb_list(segs);
 	consume_skb(head);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pp_page), base_pp_page_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(reg_page), base_reg_ref);
@@ -1362,13 +1628,13 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, segs->pp_recycle);
 	KUNIT_EXPECT_TRUE(test, segs->next->pp_recycle);
 	KUNIT_EXPECT_TRUE(test, segs->next->next->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref + 3);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pp_page), base_pp_page_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(reg_page), base_reg_ref + 2);
 	kfree_skb_list(segs);
 	consume_skb(head);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pp_page), base_pp_page_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(reg_page), base_reg_ref);
@@ -1376,7 +1642,7 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	/* 5. Linear head_skb (nr_frags=0) + mixed pp_recycle frag_list where
 	 * member A has linear + frag (pp_recycle=1) and tail member B has
 	 * linear len == skb_headlen(A) (pp_recycle=0): keeps SG clone path
-	 * synchronized without hitting BUG_ON(i >= nfrags).
+	 * synchronized without failing the i >= nfrags check.
 	 */
 	head = alloc_skb(64, GFP_KERNEL);
 	list = alloc_skb(64, GFP_KERNEL);
@@ -1408,12 +1674,12 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, segs->pp_recycle);
 	KUNIT_EXPECT_TRUE(test, segs->next->pp_recycle);
 	KUNIT_EXPECT_FALSE(test, segs->next->next->pp_recycle);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pp_page), base_pp_page_ref);
 	kfree_skb_list(segs);
 	consume_skb(head);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref);
 
 	/* 6. skb_zerocopy -EFAULT rollback when from->head_frag (pp_page) is
@@ -1434,12 +1700,12 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, seg);
 	skb_put(seg, skb_tailroom(seg));
 	KUNIT_EXPECT_EQ(test, skb_zerocopy(seg, head, head->len, 0), -EFAULT);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref + 1);
 	skb_shinfo(seg)->nr_frags = 0;
 	consume_skb(seg);
 	consume_skb(head);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref);
 	KUNIT_EXPECT_EQ(test, atomic_long_read(&niov.desc.pp_ref_count), 2L);
 
@@ -1458,7 +1724,7 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, seg);
 	skb_put(seg, skb_tailroom(seg));
 	KUNIT_EXPECT_EQ(test, skb_zerocopy(seg, head, head->len, 0), -ENOMEM);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref + 1);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pp_page), base_pp_page_ref);
 	skb_shinfo(seg)->nr_frags = 0;
@@ -1466,7 +1732,7 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	consume_skb(head);
 	skb_shinfo(head)->flags &= ~SKBFL_ZEROCOPY_ENABLE;
 	consume_skb(head);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref);
 
 	page_pool_put_full_page(pool, pp_page, false);
@@ -1486,9 +1752,10 @@ static void netmem_ref_test_try_coalesce(struct kunit *test)
 		.nid = NUMA_NO_NODE,
 	};
 	struct sk_buff *to, *from, *clone;
-	struct net_iov niov = {};
+	struct net_iov_area area2 = {};
+	struct net_iov niov = {}, niov2 = {};
 	struct page *pp_page, *reg_page;
-	netmem_ref pp_nm, niov_nm;
+	netmem_ref pp_nm, niov_nm, niov2_nm;
 	struct page_pool *pool;
 	long base_pp_ref, base_iov_ref;
 	int base_pp_page_ref, base_reg_ref;
@@ -1516,7 +1783,7 @@ static void netmem_ref_test_try_coalesce(struct kunit *test)
 	netmem_or_pp_magic(niov_nm, PP_SIGNATURE);
 	atomic_long_set(&niov.desc.pp_ref_count, 2);
 
-	base_pp_ref = atomic_long_read(&pp_page->pp_ref_count);
+	base_pp_ref = net_test_pp_ref_count(pp_nm);
 	base_pp_page_ref = page_ref_count(pp_page);
 	base_reg_ref = page_ref_count(reg_page);
 	base_iov_ref = atomic_long_read(&binding.ref.data->count);
@@ -1534,11 +1801,11 @@ static void netmem_ref_test_try_coalesce(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, skb_try_coalesce(to, from, &fragstolen,
 						 &delta));
 	KUNIT_EXPECT_EQ(test, skb_shinfo(from)->nr_frags, 0);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref + 1);
 	consume_skb(from);
 	consume_skb(to);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref);
 
 	/* 2. Cloned pp_recycle=1 from (pp_page + non-PP reg_page fallback):
@@ -1561,14 +1828,14 @@ static void netmem_ref_test_try_coalesce(struct kunit *test)
 	KUNIT_ASSERT_NOT_NULL(test, clone);
 	KUNIT_EXPECT_TRUE(test, skb_try_coalesce(to, from, &fragstolen,
 						 &delta));
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref + 2);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pp_page), base_pp_page_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(reg_page), base_reg_ref + 2);
 	consume_skb(from);
 	consume_skb(clone);
 	consume_skb(to);
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&pp_page->pp_ref_count),
+	KUNIT_EXPECT_EQ(test, net_test_pp_ref_count(pp_nm),
 			base_pp_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(pp_page), base_pp_page_ref);
 	KUNIT_EXPECT_EQ(test, page_ref_count(reg_page), base_reg_ref);
@@ -1580,24 +1847,69 @@ static void netmem_ref_test_try_coalesce(struct kunit *test)
 	from = alloc_skb(0, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, to);
 	KUNIT_ASSERT_NOT_NULL(test, from);
-	skb_put(to, skb_tailroom(to));
 	to->pp_recycle = 1;
-	to->unreadable = 1;
 	from->pp_recycle = 1;
-	skb_add_rx_frag_netmem(from, 0, niov_nm, 0, 64, PAGE_SIZE);
+	skb_add_rx_frag_netmem(to, 0, niov_nm, 0, 32, PAGE_SIZE);
+	napi_pp_get_page(niov_nm);
+	skb_add_rx_frag_netmem(from, 0, niov_nm, 32, 64, PAGE_SIZE);
 	napi_pp_get_page(niov_nm);
 
 	clone = skb_clone(from, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, clone);
 	KUNIT_EXPECT_TRUE(test, skb_try_coalesce(to, from, &fragstolen,
 						 &delta));
-	KUNIT_EXPECT_EQ(test, atomic_long_read(&niov.desc.pp_ref_count), 4L);
+	KUNIT_EXPECT_TRUE(test, to->unreadable);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&niov.desc.pp_ref_count), 5L);
 	KUNIT_EXPECT_EQ(test, atomic_long_read(&binding.ref.data->count),
 			base_iov_ref);
 	consume_skb(from);
 	consume_skb(clone);
 	consume_skb(to);
 	KUNIT_EXPECT_EQ(test, atomic_long_read(&niov.desc.pp_ref_count), 2L);
+
+	/* 4. Reject coalescing net_iov skbs from different bindings. */
+	net_iov_init(&niov2, &area2, NET_IOV_DMABUF);
+	niov2_nm = net_iov_to_netmem(&niov2);
+	netmem_set_pp(niov2_nm, pool);
+	netmem_or_pp_magic(niov2_nm, PP_SIGNATURE);
+	atomic_long_set(&niov2.desc.pp_ref_count, 2);
+	to = alloc_skb(0, GFP_KERNEL);
+	from = alloc_skb(0, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, to);
+	KUNIT_ASSERT_NOT_NULL(test, from);
+	to->pp_recycle = 1;
+	from->pp_recycle = 1;
+	skb_add_rx_frag_netmem(to, 0, niov_nm, 0, 32, PAGE_SIZE);
+	napi_pp_get_page(niov_nm);
+	skb_add_rx_frag_netmem(from, 0, niov2_nm, 0, 32, PAGE_SIZE);
+	napi_pp_get_page(niov2_nm);
+	KUNIT_EXPECT_FALSE(test, skb_try_coalesce(to, from, &fragstolen,
+						  &delta));
+	consume_skb(from);
+	consume_skb(to);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&niov.desc.pp_ref_count), 2L);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&niov2.desc.pp_ref_count), 2L);
+
+	/* 5. Reject coalescing net_iov skbs from different providers. */
+	net_iov_init(&niov2, NULL, NET_IOV_IOURING);
+	to = alloc_skb(0, GFP_KERNEL);
+	from = alloc_skb(0, GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, to);
+	KUNIT_ASSERT_NOT_NULL(test, from);
+	to->pp_recycle = 1;
+	from->pp_recycle = 1;
+	skb_add_rx_frag_netmem(to, 0, niov_nm, 0, 32, PAGE_SIZE);
+	napi_pp_get_page(niov_nm);
+	skb_add_rx_frag_netmem(from, 0, niov2_nm, 0, 32, PAGE_SIZE);
+	napi_pp_get_page(niov2_nm);
+	KUNIT_EXPECT_FALSE(test, skb_try_coalesce(to, from, &fragstolen,
+						  &delta));
+	consume_skb(from);
+	consume_skb(to);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&niov.desc.pp_ref_count), 2L);
+	KUNIT_EXPECT_EQ(test, atomic_long_read(&niov2.desc.pp_ref_count), 2L);
+	netmem_clear_pp_magic(niov2_nm);
+	netmem_set_pp(niov2_nm, NULL);
 
 	page_pool_put_full_page(pool, pp_page, false);
 	page_pool_put_full_page(pool, pp_page, false);
@@ -1791,6 +2103,10 @@ static struct kunit_case net_test_cases[] = {
 	KUNIT_CASE(netmem_ref_test_tcp_devmem_recv),
 #endif
 #endif
+	KUNIT_CASE(txq_stop_stamps_running_queue),
+	KUNIT_CASE(txq_stop_keeps_stamp_stopped_queue),
+	KUNIT_CASE(txq_stop_stamps_restarted_queue),
+	KUNIT_CASE(txq_stop_stamps_stack_stopped_queue),
 	{ },
 };
 

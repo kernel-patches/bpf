@@ -59,7 +59,7 @@ struct switchdev_deferred_item {
 	struct net_device *dev;
 	netdevice_tracker dev_tracker;
 	switchdev_deferred_func_t *func;
-	unsigned long data[];
+	u8 data[] __aligned(sizeof(unsigned long));
 };
 
 static struct switchdev_deferred_item *switchdev_deferred_dequeue(void)

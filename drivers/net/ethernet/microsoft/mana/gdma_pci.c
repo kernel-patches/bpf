@@ -14,12 +14,10 @@
 #include <linux/xarray.h>
 
 #include <net/mana/mana.h>
-#include <net/mana/hw_channel.h>
 
 struct mana_dev_recovery {
 	struct list_head list;
 	struct pci_dev *pdev;
-	enum gdma_eqe_type type;
 };
 
 static struct mana_dev_recovery_work {
@@ -32,77 +30,110 @@ static struct mana_dev_recovery_work {
 
 static int mana_gd_suspend(struct pci_dev *pdev, pm_message_t state);
 static int mana_gd_resume(struct pci_dev *pdev);
+static struct pci_driver mana_driver;
 
 #define MANA_SERVICE_PERIOD 10
 
-static void mana_serv_rescan(struct pci_dev *pdev)
+enum mana_rescan_reason {
+	MANA_RESCAN_PROBE,
+	MANA_RESCAN_RESET,
+	MANA_RESCAN_FPGA,
+};
+
+/* The rescan/remove lock serializes service removals. A synchronous
+ * ->remove() on this task can veto the scan, including for a sibling
+ * removed along with the upstream bridge.
+ */
+static struct task_struct *mana_rescan_task;
+
+static int mana_check_unbound(struct pci_dev *pdev, void *data)
 {
+	bool *unbound = data;
+
+	if (READ_ONCE(pdev->driver) ||
+	    !pci_match_id(mana_driver.id_table, pdev))
+		return 0;
+
+	*unbound = true;
+	return 1;
+}
+
+static void mana_serv_rescan(struct pci_dev *pdev,
+			     enum mana_rescan_reason reason)
+{
+	struct pci_dev *target = pdev;
 	struct pci_bus *parent;
+	bool unbound = false;
 
 	pci_lock_rescan_remove();
+	if (!device_is_registered(&pdev->dev))
+		goto out;
 
-	parent = pdev->bus;
-	if (!parent) {
+	scoped_guard(device, &pdev->dev) {
+		if (reason == MANA_RESCAN_PROBE) {
+			if (pdev->dev.driver)
+				goto out;
+		} else if (pdev->driver != &mana_driver) {
+			goto out;
+		} else if (reason == MANA_RESCAN_FPGA) {
+			struct gdma_context *gc = pci_get_drvdata(pdev);
+
+			/* An unbound sibling cannot veto the bridge rescan in
+			 * ->remove(). Its last probe may have lost HWC DMA.
+			 */
+			target = pci_upstream_bridge(pdev);
+			if (target)
+				pci_walk_bus(target->subordinate,
+					     mana_check_unbound, &unbound);
+			if (unbound) {
+				dev_err(&pdev->dev,
+					"Unbound MANA function, skipping bridge rescan\n");
+				clear_bit(GC_IN_SERVICE, &gc->flags);
+				goto out;
+			}
+		}
+	}
+
+	if (!target || !target->bus) {
 		dev_err(&pdev->dev, "MANA service: no parent bus\n");
 		goto out;
 	}
 
-	pci_stop_and_remove_bus_device(pdev);
+	parent = target->bus;
+	WRITE_ONCE(mana_rescan_task, current);
+	pci_stop_and_remove_bus_device(target);
+	if (!READ_ONCE(mana_rescan_task))
+		goto out;
+	WRITE_ONCE(mana_rescan_task, NULL);
+
+	if (reason == MANA_RESCAN_FPGA)
+		msleep(MANA_SERVICE_PERIOD * 1000);
+
 	pci_rescan_bus(parent);
 
 out:
 	pci_unlock_rescan_remove();
 }
 
-static void mana_serv_fpga(struct pci_dev *pdev)
+/* Return true if recovery needs to escalate to PCI re-enumeration. */
+static bool mana_serv_reset(struct pci_dev *pdev)
 {
-	struct pci_bus *bus, *parent;
-
-	pci_lock_rescan_remove();
-
-	bus = pdev->bus;
-	if (!bus) {
-		dev_err(&pdev->dev, "MANA service: no bus\n");
-		goto out;
-	}
-
-	parent = bus->parent;
-	if (!parent) {
-		dev_err(&pdev->dev, "MANA service: no parent bus\n");
-		goto out;
-	}
-
-	pci_stop_and_remove_bus_device(bus->self);
-
-	msleep(MANA_SERVICE_PERIOD * 1000);
-
-	pci_rescan_bus(parent);
-
-out:
-	pci_unlock_rescan_remove();
-}
-
-static void mana_serv_reset(struct pci_dev *pdev)
-{
-	struct gdma_context *gc = pci_get_drvdata(pdev);
-	struct hw_channel_context *hwc;
+	struct gdma_context *gc;
 	int ret;
 
-	if (!gc) {
-		/* Perform PCI rescan on device if GC is not set up */
-		dev_err(&pdev->dev, "MANA service: GC not setup, rescanning\n");
-		mana_serv_rescan(pdev);
-		return;
-	}
+	guard(device)(&pdev->dev);
+	if (pdev->driver != &mana_driver)
+		return false;
 
-	hwc = gc->hwc.driver_data;
-	if (!hwc) {
+	gc = pci_get_drvdata(pdev);
+	if (!gc->hwc.driver_data) {
 		dev_err(&pdev->dev, "MANA service: no HWC\n");
 		goto out;
 	}
 
-	/* HWC is not responding in this case, so don't wait */
-	hwc->hwc_timeout = 0;
+	/* A service notification is not a DMA fence. Keep the normal HWC
+	 * response window for cleanup, including when all slots are in use.
+	 */
 
 	dev_info(&pdev->dev, "MANA reset cycle start\n");
 
@@ -114,8 +145,7 @@ static void mana_serv_reset(struct pci_dev *pdev)
 	if (ret == -ETIMEDOUT || ret == -EPROTO) {
 		/* Perform PCI rescan on device if we failed on HWC */
 		dev_err(&pdev->dev, "MANA service: resume failed, rescanning\n");
-		mana_serv_rescan(pdev);
-		return;
+		return true;
 	}
 
 	if (ret)
@@ -125,17 +155,19 @@ static void mana_serv_reset(struct pci_dev *pdev)
 
 out:
 	clear_bit(GC_IN_SERVICE, &gc->flags);
+	return false;
 }
 
 static void mana_do_service(enum gdma_eqe_type type, struct pci_dev *pdev)
 {
 	switch (type) {
 	case GDMA_EQE_HWC_FPGA_RECONFIG:
-		mana_serv_fpga(pdev);
+		mana_serv_rescan(pdev, MANA_RESCAN_FPGA);
 		break;
 
 	case GDMA_EQE_HWC_RESET_REQUEST:
-		mana_serv_reset(pdev);
+		if (mana_serv_reset(pdev))
+			mana_serv_rescan(pdev, MANA_RESCAN_RESET);
 		break;
 
 	default:
@@ -160,7 +192,7 @@ static void mana_recovery_delayed_func(struct work_struct *w)
 		list_del(&dev->list);
 		spin_unlock_irqrestore(&work->lock, flags);
 
-		mana_do_service(dev->type, dev->pdev);
+		mana_serv_rescan(dev->pdev, MANA_RESCAN_PROBE);
 		pci_dev_put(dev->pdev);
 		kfree(dev);
 
@@ -299,7 +331,7 @@ static int mana_pci_dev_reset(struct gdma_context *gc)
  */
 
 static int mana_irq_setup_numa_aware(unsigned int *irqs, unsigned int len,
-				     int node, bool skip_first_cpu)
+				     int node, unsigned int skip)
 {
 	const struct cpumask *next, *prev = cpu_none_mask;
 	cpumask_var_t cpus __free(free_cpumask_var);
@@ -317,8 +349,8 @@ static int mana_irq_setup_numa_aware(unsigned int *irqs, unsigned int len,
 				cpumask_andnot(cpus, cpus, topology_sibling_cpumask(cpu));
 				--weight;
 
-				if (unlikely(skip_first_cpu)) {
-					skip_first_cpu = false;
+				if (skip) {
+					skip--;
 					continue;
 				}
 
@@ -336,7 +368,8 @@ done:
 }
 
 /* must be called with cpus_read_lock() held */
-static void mana_irq_setup_linear(unsigned int *irqs, unsigned int len)
+static void mana_irq_setup_linear(unsigned int *irqs, unsigned int len,
+				  unsigned int skip)
 {
 	int cpu;
 
@@ -344,96 +377,50 @@ static void mana_irq_setup_linear(unsigned int *irqs, unsigned int len)
 		if (len == 0)
 			break;
 
+		if (skip) {
+			skip--;
+			continue;
+		}
+
 		irq_set_affinity_and_hint(*irqs++, cpumask_of(cpu));
 		len--;
 	}
 }
 
-static int mana_gd_setup_dyn_irqs(struct pci_dev *pdev, int nvec)
+/*
+ * Select NUMA-aware or linear placement using Ethernet and RNIC queue limits.
+ * Use the MSI-X index as the position in the selected placement order. The
+ * NUMA-aware walk reserves its first slot for HWC; the linear queue walk does not.
+ */
+static int mana_pci_setup_dyn_affinity(struct gdma_context *gc,
+				       unsigned int irq, unsigned int msix_index)
 {
-	struct gdma_context *gc = pci_get_drvdata(pdev);
-	struct gdma_irq_context *gic;
-	int *irqs, err, i, msi;
+	unsigned int num_queue_irqs = gc->max_num_queues_vport;
+	unsigned int num_cpus, skip;
+	int err = 0;
 
-	irqs = kmalloc_objs(int, nvec);
-	if (!irqs)
-		return -ENOMEM;
+	if (!gc->msi_sharing)
+		num_queue_irqs *= gc->num_ports;
 
-	/*
-	 * In this function, num_msix_usable = HWC IRQ + Queue IRQ.
-	 * nvec is only Queue IRQ (HWC already setup).
-	 * While processing the next pci irq vector, we start with index 1,
-	 * as IRQ vector at index 0 is already processed for HWC.
-	 * However, the population of irqs array starts with index 0, to be
-	 * further used in mana_irq_setup_numa_aware()
-	 */
-	for (i = 1; i <= nvec; i++) {
-		msi = i;
-		gic = mana_gd_get_gic(gc, false, &msi);
-		if (IS_ERR(gic)) {
-			err = PTR_ERR(gic);
-			goto free_irq;
-		}
+	/* RNIC completion EQs can use more vectors than Ethernet queues. */
+	num_queue_irqs = max(num_queue_irqs, gc->max_num_queues);
 
-		irqs[i - 1] = gic->irq;
-	}
-
-	/*
-	 * When calling mana_irq_setup_numa_aware() for dynamically added IRQs,
-	 * if number of CPUs is more than or equal to allocated MSI-X, we need to
-	 * skip the first CPU sibling group since they are already affinitized to
-	 * HWC IRQ
-	 */
 	cpus_read_lock();
-	if (gc->num_msix_usable <= num_online_cpus()) {
-		err = mana_irq_setup_numa_aware(irqs, nvec, gc->numa_node,
-						true);
-		if (err) {
-			cpus_read_unlock();
-			goto free_irq;
-		}
+	num_cpus = num_online_cpus();
+	if (num_queue_irqs < num_cpus && msix_index < num_cpus) {
+		err = mana_irq_setup_numa_aware(&irq, 1, gc->numa_node, msix_index);
 	} else {
-		/*
-		 * When num_msix_usable are more than num_online_cpus, our
-		 * queue IRQs should be equal to num of online vCPUs.
-		 * We try to make sure queue IRQs spread across all vCPUs.
-		 * In such a case NUMA or CPU core affinity does not matter.
-		 * Note: in this case the total mana IRQ should always be
-		 * num_online_cpus + 1. The first HWC IRQ is already handled
-		 * in HWC setup calls
-		 * However, if CPUs went offline since num_msix_usable was
-		 * computed, queue IRQs will be more than num_online_cpus().
-		 * In such cases remaining extra IRQs will retain their default
-		 * affinity.
-		 */
-		int first_unassigned = num_online_cpus();
-
-		if (nvec > first_unassigned) {
-			char buf[32];
-
-			if (first_unassigned == nvec - 1)
-				snprintf(buf, sizeof(buf), "%d",
-					 first_unassigned);
-			else
-				snprintf(buf, sizeof(buf), "%d-%d",
-					 first_unassigned, nvec - 1);
-
-			dev_dbg(&pdev->dev,
-				"MANA IRQ indices #%s will retain the default CPU affinity\n",
-				buf);
+		skip = msix_index ? msix_index - 1 : 0;
+		/* CPU hotplug can leave more queue vectors than online CPUs. */
+		if (skip >= num_cpus) {
+			dev_dbg(gc->dev, "Wrapping MSI %u affinity over %u CPUs\n",
+				msix_index, num_cpus);
+			skip %= num_cpus;
 		}
-
-		mana_irq_setup_linear(irqs, nvec);
+		mana_irq_setup_linear(&irq, 1, skip);
 	}
-
 	cpus_read_unlock();
-	kfree(irqs);
-	return 0;
 
-free_irq:
-	for (i -= 1; i > 0; i--)
-		mana_gd_put_gic(gc, false, i);
-	kfree(irqs);
 	return err;
 }
 
@@ -478,7 +465,7 @@ static int mana_gd_setup_irqs(struct pci_dev *pdev, int nvec)
 		nvec -= 1;
 	}
 
-	err = mana_irq_setup_numa_aware(irqs, nvec, gc->numa_node, false);
+	err = mana_irq_setup_numa_aware(irqs, nvec, gc->numa_node, 0);
 	if (err) {
 		cpus_read_unlock();
 		goto free_irq;
@@ -523,40 +510,6 @@ static int mana_gd_setup_hwc_irqs(struct pci_dev *pdev)
 	}
 
 	gc->num_msix_usable = nvec;
-	gc->max_num_msix = nvec;
-
-	return 0;
-}
-
-static int mana_gd_setup_remaining_irqs(struct pci_dev *pdev)
-{
-	struct gdma_context *gc = pci_get_drvdata(pdev);
-	struct msi_map irq_map;
-	int max_irqs, i, err;
-
-	if (!pci_msix_can_alloc_dyn(pdev))
-		/* remain irqs are already allocated with HWC IRQ */
-		return 0;
-
-	/* allocate only remaining IRQs*/
-	max_irqs = gc->num_msix_usable - 1;
-
-	for (i = 1; i <= max_irqs; i++) {
-		irq_map = pci_msix_alloc_irq_at(pdev, i, NULL);
-		if (!irq_map.virq) {
-			err = irq_map.index;
-			/* caller will handle cleaning up all allocated
-			 * irqs, after HWC is destroyed
-			 */
-			return err;
-		}
-	}
-
-	err = mana_gd_setup_dyn_irqs(pdev, max_irqs);
-	if (err)
-		return err;
-
-	gc->max_num_msix = gc->max_num_msix + max_irqs;
 
 	return 0;
 }
@@ -564,17 +517,12 @@ static int mana_gd_setup_remaining_irqs(struct pci_dev *pdev)
 static void mana_gd_remove_irqs(struct pci_dev *pdev)
 {
 	struct gdma_context *gc = pci_get_drvdata(pdev);
-	int i;
+	struct gdma_irq_context *gic;
+	unsigned long msi;
 
-	if (gc->max_num_msix < 1)
-		return;
-
-	for (i = 0; i < gc->max_num_msix; i++) {
-		if (!xa_load(&gc->irq_contexts, i))
-			continue;
-
-		mana_gd_put_gic(gc, false, i);
-	}
+	/* Only the vectors an EQ asked for were ever created */
+	xa_for_each(&gc->irq_contexts, msi, gic)
+		mana_gd_put_gic(gc, false, msi);
 
 	WARN_ON(!xa_empty(&gc->irq_contexts));
 
@@ -582,7 +530,6 @@ static void mana_gd_remove_irqs(struct pci_dev *pdev)
 
 	bitmap_free(gc->msi_bitmap);
 	gc->msi_bitmap = NULL;
-	gc->max_num_msix = 0;
 	gc->num_msix_usable = 0;
 }
 
@@ -593,14 +540,6 @@ static int mana_pci_setup_hwc_irqs(struct gdma_context *gc)
 
 static int mana_pci_setup_remaining_irqs(struct gdma_context *gc)
 {
-	int err;
-
-	err = mana_gd_setup_remaining_irqs(to_pci_dev(gc->dev));
-	if (err) {
-		dev_err(gc->dev, "Failed to setup remaining IRQs: %d", err);
-		return err;
-	}
-
 	if (!gc->msi_sharing) {
 		gc->msi_bitmap = bitmap_zalloc(gc->num_msix_usable, GFP_KERNEL);
 		if (!gc->msi_bitmap)
@@ -624,6 +563,7 @@ static const struct gdma_bus_ops mana_pci_bus_ops = {
 	.msix_virq		= mana_pci_msix_virq,
 	.msix_alloc_at		= mana_pci_msix_alloc_at,
 	.msix_free		= mana_pci_msix_free,
+	.setup_dyn_affinity	= mana_pci_setup_dyn_affinity,
 	.msix_vec_count		= mana_pci_msix_vec_count,
 	.setup_hwc_irqs		= mana_pci_setup_hwc_irqs,
 	.setup_remaining_irqs	= mana_pci_setup_remaining_irqs,
@@ -674,6 +614,8 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	mutex_init(&gc->eq_test_event_mutex);
 	mutex_init(&gc->gic_mutex);
+	spin_lock_init(&gc->hwc_lock);
+	init_waitqueue_head(&gc->hwc_drain_waitq);
 	pci_set_drvdata(pdev, gc);
 	gc->bar0_pa = pci_resource_start(pdev, 0);
 	gc->bar0_size = pci_resource_len(pdev, 0);
@@ -724,8 +666,16 @@ unmap_bar:
 	xa_destroy(&gc->irq_contexts);
 	pci_iounmap(pdev, bar0_va);
 free_gc:
+	/* No binding remains to retry DESTROY. Do not start another probe
+	 * which could abandon another set of coherent allocations.
+	 */
+	if (gc->hwc.driver_data) {
+		dev_err(&pdev->dev,
+			"HWC teardown failed, disabling probe recovery\n");
+		err = -ENOTRECOVERABLE;
+	}
 	pci_set_drvdata(pdev, NULL);
-	vfree(gc);
+	mana_gd_free_context(gc);
 release_region:
 	pci_release_regions(pdev);
 disable_dev:
@@ -750,7 +700,6 @@ disable_dev:
 			return err;
 
 		dev->pdev = pci_dev_get(pdev);
-		dev->type = GDMA_EQE_HWC_RESET_REQUEST;
 
 		spin_lock_irqsave(&mana_dev_recovery_work.lock, flags);
 		list_add_tail(&dev->list, &mana_dev_recovery_work.dev_list);
@@ -774,11 +723,16 @@ static void mana_gd_remove(struct pci_dev *pdev)
 
 	mana_gd_cleanup(gc);
 
+	if (gc->hwc.driver_data && READ_ONCE(mana_rescan_task) == current) {
+		dev_err(gc->dev, "HWC teardown failed, skipping PCI rescan\n");
+		WRITE_ONCE(mana_rescan_task, NULL);
+	}
+
 	xa_destroy(&gc->irq_contexts);
 
 	pci_iounmap(pdev, gc->bar0_va);
 
-	vfree(gc);
+	mana_gd_free_context(gc);
 
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
@@ -806,7 +760,7 @@ static int mana_gd_resume(struct pci_dev *pdev)
 
 	err = mana_gd_setup(gc);
 	if (err)
-		return err;
+		goto check_hwc;
 
 	err = mana_probe(&gc->mana, true);
 	if (err)
@@ -820,6 +774,10 @@ static int mana_gd_resume(struct pci_dev *pdev)
 
 cleanup_gd:
 	mana_gd_cleanup(gc);
+check_hwc:
+	/* Keep the binding and DMA handles for a later DESTROY retry. */
+	if (gc->hwc.driver_data)
+		return -ENOTRECOVERABLE;
 	return err;
 }
 

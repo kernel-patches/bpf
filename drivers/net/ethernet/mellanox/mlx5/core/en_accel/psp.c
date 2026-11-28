@@ -995,7 +995,7 @@ static void
 mlx5e_psp_get_stats(struct psp_dev *psd, struct psp_dev_stats *stats)
 {
 	struct mlx5e_priv *priv = netdev_priv(psd->main_netdev);
-	struct mlx5e_psp_stats nstats;
+	struct mlx5e_psp_stats nstats = {};
 
 	mlx5e_accel_psp_fs_get_stats_fill(priv, &nstats);
 	stats->rx_packets = nstats.psp_rx_pkts;

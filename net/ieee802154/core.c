@@ -255,6 +255,8 @@ errout:
 	list_for_each_entry_continue_reverse(wpan_dev,
 					     &rdev->wpan_dev_list,
 					     list) {
+		int err;
+
 		if (!wpan_dev->netdev)
 			continue;
 		wpan_dev->netdev->netns_immutable = false;
@@ -271,6 +273,10 @@ void cfg802154_dev_free(struct cfg802154_registered_device *rdev)
 {
 	kfree(rdev);
 }
+
+static const struct device_type wpan_dev_type = {
+	.name	= "wpan",
+};
 
 static void
 cfg802154_update_iface_num(struct cfg802154_registered_device *rdev,
@@ -296,7 +302,9 @@ static int cfg802154_netdev_notifier_call(struct notifier_block *nb,
 	/* TODO WARN_ON unspec type */
 
 	switch (state) {
-		/* TODO NETDEV_DEVTYPE */
+	case NETDEV_POST_INIT:
+		SET_NETDEV_DEVTYPE(dev, &wpan_dev_type);
+		break;
 	case NETDEV_REGISTER:
 		dev->netns_immutable = true;
 		wpan_dev->identifier = ++rdev->wpan_dev_id;

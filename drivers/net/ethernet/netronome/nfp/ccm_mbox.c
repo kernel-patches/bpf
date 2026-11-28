@@ -420,10 +420,11 @@ static void nfp_ccm_mbox_run_queue_unlock(struct nfp_net *nn)
 static int nfp_ccm_mbox_skb_return(struct sk_buff *skb)
 {
 	struct nfp_ccm_mbox_cmsg_cb *cb = (void *)skb->cb;
+	int err = cb->err;
 
-	if (cb->err)
+	if (err)
 		dev_kfree_skb_any(skb);
-	return cb->err;
+	return err;
 }
 
 /* If wait timed out but the command is already in progress we have

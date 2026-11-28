@@ -20,8 +20,14 @@
 #define VMXNET3_XDP_RX_OFFSET	VMXNET3_XDP_HEADROOM
 #define VMXNET3_XDP_MAX_FRSIZE	(PAGE_SIZE - VMXNET3_XDP_HEADROOM - \
 				 VMXNET3_XDP_RX_TAILROOM)
-#define VMXNET3_XDP_MAX_MTU	(VMXNET3_XDP_MAX_FRSIZE - ETH_HLEN - \
-				 2 * VLAN_HLEN - ETH_FCS_LEN)
+/* A frame must also fit the rx head buffer, at most
+ * VMXNET3_MAX_SKB_BUF_SIZE bytes (see vmxnet3_adjust_rx_ring_size()).
+ */
+#define VMXNET3_XDP_MAX_MTU	min_t(unsigned int, \
+				      VMXNET3_XDP_MAX_FRSIZE - ETH_HLEN - \
+				      2 * VLAN_HLEN - ETH_FCS_LEN, \
+				      VMXNET3_MAX_SKB_BUF_SIZE - \
+				      VMXNET3_MAX_ETH_HDR_SIZE)
 
 int vmxnet3_xdp(struct net_device *netdev, struct netdev_bpf *bpf);
 int vmxnet3_xdp_xmit(struct net_device *dev, int n, struct xdp_frame **frames,

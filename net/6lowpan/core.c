@@ -113,7 +113,7 @@ static int lowpan_event(struct notifier_block *unused,
 	struct in6_addr addr;
 	int i;
 
-	if (dev->type != ARPHRD_6LOWPAN)
+	if (!lowpan_is_dev(dev))
 		return NOTIFY_DONE;
 
 	idev = __in6_dev_get(dev);

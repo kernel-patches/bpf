@@ -926,9 +926,17 @@ int t7xx_cldma_send_skb(struct cldma_ctrl *md_ctrl, int qno, struct sk_buff *skb
 	if (qno >= CLDMA_TXQ_NUM)
 		return -EINVAL;
 
-	ret = pm_runtime_resume_and_get(md_ctrl->dev);
-	if (ret < 0 && ret != -EACCES)
+	pm_runtime_get_noresume(md_ctrl->dev);
+	ret = pm_runtime_resume(md_ctrl->dev);
+	if (ret < 0 && ret != -EACCES) {
+		pm_runtime_put_noidle(md_ctrl->dev);
 		return ret;
+	}
+
+	/* ret holds the resume status (1 for an active device, -EACCES with
+	 * runtime PM disabled), not the result of the send below.
+	 */
+	ret = 0;
 
 	t7xx_pci_disable_sleep(md_ctrl->t7xx_dev);
 	queue = &md_ctrl->txq[qno];

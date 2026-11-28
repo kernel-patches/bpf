@@ -88,24 +88,12 @@ TRACE_EVENT(virtio_transport_alloc_pkt,
 
 TRACE_EVENT(virtio_transport_recv_pkt,
 	TP_PROTO(
-		 __u32 src_cid, __u32 src_port,
-		 __u32 dst_cid, __u32 dst_port,
-		 __u32 len,
-		 __u16 type,
-		 __u16 op,
-		 __u32 flags,
-		 __u32 buf_alloc,
-		 __u32 fwd_cnt
+		 const struct virtio_vsock_hdr *hdr,
+		 const struct sockaddr_vm *src,
+		 const struct sockaddr_vm *dst
 	),
 	TP_ARGS(
-		src_cid, src_port,
-		dst_cid, dst_port,
-		len,
-		type,
-		op,
-		flags,
-		buf_alloc,
-		fwd_cnt
+		hdr, src, dst
 	),
 	TP_STRUCT__entry(
 		__field(__u32, src_cid)
@@ -120,16 +108,16 @@ TRACE_EVENT(virtio_transport_recv_pkt,
 		__field(__u32, fwd_cnt)
 	),
 	TP_fast_assign(
-		__entry->src_cid = src_cid;
-		__entry->src_port = src_port;
-		__entry->dst_cid = dst_cid;
-		__entry->dst_port = dst_port;
-		__entry->len = len;
-		__entry->type = type;
-		__entry->op = op;
-		__entry->flags = flags;
-		__entry->buf_alloc = buf_alloc;
-		__entry->fwd_cnt = fwd_cnt;
+		__entry->src_cid = src->svm_cid;
+		__entry->src_port = src->svm_port;
+		__entry->dst_cid = dst->svm_cid;
+		__entry->dst_port = dst->svm_port;
+		__entry->len = le32_to_cpu(hdr->len);
+		__entry->type = le16_to_cpu(hdr->type);
+		__entry->op = le16_to_cpu(hdr->op);
+		__entry->flags = le32_to_cpu(hdr->flags);
+		__entry->buf_alloc = le32_to_cpu(hdr->buf_alloc);
+		__entry->fwd_cnt = le32_to_cpu(hdr->fwd_cnt);
 	),
 	TP_printk("%u:%u -> %u:%u len=%u type=%s op=%s flags=%#x "
 		  "buf_alloc=%u fwd_cnt=%u",

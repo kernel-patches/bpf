@@ -41,7 +41,6 @@ struct pppox_sock {
 	/* struct sock must be the first member of pppox_sock */
 	struct sock sk;
 	struct ppp_channel chan;
-	struct pppox_sock __rcu	*next;	  /* for hash table */
 	union {
 		struct pppoe_opt pppoe;
 		struct pptp_opt  pptp;
@@ -64,6 +63,10 @@ struct pppox_proto {
 	int		(*ioctl)(struct socket *sock, unsigned int cmd,
 				 unsigned long arg);
 	struct module	*owner;
+	/* The receive path may queue packets to sk_receive_queue without
+	 * holding the socket lock.
+	 */
+	bool		lockless_rcv;
 };
 
 extern int register_pppox_proto(int proto_num, const struct pppox_proto *pp);

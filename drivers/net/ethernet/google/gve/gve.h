@@ -327,6 +327,7 @@ struct gve_rx_ring {
 	u64 rx_frag_flip_cnt; /* free-running count of rx segments where page_flip was used */
 	u64 rx_frag_copy_cnt; /* free-running count of rx segments copied */
 	u64 rx_frag_alloc_cnt; /* free-running count of rx page allocations */
+	u64 rx_critical_low_bufs; /* count of critical low buffer events */
 	u64 xdp_tx_errors;
 	u64 xdp_redirect_errors;
 	u64 xdp_alloc_fails;

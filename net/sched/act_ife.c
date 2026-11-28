@@ -275,6 +275,10 @@ static int load_metaops_and_vet(u32 metaid, void *val, int len, bool rtnl_held)
 		if (rtnl_held)
 			rtnl_lock();
 		ops = find_ife_oplist(metaid);
+		if (ops && rtnl_held) {
+			module_put(ops->owner);
+			return -EAGAIN;
+		}
 #endif
 	}
 
@@ -549,8 +553,8 @@ static int tcf_ife_init(struct net *net, struct nlattr *nla,
 	}
 
 	if (!exists) {
-		ret = tcf_idr_create(tn, index, est, a, &act_ife_ops,
-				     bind, true, flags);
+		ret = tcf_idr_create(tn, index, est, a,
+				     &act_ife_ops, bind, flags);
 		if (ret) {
 			tcf_idr_cleanup(tn, index);
 			kfree(p);
@@ -718,7 +722,7 @@ static int tcf_ife_decode(struct sk_buff *skb, const struct tc_action *a,
 
 	p = rcu_dereference_bh(ife->params);
 
-	bstats_update(this_cpu_ptr(ife->common.cpu_bstats), skb);
+	tcf_action_update_bstats(&ife->common, skb);
 	tcf_lastuse_update(&ife->tcf_tm);
 
 	if (skb_at_tc_ingress(skb))
@@ -726,7 +730,7 @@ static int tcf_ife_decode(struct sk_buff *skb, const struct tc_action *a,
 
 	tlv_data = ife_decode(skb, &metalen);
 	if (unlikely(!tlv_data)) {
-		qstats_cpu_drop_inc(ife->common.cpu_qstats);
+		tcf_action_inc_drop_qstats(&ife->common);
 		return TC_ACT_SHOT;
 	}
 
@@ -740,7 +744,7 @@ static int tcf_ife_decode(struct sk_buff *skb, const struct tc_action *a,
 		curr_data = ife_tlv_meta_decode(tlv_data, ifehdr_end, &mtype,
 						&dlen, NULL);
 		if (!curr_data) {
-			qstats_cpu_drop_inc(ife->common.cpu_qstats);
+			tcf_action_inc_drop_qstats(&ife->common);
 			return TC_ACT_SHOT;
 		}
 
@@ -749,7 +753,7 @@ static int tcf_ife_decode(struct sk_buff *skb, const struct tc_action *a,
 			/* abuse overlimits to count metadata we cannot
 			 * decode: no ops for it, or the decoder rejected it
 			 */
-			qstats_cpu_overlimit_inc(ife->common.cpu_qstats);
+			tcf_action_inc_overlimit_qstats(&ife->common);
 
 			if (ret == -ENOENT)
 				pr_info_ratelimited("Unknown metaid %d dlen %d\n",
@@ -761,7 +765,7 @@ static int tcf_ife_decode(struct sk_buff *skb, const struct tc_action *a,
 	}
 
 	if (WARN_ON(tlv_data != ifehdr_end)) {
-		qstats_cpu_drop_inc(ife->common.cpu_qstats);
+		tcf_action_inc_drop_qstats(&ife->common);
 		return TC_ACT_SHOT;
 	}
 
@@ -817,21 +821,21 @@ static int tcf_ife_encode(struct sk_buff *skb, const struct tc_action *a,
 			exceed_mtu = true;
 	}
 
-	bstats_update(this_cpu_ptr(ife->common.cpu_bstats), skb);
+	tcf_action_update_bstats(&ife->common, skb);
 	tcf_lastuse_update(&ife->tcf_tm);
 
 	if (!metalen) {		/* no metadata to send */
 		/* abuse overlimits to count when we allow packet
 		 * with no metadata
 		 */
-		qstats_cpu_overlimit_inc(ife->common.cpu_qstats);
+		tcf_action_inc_overlimit_qstats(&ife->common);
 		return action;
 	}
 	/* could be stupid policy setup or mtu config
 	 * so lets be conservative.. */
 	if ((action == TC_ACT_SHOT) || exceed_mtu) {
 drop:
-		qstats_cpu_drop_inc(ife->common.cpu_qstats);
+		tcf_action_inc_drop_qstats(&ife->common);
 		return TC_ACT_SHOT;
 	}
 
@@ -899,9 +903,9 @@ TC_INDIRECT_SCOPE int tcf_ife_act(struct sk_buff *skb,
 	int ret;
 
 	if (unlikely(!tcf_ife_is_eth_skb(skb))) {
-		bstats_update(this_cpu_ptr(ife->common.cpu_bstats), skb);
+		tcf_action_update_bstats(&ife->common, skb);
 		tcf_lastuse_update(&ife->tcf_tm);
-		qstats_cpu_drop_inc(ife->common.cpu_qstats);
+		tcf_action_inc_drop_qstats(&ife->common);
 		return TC_ACT_SHOT;
 	}
 

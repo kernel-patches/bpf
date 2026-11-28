@@ -94,7 +94,8 @@ static int mana_ib_gd_destroy_mr(struct mana_ib_dev *dev, u64 mr_handle)
 
 	req.mr_handle = mr_handle;
 
-	return mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+	return mana_gd_send_teardown_request(gc, sizeof(req), &req,
+					     sizeof(resp), &resp);
 }
 
 struct ib_mr *mana_ib_reg_user_mr(struct ib_pd *ibpd, u64 start, u64 length,
@@ -428,7 +429,8 @@ static int mana_ib_gd_destroy_dm(struct mana_ib_dev *mdev, struct mana_ib_dm *dm
 	mana_gd_init_req_hdr(&req.hdr, GDMA_DESTROY_DM, sizeof(req), sizeof(resp));
 	req.dm_handle = dm->dm_handle;
 
-	return mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+	return mana_gd_send_teardown_request(gc, sizeof(req), &req,
+					     sizeof(resp), &resp);
 }
 
 int mana_ib_dealloc_dm(struct ib_dm *ibdm, struct uverbs_attr_bundle *attrs)

@@ -169,11 +169,6 @@ static int ipc_protocol_tq_wakeup_dev_slp(struct iosm_imem *ipc_imem, int arg,
 	return 0;
 }
 
-void ipc_protocol_s2idle_sleep(struct iosm_protocol *ipc_protocol, bool sleep)
-{
-	ipc_pm_set_s2idle_sleep(&ipc_protocol->pm, sleep);
-}
-
 bool ipc_protocol_suspend(struct iosm_protocol *ipc_protocol)
 {
 	if (!ipc_pm_prepare_host_sleep(&ipc_protocol->pm))
@@ -185,6 +180,8 @@ bool ipc_protocol_suspend(struct iosm_protocol *ipc_protocol)
 
 	if (!ipc_pm_wait_for_device_active(&ipc_protocol->pm)) {
 		ipc_uevent_send(ipc_protocol->pcie->dev, UEVENT_MDM_TIMEOUT);
+		/* The modem wasn't told to sleep, we are still active */
+		ipc_protocol->pm.host_pm_state = IPC_MEM_HOST_PM_ACTIVE;
 		goto err;
 	}
 

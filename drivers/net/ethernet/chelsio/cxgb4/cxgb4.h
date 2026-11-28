@@ -1049,7 +1049,7 @@ struct msix_bmap {
 
 struct msix_info {
 	unsigned short vec;
-	char desc[IFNAMSIZ + 10];
+	char desc[IFNAMSIZ + 27];
 	unsigned int idx;
 	cpumask_var_t aff_mask;
 };

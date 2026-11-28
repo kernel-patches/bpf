@@ -746,7 +746,7 @@ static long rxrpc_read(const struct key *key,
 	_enter("");
 
 	/* we don't know what form we should return non-AFS keys in */
-	if (memcmp(key->description, "afs@", 4) != 0)
+	if (!str_has_prefix(key->description, "afs@"))
 		return -EOPNOTSUPP;
 	cnlen = strlen(key->description + 4);
 

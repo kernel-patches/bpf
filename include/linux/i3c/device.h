@@ -331,6 +331,9 @@ int i3c_device_do_setdasa(struct i3c_device *dev);
 
 void i3c_device_get_info(const struct i3c_device *dev, struct i3c_device_info *info);
 
+u16 i3c_device_get_max_read_xfer_bytes(const struct i3c_device *dev);
+u16 i3c_device_get_max_write_xfer_bytes(const struct i3c_device *dev);
+
 struct i3c_ibi_payload {
 	unsigned int len;
 	const void *data;

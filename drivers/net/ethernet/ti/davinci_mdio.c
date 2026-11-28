@@ -505,6 +505,7 @@ static const struct k3_mdio_soc_data am65_mdio_soc_data = {
 
 static const struct soc_device_attribute k3_mdio_socinfo[] = {
 	{ .family = "AM62X", .data = &am65_mdio_soc_data },
+	{ .family = "AM62PX", .data = &am65_mdio_soc_data },
 	{ .family = "AM64X", .data = &am65_mdio_soc_data },
 	{ .family = "AM65X", .data = &am65_mdio_soc_data },
 	{ .family = "J7200", .data = &am65_mdio_soc_data },

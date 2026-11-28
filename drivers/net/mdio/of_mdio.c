@@ -164,6 +164,10 @@ static int __of_mdiobus_parse_phys(struct mii_bus *mdio, struct device_node *np,
 			continue;
 		}
 
+		/* Common to PHYs and other MDIO devices */
+		if (of_property_read_bool(child, "broken-turn-around"))
+			mdio->phy_ignore_ta_mask |= BIT(addr);
+
 		if (of_mdiobus_child_is_phy(child))
 			rc = of_mdiobus_register_phy(mdio, child, addr);
 		else

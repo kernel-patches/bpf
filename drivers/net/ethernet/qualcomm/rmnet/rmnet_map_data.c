@@ -543,10 +543,7 @@ static void rmnet_send_skb(struct rmnet_port *port, struct sk_buff *skb)
 {
 	if (skb_needs_linearize(skb, port->dev->features)) {
 		if (unlikely(__skb_linearize(skb))) {
-			struct rmnet_priv *priv;
-
-			priv = netdev_priv(port->rmnet_dev);
-			this_cpu_inc(priv->pcpu_stats->stats.tx_drops);
+			dev_core_stats_tx_dropped_inc(port->dev);
 			dev_kfree_skb_any(skb);
 			return;
 		}
@@ -594,25 +591,26 @@ unsigned int rmnet_map_tx_aggregate(struct sk_buff *skb, struct rmnet_port *port
 	struct timespec64 diff, last;
 	unsigned int len = skb->len;
 	struct sk_buff *agg_skb;
-	int size;
+	unsigned int size;
 
 	spin_lock_bh(&port->agg_lock);
 	memcpy(&last, &port->agg_last, sizeof(struct timespec64));
 	ktime_get_real_ts64(&port->agg_last);
 
+new_packet:
 	if (!port->skbagg_head) {
 		/* Check to see if we should agg first. If the traffic is very
 		 * sparse, don't aggregate.
 		 */
-new_packet:
 		diff = timespec64_sub(port->agg_last, last);
-		size = port->egress_agg_params.bytes - skb->len;
+		size = port->egress_agg_params.bytes;
 
-		if (size < 0) {
+		if (skb->len > size) {
 			/* dropped */
 			spin_unlock_bh(&port->agg_lock);
 			return 0;
 		}
+		size -= skb->len;
 
 		if (diff.tv_sec > 0 || diff.tv_nsec > RMNET_AGG_BYPASS_TIME_NSEC ||
 		    size == 0)
@@ -630,13 +628,12 @@ new_packet:
 		goto schedule;
 	}
 	diff = timespec64_sub(port->agg_last, port->agg_time);
-	size = port->egress_agg_params.bytes - port->skbagg_head->len;
-
-	if (skb->len > size) {
+	if (port->skbagg_head->len >= port->egress_agg_params.bytes ||
+	    skb->len > port->egress_agg_params.bytes - port->skbagg_head->len) {
 		agg_skb = port->skbagg_head;
 		reset_aggr_params(port);
+		hrtimer_try_to_cancel(&port->hrtimer);
 		spin_unlock_bh(&port->agg_lock);
-		hrtimer_cancel(&port->hrtimer);
 		rmnet_send_skb(port, agg_skb);
 		spin_lock_bh(&port->agg_lock);
 		goto new_packet;
@@ -658,14 +655,14 @@ new_packet:
 	    port->skbagg_head->len == port->egress_agg_params.bytes) {
 		agg_skb = port->skbagg_head;
 		reset_aggr_params(port);
+		hrtimer_try_to_cancel(&port->hrtimer);
 		spin_unlock_bh(&port->agg_lock);
-		hrtimer_cancel(&port->hrtimer);
 		rmnet_send_skb(port, agg_skb);
 		return len;
 	}
 
 schedule:
-	if (!hrtimer_active(&port->hrtimer) && port->agg_state != -EINPROGRESS) {
+	if (port->agg_state != -EINPROGRESS) {
 		port->agg_state = -EINPROGRESS;
 		hrtimer_start(&port->hrtimer,
 			      ns_to_ktime(port->egress_agg_params.time_nsec),
@@ -689,7 +686,7 @@ void rmnet_map_update_ul_agg_config(struct rmnet_port *port, u32 size,
 	spin_lock_bh(&port->agg_lock);
 	port->egress_agg_params.bytes = size;
 	WRITE_ONCE(port->egress_agg_params.count, count);
-	port->egress_agg_params.time_nsec = time * NSEC_PER_USEC;
+	port->egress_agg_params.time_nsec = (u64)time * NSEC_PER_USEC;
 	spin_unlock_bh(&port->agg_lock);
 }
 

@@ -2529,6 +2529,7 @@ static inline void mlx5i_complete_rx_cqe(struct mlx5e_rq *rq,
 					 u32 cqe_bcnt,
 					 struct sk_buff *skb)
 {
+	struct mlx5e_channel_stats *channel_stats;
 	struct mlx5e_rq_stats *stats;
 	struct net_device *netdev;
 	struct mlx5e_priv *priv;
@@ -2552,7 +2553,8 @@ static inline void mlx5i_complete_rx_cqe(struct mlx5e_rq *rq,
 	}
 
 	priv = mlx5i_epriv(netdev);
-	stats = &priv->channel_stats[rq->ix]->rq;
+	channel_stats = mlx5e_channel_stats_get(priv, rq->ix);
+	stats = likely(channel_stats) ? &channel_stats->rq : rq->stats;
 
 	flags_rqpn = be32_to_cpu(cqe->flags_rqpn);
 	g = (flags_rqpn >> 28) & 3;

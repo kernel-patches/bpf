@@ -287,6 +287,8 @@ struct amt_source_node {
 	struct delayed_work     source_timer;
 	union amt_addr		source_addr;
 	enum amt_source_status	status;
+	/* Scratch mark for the A-B source walk, under tunnel_list->lock. */
+	bool			sub_mark;
 #define AMT_SOURCE_OLD	0
 #define AMT_SOURCE_NEW	1
 	u8			flags;
@@ -390,6 +392,23 @@ struct amt_dev {
 #define AMT_GC_KICK		2048
 #define AMT_MAX_GROUP		32
 #define AMT_MAX_SOURCE		128
+/* Upper bounds for IFLA_AMT_MAX_GROUPS and IFLA_AMT_MAX_SOURCES. Gateways
+ * drive these allocations: at the bounds one tunnel holds about 2 MiB of
+ * group nodes (each a kmalloc-4k object with AMT_HSIZE bucket heads) and
+ * under 1 MiB of source nodes, and max_tunnels multiplies that.  The work
+ * one Membership Update may cause is bounded separately, by
+ * amt_report_budget().
+ */
+#define AMT_MAX_GROUP_LIMIT	512
+#define AMT_MAX_SOURCE_LIMIT	4096
+/* Per group record, an upper bound on the passes the mode handlers plus
+ * amt_cleanup_srcs() make over a group's buckets and sources, and on the
+ * hash lookups they make per record source.  The handlers need at most 5
+ * and 7 (EXCLUDE TO_IN and EXCLUDE BLOCK); the bound is rounded up so a
+ * later pass does not silently exceed it.  See amt_rec_cost().
+ */
+#define AMT_REC_WALKS		7
+#define AMT_REC_LOOKUPS		8
 #define AMT_HSIZE_SHIFT		8
 #define AMT_HSIZE		(1 << AMT_HSIZE_SHIFT)
 

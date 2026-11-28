@@ -211,6 +211,7 @@ struct mlx5e_encap_entry {
 	struct mlx5e_mpls_info mpls_info;
 	unsigned char h_dest[ETH_ALEN];	/* destination eth addr	*/
 
+	struct mlx5e_priv *priv;
 	struct net_device *out_dev;
 	int route_dev_ifindex;
 	struct mlx5e_tc_tunnel *tunnel;

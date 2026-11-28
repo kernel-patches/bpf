@@ -843,9 +843,9 @@ static void qfq_make_eligible(struct qfq_sched *q)
  * The index of the slot in which the input aggregate agg is to be
  * inserted must not be higher than QFQ_MAX_SLOTS-2. There is a '-2'
  * and not a '-1' because the start time of the group may be moved
- * backward by one slot after the aggregate has been inserted, and
- * this would cause non-empty slots to be right-shifted by one
- * position.
+ * backward after the aggregate has been inserted, and this would cause
+ * non-empty slots to be right-shifted. Backward rotation is separately
+ * bounded so that every occupied slot stays below QFQ_MAX_SLOTS.
  *
  * QFQ+ fully satisfies this bound to the slot index if the parameters
  * of the classes are not changed dynamically, and if QFQ+ never
@@ -965,7 +965,8 @@ static struct qfq_aggregate *qfq_slot_scan(struct qfq_group *grp)
  * because we use ffs() to find the first non-empty slot.
  * This covers decreases in the group's start time, but what about
  * increases of the start time ?
- * Here too we should make sure that i is less than 32
+ * The caller keeps every occupied slot below QFQ_MAX_SLOTS after the
+ * shift, preserving the one-to-one mapping between bits and bucket lists.
  */
 static void qfq_slot_rotate(struct qfq_group *grp, u64 roundedS)
 {
@@ -1300,7 +1301,8 @@ static int qfq_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 static void qfq_schedule_agg(struct qfq_sched *q, struct qfq_aggregate *agg)
 {
 	struct qfq_group *grp = agg->grp;
-	u64 roundedS;
+	u64 roundedS, slot;
+	unsigned int max_back;
 	int s;
 
 	roundedS = qfq_round_down(agg->S, grp->slot_shift);
@@ -1317,6 +1319,17 @@ static void qfq_schedule_agg(struct qfq_sched *q, struct qfq_aggregate *agg)
 	if (grp->full_slots) {
 		if (!qfq_gt(grp->S, agg->S))
 			goto skip_update;
+
+		slot = (grp->S - roundedS) >> grp->slot_shift;
+		max_back = QFQ_MAX_SLOTS - 1 - __fls(grp->full_slots);
+		if (unlikely(slot > max_back)) {
+			u64 deltaS = grp->S - roundedS -
+				((u64)max_back << grp->slot_shift);
+
+			agg->S += deltaS;
+			agg->F += deltaS;
+			roundedS += deltaS;
+		}
 
 		/* create a slot for this agg->S */
 		qfq_slot_rotate(grp, roundedS);

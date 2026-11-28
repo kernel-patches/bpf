@@ -660,7 +660,7 @@ static int emac_probe(struct platform_device *pdev)
 	ret = emac_clks_phase2_init(pdev, adpt);
 	if (ret) {
 		dev_err(&pdev->dev, "could not initialize clocks\n");
-		goto err_undo_mdiobus;
+		goto err_undo_sgmii;
 	}
 
 	/* set hw features */
@@ -707,6 +707,10 @@ static int emac_probe(struct platform_device *pdev)
 
 err_undo_napi:
 	netif_napi_del(&adpt->rx_q.napi);
+err_undo_sgmii:
+	if (adpt->phy.digital)
+		iounmap(adpt->phy.digital);
+	iounmap(adpt->phy.base);
 err_undo_mdiobus:
 	put_device(&adpt->phydev->mdio.dev);
 	mdiobus_unregister(adpt->mii_bus);

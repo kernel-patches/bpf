@@ -475,6 +475,7 @@ static void tls_strp_load_anchor_with_queue(struct tls_strparser *strp, int len)
 
 	skb_shinfo(strp->anchor)->frag_list = first;
 
+	skb_ext_reset(strp->anchor);
 	skb_copy_header(strp->anchor, first);
 	strp->anchor->destructor = NULL;
 

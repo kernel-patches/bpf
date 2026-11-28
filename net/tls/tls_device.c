@@ -1194,14 +1194,15 @@ int tls_set_device_offload(struct sock *sk)
 	if (rc)
 		goto release_lock;
 
+	ctx->tx_conf = TLS_HW;
 	tls_device_attach(ctx, sk, netdev);
-	up_read(&device_offload_lock);
-
 	/* following this assignment tls_is_skb_tx_device_offloaded
 	 * will return true and the context might be accessed
 	 * by the netdev's xmit function.
 	 */
 	smp_store_release(&sk->sk_validate_xmit_skb, tls_validate_xmit_skb);
+	up_read(&device_offload_lock);
+
 	dev_put(netdev);
 
 	return 0;
@@ -1281,6 +1282,7 @@ int tls_set_device_offload_rx(struct sock *sk, struct tls_context *ctx)
 	if (rc)
 		goto free_sw_resources;
 
+	ctx->rx_conf = TLS_HW;
 	tls_device_attach(ctx, sk, netdev);
 	up_read(&device_offload_lock);
 
@@ -1349,13 +1351,13 @@ static int tls_device_down(struct net_device *netdev)
 	}
 	spin_unlock_irqrestore(&tls_device_lock, flags);
 
-	list_for_each_entry_safe(ctx, tmp, &list, list)	{
-		bool free_ctx;
-
+	list_for_each_entry(ctx, &list, list) {
 		/* Stop offloaded TX and switch to the fallback.
 		 * tls_is_skb_tx_device_offloaded will return false.
 		 */
-		WRITE_ONCE(ctx->sk->sk_validate_xmit_skb, tls_validate_xmit_skb_sw);
+		if (ctx->tx_conf == TLS_HW)
+			WRITE_ONCE(ctx->sk->sk_validate_xmit_skb,
+				   tls_validate_xmit_skb_sw);
 
 		/* Stop the RX and TX resync.
 		 * tls_dev_resync must not be called after tls_dev_del.
@@ -1364,12 +1366,17 @@ static int tls_device_down(struct net_device *netdev)
 
 		/* Start skipping the RX resync logic completely. */
 		set_bit(TLS_RX_DEV_DEGRADED, &ctx->flags);
+	}
 
-		/* Sync with inflight packets. After this point:
-		 * TX: no non-encrypted packets will be passed to the driver.
-		 * RX: resync requests from the driver will be ignored.
-		 */
+	/* Sync with inflight packets, once for all contexts. After this point:
+	 * TX: no non-encrypted packets will be passed to the driver.
+	 * RX: resync requests from the driver will be ignored.
+	 */
+	if (!list_empty(&list))
 		synchronize_net();
+
+	list_for_each_entry_safe(ctx, tmp, &list, list)	{
+		bool free_ctx;
 
 		/* Release the offload context on the driver side. */
 		if (ctx->tx_conf == TLS_HW)

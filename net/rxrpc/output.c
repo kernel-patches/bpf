@@ -327,6 +327,10 @@ void rxrpc_send_ACK(struct rxrpc_call *call, u8 ack_reason,
 
 		if (len > probe_mtu)
 			goto skip;
+		/* The zeropage padding must fit in the kvec table. */
+		if (probe_mtu - len >
+		    (ARRAY_SIZE(call->local->kvec) - nr_kv) * PAGE_SIZE)
+			goto skip;
 		while (len < probe_mtu) {
 			size_t part = umin(probe_mtu - len, PAGE_SIZE);
 

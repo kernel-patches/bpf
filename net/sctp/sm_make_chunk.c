@@ -2317,6 +2317,12 @@ int sctp_verify_init(struct net *net, const struct sctp_endpoint *ep,
 		return sctp_process_inv_mandatory(asoc, chunk, errp);
 
 	sctp_walk_params(param, peer_init) {
+		/* Validate the length even if the second pass stops early. */
+		if (param.p->type == SCTP_PARAM_COOKIE_PRESERVATIVE &&
+			ntohs(param.p->length) != sizeof(*param.life))
+				return sctp_process_inv_paramlength(asoc, param.p,
+													chunk, errp);
+
 		if (param.p->type == SCTP_PARAM_STATE_COOKIE)
 			has_cookie = true;
 	}
@@ -2525,10 +2531,14 @@ int sctp_process_init(struct sctp_association *asoc, struct sctp_chunk *chunk,
 	return 1;
 
 clean_up:
-	/* Release the transport structures. */
+	/*
+	 * Release non-ACTIVE transports except the one for peer_addr.
+	 * Keep it so sctp_assoc_rm_peer() always has a replacement path.
+	 */
 	list_for_each_safe(pos, temp, &asoc->peer.transport_addr_list) {
 		transport = list_entry(pos, struct sctp_transport, transports);
-		if (transport->state != SCTP_ACTIVE)
+		if (transport->state != SCTP_ACTIVE &&
+		    !sctp_cmp_addr_exact(&transport->ipaddr, peer_addr))
 			sctp_assoc_rm_peer(asoc, transport);
 	}
 

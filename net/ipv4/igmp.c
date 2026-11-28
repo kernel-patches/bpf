@@ -1517,6 +1517,12 @@ int inet_fill_ifmcaddr(struct sk_buff *skb, struct net_device *dev,
 	ifm->ifa_scope = RT_SCOPE_UNIVERSE;
 	ifm->ifa_index = dev->ifindex;
 
+	if (args->netnsid >= 0 &&
+	    nla_put_s32(skb, IFA_TARGET_NETNSID, args->netnsid)) {
+		nlmsg_cancel(skb, nlh);
+		return -EMSGSIZE;
+	}
+
 	ci.cstamp = (READ_ONCE(im->mca_cstamp) - INITIAL_JIFFIES) * 100UL / HZ;
 	ci.tstamp = ci.cstamp;
 	ci.ifa_prefered = INFINITY_LIFE_TIME;
@@ -1538,6 +1544,7 @@ static void inet_ifmcaddr_notify(struct net_device *dev,
 {
 	struct inet_fill_args fillargs = {
 		.event = event,
+		.netnsid = -1,
 	};
 	struct net *net = dev_net(dev);
 	struct sk_buff *skb;
@@ -2055,7 +2062,8 @@ static int ip_mc_del1_src(struct ip_mc_list *pmc, int sfmode,
 #ifdef CONFIG_IP_MULTICAST
 		if (psf->sf_oldin &&
 		    !IGMP_V1_SEEN(in_dev) && !IGMP_V2_SEEN(in_dev)) {
-			struct ip_sf_list *dpsf = kmalloc_obj(*dpsf, GFP_ATOMIC);
+			struct ip_sf_list *dpsf = kmalloc_obj(*dpsf,
+							     GFP_ATOMIC | __GFP_ACCOUNT);
 
 			if (dpsf) {
 				*dpsf = *psf;
@@ -2155,7 +2163,7 @@ static int ip_mc_add1_src(struct ip_mc_list *pmc, int sfmode,
 		psf_prev = psf;
 	}
 	if (!psf) {
-		psf = kzalloc_obj(*psf, GFP_ATOMIC);
+		psf = kzalloc_obj(*psf, GFP_ATOMIC | __GFP_ACCOUNT);
 		if (!psf)
 			return -ENOBUFS;
 		psf->sf_inaddr = *psfsrc;
@@ -2237,7 +2245,8 @@ static int sf_setstate(struct ip_mc_list *pmc)
 					break;
 			}
 			if (!dpsf) {
-				dpsf = kmalloc_obj(*dpsf, GFP_ATOMIC);
+				dpsf = kmalloc_obj(*dpsf,
+						   GFP_ATOMIC | __GFP_ACCOUNT);
 				if (!dpsf)
 					continue;
 				*dpsf = *psf;
@@ -2381,7 +2390,7 @@ static int __ip_mc_join_group(struct sock *sk, struct ip_mreqn *imr,
 	err = -ENOBUFS;
 	if (count >= READ_ONCE(net->ipv4.sysctl_igmp_max_memberships))
 		goto done;
-	iml = sock_kmalloc(sk, sizeof(*iml), GFP_KERNEL);
+	iml = sock_kmalloc(sk, sizeof(*iml), GFP_KERNEL_ACCOUNT);
 	if (!iml)
 		goto done;
 
@@ -2491,9 +2500,10 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 	struct ip_mc_socklist *pmc;
 	struct in_device *in_dev = NULL;
 	struct inet_sock *inet = inet_sk(sk);
-	struct ip_sf_socklist *psl;
+	struct ip_sf_socklist *newpsl = NULL, *psl;
 	struct net *net = sock_net(sk);
 	int leavegroup = 0;
+	int oldmode = -1;
 	int i, j, rv;
 
 	if (!ipv4_is_multicast(addr))
@@ -2522,6 +2532,10 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		err = -EINVAL;
 		goto done;
 	}
+	psl = rtnl_dereference(pmc->sflist);
+	if (!add && !psl)
+		goto done;	/* err = -EADDRNOTAVAIL */
+
 	/* if a source filter was set, must be the same mode as before */
 	if (pmc->sflist) {
 		if (pmc->sfmode != omode) {
@@ -2530,16 +2544,14 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		}
 	} else if (pmc->sfmode != omode) {
 		/* allow mode switches for empty-set filters */
+		oldmode = pmc->sfmode;
 		ip_mc_add_src(in_dev, &mreqs->imr_multiaddr, omode, 0, NULL, 0);
-		ip_mc_del_src(in_dev, &mreqs->imr_multiaddr, pmc->sfmode, 0,
-			NULL, 0);
+		ip_mc_del_src(in_dev, &mreqs->imr_multiaddr, oldmode, 0,
+			      NULL, 0);
 		pmc->sfmode = omode;
 	}
 
-	psl = rtnl_dereference(pmc->sflist);
 	if (!add) {
-		if (!psl)
-			goto done;	/* err = -EADDRNOTAVAIL */
 		rv = !0;
 		for (i = 0; i < psl->sl_count; i++) {
 			rv = memcmp(&psl->sl_addr[i], &mreqs->imr_sourceaddr,
@@ -2572,23 +2584,52 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		err = -ENOBUFS;
 		goto done;
 	}
+	rv = 1;	/* > 0 for insert logic below if sl_count is 0 */
+	for (i = 0; psl && i < psl->sl_count; i++) {
+		rv = memcmp(&psl->sl_addr[i], &mreqs->imr_sourceaddr,
+			    sizeof(__be32));
+		if (rv == 0)
+			break;
+	}
+	if (rv == 0)		/* address already there is an error */
+		goto done;
+
 	if (!psl || psl->sl_count == psl->sl_max) {
-		struct ip_sf_socklist *newpsl;
 		int count = IP_SFBLOCK;
 
 		if (psl)
 			count += psl->sl_max;
 		newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr, count),
-				      GFP_KERNEL);
+				      GFP_KERNEL_ACCOUNT);
 		if (!newpsl) {
 			err = -ENOBUFS;
 			goto done;
 		}
 		newpsl->sl_max = count;
-		newpsl->sl_count = count - IP_SFBLOCK;
+		newpsl->sl_count = psl ? psl->sl_count : 0;
 		if (psl) {
-			for (i = 0; i < psl->sl_count; i++)
-				newpsl->sl_addr[i] = psl->sl_addr[i];
+			for (j = 0; j < psl->sl_count; j++)
+				newpsl->sl_addr[j] = psl->sl_addr[j];
+		}
+		for (j = newpsl->sl_count - 1; j >= i; j--)
+			newpsl->sl_addr[j + 1] = newpsl->sl_addr[j];
+		newpsl->sl_addr[i] = mreqs->imr_sourceaddr;
+		newpsl->sl_count++;
+	}
+
+	/* update the interface list */
+	err = ip_mc_add_src(in_dev, &mreqs->imr_multiaddr, omode, 1,
+			    &mreqs->imr_sourceaddr, 1);
+	if (err) {
+		if (newpsl)
+			sock_kfree_s(sk, newpsl,
+				     struct_size(newpsl, sl_addr,
+						 newpsl->sl_max));
+		goto done;
+	}
+
+	if (newpsl) {
+		if (psl) {
 			/* decrease mem now to avoid the memleak warning */
 			atomic_sub(struct_size(psl, sl_addr, psl->sl_max),
 				   &sk->sk_omem_alloc);
@@ -2596,26 +2637,19 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 		rcu_assign_pointer(pmc->sflist, newpsl);
 		if (psl)
 			kfree_rcu(psl, rcu);
-		psl = newpsl;
+	} else {
+		for (j = psl->sl_count - 1; j >= i; j--)
+			psl->sl_addr[j + 1] = psl->sl_addr[j];
+		psl->sl_addr[i] = mreqs->imr_sourceaddr;
+		psl->sl_count++;
 	}
-	rv = 1;	/* > 0 for insert logic below if sl_count is 0 */
-	for (i = 0; i < psl->sl_count; i++) {
-		rv = memcmp(&psl->sl_addr[i], &mreqs->imr_sourceaddr,
-			sizeof(__be32));
-		if (rv == 0)
-			break;
-	}
-	if (rv == 0)		/* address already there is an error */
-		goto done;
-	for (j = psl->sl_count-1; j >= i; j--)
-		psl->sl_addr[j+1] = psl->sl_addr[j];
-	psl->sl_addr[i] = mreqs->imr_sourceaddr;
-	psl->sl_count++;
-	err = 0;
-	/* update the interface list */
-	ip_mc_add_src(in_dev, &mreqs->imr_multiaddr, omode, 1,
-		&mreqs->imr_sourceaddr, 1);
 done:
+	if (err && oldmode >= 0) {
+		ip_mc_add_src(in_dev, &mreqs->imr_multiaddr, oldmode, 0,
+			      NULL, 0);
+		ip_mc_del_src(in_dev, &mreqs->imr_multiaddr, omode, 0, NULL, 0);
+		pmc->sfmode = oldmode;
+	}
 	if (leavegroup)
 		err = ip_mc_leave_group(sk, &imr);
 	return err;
@@ -2669,7 +2703,7 @@ int ip_mc_msfilter(struct sock *sk, struct ip_msfilter *msf, int ifindex)
 	if (msf->imsf_numsrc) {
 		newpsl = sock_kmalloc(sk, struct_size(newpsl, sl_addr,
 						      msf->imsf_numsrc),
-				      GFP_KERNEL);
+				      GFP_KERNEL_ACCOUNT);
 		if (!newpsl) {
 			err = -ENOBUFS;
 			goto done;
@@ -2765,21 +2799,22 @@ int ip_mc_msfget(struct sock *sk, struct ip_msfilter *msf, sockopt_t *opt)
 	if (err)
 		return err;
 
-	opt->optlen = msf_size;
 	if (copy_to_iter(msf, IP_MSFILTER_SIZE(0), &opt->iter_out) !=
 	    IP_MSFILTER_SIZE(0))
 		return -EFAULT;
 	if (len && copy_to_iter(psl->sl_addr, len, &opt->iter_out) != len)
 		return -EFAULT;
+
+	opt->optlen = msf_size;
 	return 0;
 done:
 	return err;
 }
 
 int ip_mc_gsfget(struct sock *sk, struct group_filter *gsf,
-		 sockptr_t optval, size_t ss_offset)
+		 sockopt_t *opt, size_t ss_offset)
 {
-	int i, count, copycount;
+	int i, count, copycount, err;
 	struct sockaddr_in *psin;
 	__be32 addr;
 	struct ip_mc_socklist *pmc;
@@ -2807,6 +2842,18 @@ int ip_mc_gsfget(struct sock *sk, struct group_filter *gsf,
 	count = psl ? psl->sl_count : 0;
 	copycount = count < gsf->gf_numsrc ? count : gsf->gf_numsrc;
 	gsf->gf_numsrc = count;
+
+	/* The source list is sized by the gf_numsrc the caller left in optval,
+	 * not by optlen, which only has to cover the fixed part.
+	 */
+	err = sockopt_expand_out(opt, ss_offset +
+				 copycount * sizeof(struct sockaddr_storage));
+	if (err)
+		return err;
+
+	/* The caller fills the fixed part in once it knows gf_numsrc. */
+	iov_iter_advance(&opt->iter_out, ss_offset);
+
 	for (i = 0; i < copycount; i++) {
 		struct sockaddr_storage ss;
 
@@ -2814,10 +2861,8 @@ int ip_mc_gsfget(struct sock *sk, struct group_filter *gsf,
 		memset(&ss, 0, sizeof(ss));
 		psin->sin_family = AF_INET;
 		psin->sin_addr.s_addr = psl->sl_addr[i];
-		if (copy_to_sockptr_offset(optval, ss_offset,
-					   &ss, sizeof(ss)))
+		if (copy_to_iter(&ss, sizeof(ss), &opt->iter_out) != sizeof(ss))
 			return -EFAULT;
-		ss_offset += sizeof(ss);
 	}
 	return 0;
 }

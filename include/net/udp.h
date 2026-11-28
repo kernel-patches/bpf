@@ -417,6 +417,27 @@ INDIRECT_CALLABLE_DECLARE(int udp_recvmsg(struct sock *sk, struct msghdr *msg,
 					  size_t len, int flags));
 void udp_splice_eof(struct socket *sock);
 int udp_push_pending_frames(struct sock *sk);
+static inline void udp_cork_restore_connected(struct sock *sk)
+{
+	struct inet_sock *inet = inet_sk(sk);
+	struct flowi4 *fl4 = &inet->cork.fl.u.ip4;
+
+	if (sk->sk_state != TCP_ESTABLISHED)
+		return;
+
+#if IS_ENABLED(CONFIG_IPV6)
+	if (sk->sk_family == AF_INET6 &&
+	    !ipv6_addr_v4mapped(&sk->sk_v6_daddr)) {
+		sk_dst_reset(sk);
+		return;
+	}
+#endif
+	WRITE_ONCE(fl4->daddr, READ_ONCE(inet->inet_daddr));
+	WRITE_ONCE(fl4->saddr, inet->inet_saddr);
+	WRITE_ONCE(fl4->fl4_dport, inet->inet_dport);
+	WRITE_ONCE(fl4->fl4_sport, inet->inet_sport);
+}
+
 void udp_flush_pending_frames(struct sock *sk);
 int udp_cmsg_send(struct sock *sk, struct msghdr *msg, u16 *gso_size);
 void udp4_hwcsum(struct sk_buff *skb, __be32 src, __be32 dst);

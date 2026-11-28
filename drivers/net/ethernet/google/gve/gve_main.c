@@ -1804,12 +1804,6 @@ static int gve_verify_xdp_configuration(struct net_device *dev,
 		return -EOPNOTSUPP;
 	}
 
-	if (dev->features & NETIF_F_GRO_HW) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "XDP is not supported when HW-GRO is on.");
-		return -EOPNOTSUPP;
-	}
-
 	if (priv->header_split_enabled) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "XDP is not supported when header-data split is enabled.");
@@ -2218,12 +2212,6 @@ static int gve_set_features(struct net_device *netdev,
 	if ((netdev->features & NETIF_F_GRO_HW) !=
 	    (features & NETIF_F_GRO_HW)) {
 		netdev->features ^= NETIF_F_GRO_HW;
-		if (priv->xdp_prog && (netdev->features & NETIF_F_GRO_HW)) {
-			netdev_warn(netdev,
-				    "HW-GRO is not supported when XDP is on.");
-			err = -EOPNOTSUPP;
-			goto revert_features;
-		}
 		if (netif_running(netdev)) {
 			err = gve_adjust_config(priv, &tx_alloc_cfg, &rx_alloc_cfg);
 			if (err)

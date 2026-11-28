@@ -705,6 +705,13 @@ static int ice_vsi_cfg_rxq(struct ice_rx_ring *ring)
 		}
 	}
 
+	/* XDP can change the frame and make the GCS value wrong */
+	if (ice_is_feature_supported(ring->vsi->back, ICE_F_GCS) &&
+	    !ice_is_xdp_ena_vsi(ring->vsi))
+		ring->flags |= ICE_RX_FLAGS_RING_GCS;
+	else
+		ring->flags &= ~ICE_RX_FLAGS_RING_GCS;
+
 	ring->xdp.data = NULL;
 	err = ice_setup_rx_ctx(ring);
 	if (err) {

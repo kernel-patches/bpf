@@ -38,6 +38,7 @@ enum p9_proto_versions {
 /**
  * enum p9_trans_status - different states of underlying transports
  * @Connected: transport is connected and healthy
+ * @BeginDisconnect: beginning transition to @Disconnected
  * @Disconnected: transport has been disconnected
  * @Hung: transport is connected by wedged
  *
@@ -75,6 +76,7 @@ enum p9_req_status_t {
  * struct p9_req_t - request slots
  * @status: status of this request slot
  * @t_err: transport error
+ * @refcount: request refcount
  * @wq: wait_queue for the client to block on for this request
  * @tc: the request fcall structure
  * @rc: the response fcall structure
@@ -98,6 +100,8 @@ struct p9_req_t {
  * @trans_mod: module API instantiated with this client
  * @status: connection state
  * @trans: transport instance state and API
+ * @fcall_cache: per-client fcall kmem cache
+ * @trans_opts: union of struct fd, struct tcp
  * @fids: All active FID handles
  * @reqs: All active requests.
  * @name: node name used as client id
@@ -137,9 +141,9 @@ struct p9_client {
 };
 
 /**
- * struct p9_fd_opts - holds client options during parsing
+ * struct p9_client_opts - holds client options during parsing
  * @msize: maximum data size negotiated by protocol
- * @prot-Oversion: 9P protocol version to use
+ * @proto_version: 9P protocol version to use
  * @trans_mod: module API instantiated with this client
  *
  * These parsed options get transferred into client in
@@ -228,25 +232,27 @@ struct v9fs_context {
 	struct p9_session_opts	session_opts;
 };
 
-/**
- * struct p9_fid - file system entity handle
- * @clnt: back pointer to instantiating &p9_client
- * @fid: numeric identifier for this handle
- * @mode: current mode of this fid (enum?)
- * @qid: the &p9_qid server identifier this handle points to
- * @iounit: the server reported maximum transaction size for this file
- * @uid: the numeric uid of the local user who owns this handle
- * @rdir: readdir accounting structure (allocated on demand)
- * @dlist: per-dentry fid tracking
- *
- * TODO: This needs lots of explanation.
- */
 enum fid_source {
 	FID_FROM_OTHER,
 	FID_FROM_INODE,
 	FID_FROM_DENTRY,
 };
 
+/**
+ * struct p9_fid - file system entity handle
+ * @clnt: back pointer to instantiating &p9_client
+ * @fid: numeric identifier for this handle
+ * @count: reference counter
+ * @mode: current mode of this fid (enum?)
+ * @qid: the &p9_qid server identifier this handle points to
+ * @iounit: the server reported maximum transaction size for this file
+ * @uid: the numeric uid of the local user who owns this handle
+ * @rdir: readdir accounting structure (allocated on demand)
+ * @dlist: per-dentry fid tracking
+ * @ilist: inode list
+ *
+ * TODO: This needs lots of explanation.
+ */
 struct p9_fid {
 	struct p9_client *clnt;
 	u32 fid;

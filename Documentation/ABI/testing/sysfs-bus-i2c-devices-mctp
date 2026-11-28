@@ -1,0 +1,27 @@
+What:		/sys/bus/i2c/devices/<bus>-<addr>/add_mctp_controller
+What:		/sys/bus/i2c/devices/<bus>-<addr>/remove_mctp_controller
+Date:		December 2026
+KernelVersion:	7.5
+Contact:	Kenny Hsieh <kenny_hsieh@jabil.com>
+Description:
+		Write-only, on each bound mctp-i2c-controller device.
+
+		Writing an I2C bus name such as "i2c-30" to add_mctp_controller
+		creates an MCTP network device for that bus, and writing it to
+		remove_mctp_controller removes it. The bus must be the
+		controller's root bus or a mux child below it. Adding a bus
+		that already has a network device fails with EEXIST, and
+		removing one that has none fails with ENODEV.
+		Writes need CAP_NET_ADMIN, else EPERM. A name that matches no
+		I2C device fails with ENODEV, and one that is not a bus in this
+		controller's mux tree with EINVAL.
+
+		This covers busses instantiated at runtime, which have no
+		devicetree node for the "mctp-controller" property. Network
+		devices added here are removed on unbind and not restored on
+		rebind.
+
+		Example::
+
+		  # echo i2c-30 > /sys/bus/i2c/devices/9-1010/add_mctp_controller
+		  # echo i2c-30 > /sys/bus/i2c/devices/9-1010/remove_mctp_controller

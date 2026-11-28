@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+#include <linux/bitmap.h>
 #include <linux/dim.h>
 #include <linux/netdevice.h>
 
@@ -205,6 +206,9 @@ int hinic3_qps_irq_init(struct net_device *netdev)
 	u16 q_id;
 	int err;
 
+	bitmap_zero(nic_dev->rx_oom_bitmap, nic_dev->max_qps);
+	enable_delayed_work(&nic_dev->rx_oom_work);
+
 	for (q_id = 0; q_id < nic_dev->q_params.num_qps; q_id++) {
 		msix_entry = &nic_dev->qps_msix_entries[q_id];
 		irq_cfg = &nic_dev->q_params.irq_cfg[q_id];
@@ -264,6 +268,8 @@ err_release_irqs:
 		disable_work_sync(&irq_cfg->rxq->dim.work);
 	}
 
+	disable_delayed_work_sync(&nic_dev->rx_oom_work);
+
 	return err;
 }
 
@@ -272,6 +278,8 @@ void hinic3_qps_irq_uninit(struct net_device *netdev)
 	struct hinic3_nic_dev *nic_dev = netdev_priv(netdev);
 	struct hinic3_irq_cfg *irq_cfg;
 	u16 q_id;
+
+	cancel_delayed_work_sync(&nic_dev->rx_oom_work);
 
 	for (q_id = 0; q_id < nic_dev->q_params.num_qps; q_id++) {
 		irq_cfg = &nic_dev->q_params.irq_cfg[q_id];
@@ -288,4 +296,6 @@ void hinic3_qps_irq_uninit(struct net_device *netdev)
 		hinic3_release_irq(irq_cfg);
 		disable_work_sync(&irq_cfg->rxq->dim.work);
 	}
+
+	disable_delayed_work_sync(&nic_dev->rx_oom_work);
 }

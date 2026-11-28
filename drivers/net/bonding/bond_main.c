@@ -1732,11 +1732,10 @@ static void bond_upper_dev_unlink(struct bonding *bond, struct slave *slave)
 static void slave_kobj_release(struct kobject *kobj)
 {
 	struct slave *slave = to_slave(kobj);
-	struct bonding *bond = bond_get_bond_by_slave(slave);
 
 	cancel_delayed_work_sync(&slave->notify_work);
-	if (BOND_MODE(bond) == BOND_MODE_8023AD)
-		kfree(SLAVE_AD_INFO(slave));
+	/* ad_info is only allocated in 802.3ad mode, NULL otherwise */
+	kfree(SLAVE_AD_INFO(slave));
 
 	kfree(slave);
 }
@@ -1831,6 +1830,10 @@ void bond_lower_state_changed(struct slave *slave)
 	info.link_up = slave->link == BOND_LINK_UP ||
 		       slave->link == BOND_LINK_FAIL;
 	info.tx_enabled = bond_is_active_slave(slave);
+	if (BOND_MODE(slave->bond) == BOND_MODE_8023AD)
+		info.rx_enabled = !bond_is_slave_rx_disabled(slave);
+	else
+		info.rx_enabled = info.tx_enabled;
 	netdev_lower_state_changed(slave->dev, &info);
 }
 
@@ -1890,6 +1893,7 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 {
 	struct bonding *bond = netdev_priv(bond_dev);
 	const struct net_device_ops *slave_ops = slave_dev->netdev_ops;
+	int orig_fail_over_mac = bond->params.fail_over_mac;
 	struct slave *new_slave = NULL, *prev_slave;
 	struct sockaddr_storage ss;
 	int res = 0, i;
@@ -1951,6 +1955,13 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 		return -EPERM;
 	}
 
+	if (slave_dev->type != ARPHRD_ETHER &&
+	    BOND_MODE(bond) == BOND_MODE_8023AD) {
+		SLAVE_NL_ERR(bond_dev, slave_dev, extack,
+			     "8023AD mode requires Ethernet devices");
+		return -EINVAL;
+	}
+
 	/* set bonding device ether type by slave - bonding netdevices are
 	 * created with ether_setup, so when the slave type is not ARPHRD_ETHER
 	 * there is a need to override some of the type dependent attribs/funcs.
@@ -1960,12 +1971,6 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	 */
 	if (!bond_has_slaves(bond)) {
 		if (bond_dev->type != slave_dev->type) {
-			if (slave_dev->type != ARPHRD_ETHER &&
-			    BOND_MODE(bond) == BOND_MODE_8023AD) {
-				SLAVE_NL_ERR(bond_dev, slave_dev, extack,
-					     "8023AD mode requires Ethernet devices");
-				return -EINVAL;
-			}
 			slave_dbg(bond_dev, slave_dev, "change device type from %d to %d\n",
 				  bond_dev->type, slave_dev->type);
 
@@ -2125,13 +2130,6 @@ skip_mac_set:
 	if (res && bond_needs_speed_duplex(bond))
 		new_slave->link = BOND_LINK_DOWN;
 
-	new_slave->last_rx = jiffies -
-		(msecs_to_jiffies(bond->params.arp_interval) + 1);
-	for (i = 0; i < BOND_MAX_ARP_TARGETS; i++)
-		new_slave->target_last_arp_rx[i] = new_slave->last_rx;
-
-	new_slave->last_tx = new_slave->last_rx;
-
 	/* check for initial state */
 	new_slave->link = BOND_LINK_NOCHANGE;
 	if (bond->params.miimon) {
@@ -2160,8 +2158,27 @@ skip_mac_set:
 					  BOND_SLAVE_NOTIFY_NOW);
 	}
 
-	if (new_slave->link != BOND_LINK_DOWN)
+	/* The ARP monitor's up test includes arp_interval/2 of slack, see
+	 * bond_time_in_interval(). Seed a slave that starts DOWN outside
+	 * that window, so it stays DOWN until it receives traffic.
+	 */
+	if (new_slave->link == BOND_LINK_DOWN) {
+		new_slave->last_rx = jiffies -
+			(2 * msecs_to_jiffies(bond->params.arp_interval) + 1);
+	} else {
+		/* Give a slave that starts UP a full arp_missed_max window.
+		 * Not seeding it later than last_link_up keeps bond_arp_rcv()
+		 * from trusting ARPs on backup slaves before the active one
+		 * got a reply.
+		 */
 		new_slave->last_link_up = jiffies;
+		new_slave->last_rx = new_slave->last_link_up;
+	}
+	for (i = 0; i < BOND_MAX_ARP_TARGETS; i++)
+		new_slave->target_last_arp_rx[i] = new_slave->last_rx;
+
+	new_slave->last_tx = new_slave->last_rx;
+
 	slave_dbg(bond_dev, slave_dev, "Initial state of slave is BOND_LINK_%s\n",
 		  new_slave->link == BOND_LINK_DOWN ? "DOWN" :
 		  (new_slave->link == BOND_LINK_UP ? "UP" : "BACK"));
@@ -2318,7 +2335,7 @@ skip_mac_set:
 			.extack  = extack,
 		};
 
-		if (dev_xdp_prog_count(slave_dev) > 0) {
+		if (dev_xdp_has_own_prog(slave_dev)) {
 			SLAVE_NL_ERR(bond_dev, slave_dev, extack,
 				     "Slave has XDP program loaded, please unload before enslaving");
 			res = -EOPNOTSUPP;
@@ -2403,6 +2420,7 @@ err_free:
 	kobject_put(&new_slave->kobj);
 
 err_undo_flags:
+	bond->params.fail_over_mac = orig_fail_over_mac;
 	/* Enslave of first slave has failed and we need to fix master's mac */
 	if (!bond_has_slaves(bond)) {
 		if (ether_addr_equal_64bits(bond_dev->dev_addr,
@@ -3980,6 +3998,10 @@ static int bond_slave_netdev_event(unsigned long event,
 	slave_dbg(bond_dev, slave_dev, "%s called\n", __func__);
 
 	switch (event) {
+	case NETDEV_PRE_TYPE_CHANGE:
+		if (BOND_MODE(bond) == BOND_MODE_8023AD)
+			return NOTIFY_BAD;
+		break;
 	case NETDEV_UNREGISTER:
 		if (bond_dev->type != ARPHRD_ETHER)
 			bond_release_and_destroy(bond_dev, slave_dev);
@@ -5664,12 +5686,25 @@ static int bond_xdp_xmit(struct net_device *bond_dev,
 		struct xdp_frame *frame = frames[nxmit];
 		struct xdp_frame *frames1[] = {frame};
 		struct net_device *slave_dev;
+		xdp_features_t feats;
 		struct xdp_buff xdp;
 
 		xdp_convert_frame_to_buff(frame, &xdp);
 
 		slave_dev = bond_xdp_get_xmit_slave(bond_dev, &xdp);
 		if (!slave_dev) {
+			err = -ENXIO;
+			break;
+		}
+
+		/* The slave can be selected before bond_xdp_set_features()
+		 * republishes the bond's xdp_features, so apply the
+		 * __xdp_enqueue() contract to the slave itself.
+		 */
+		feats = READ_ONCE(slave_dev->xdp_features);
+		if (unlikely(!(feats & NETDEV_XDP_ACT_NDO_XMIT) ||
+			     (!(feats & NETDEV_XDP_ACT_NDO_XMIT_SG) &&
+			      xdp_frame_has_frags(frame)))) {
 			err = -ENXIO;
 			break;
 		}
@@ -5727,7 +5762,7 @@ static int bond_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 			goto err;
 		}
 
-		if (dev_xdp_prog_count(slave_dev) > 0) {
+		if (dev_xdp_has_own_prog(slave_dev)) {
 			SLAVE_NL_ERR(dev, slave_dev, extack,
 				     "Slave has XDP program loaded, please unload before enslaving");
 			err = -EOPNOTSUPP;

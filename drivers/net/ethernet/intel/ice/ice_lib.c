@@ -1532,9 +1532,6 @@ static int ice_vsi_alloc_rings(struct ice_vsi *vsi)
 		ring->count = vsi->num_rx_desc;
 		ring->cached_phctime = pf->ptp.cached_phc_time;
 
-		if (ice_is_feature_supported(pf, ICE_F_GCS))
-			ring->flags |= ICE_RX_FLAGS_RING_GCS;
-
 		WRITE_ONCE(vsi->rx_rings[i], ring);
 	}
 
@@ -2849,9 +2846,8 @@ void ice_dis_vsi(struct ice_vsi *vsi, bool locked)
 		if (netif_running(vsi->netdev)) {
 			if (!locked)
 				rtnl_lock();
-			already_down = test_bit(ICE_VSI_DOWN, vsi->state);
-			if (!already_down)
-				ice_vsi_close(vsi);
+			/* ice_ena_vsi() reopens the VSI, release it even if down */
+			ice_vsi_close(vsi);
 
 			if (!locked)
 				rtnl_unlock();

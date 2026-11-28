@@ -32,6 +32,14 @@ struct ksz_deferred_xmit_work {
 struct ksz_tagger_data {
 	void (*xmit_work_fn)(struct kthread_work *work);
 	void (*hwtstamp_set_state)(struct dsa_switch *ds, bool on);
+	/* Bit N is set if the switch traps frames to 01:80:C2:00:00:0N
+	 * (N = 0x0 to 0xf), that is, sends them to the CPU only. The tagger
+	 * does not mark these frames as forwarded, so the bridge, not the
+	 * switch, decides whether to forward them. Only the switch driver
+	 * writes this bitmap, from .connect_tag_protocol, before the tagger
+	 * receives any frame.
+	 */
+	u16 link_local_to_cpu;
 };
 
 struct ksz_skb_cb {

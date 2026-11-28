@@ -1888,7 +1888,8 @@ static int ovpn_parse_remote(struct ovpn_ctx *ovpn, const char *host,
 
 	ret = 0;
 out:
-	freeaddrinfo(result);
+	if (result)
+		freeaddrinfo(result);
 	return ret;
 }
 

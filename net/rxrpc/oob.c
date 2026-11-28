@@ -215,6 +215,7 @@ static int rxrpc_respond_to_oob(struct rxrpc_sock *rx,
 
 	switch (skb->mark) {
 	case RXRPC_OOB_CHALLENGE:
+		atomic_dec(&sp->chall.conn->n_oobq);
 		rxrpc_put_connection(sp->chall.conn, rxrpc_conn_put_oob);
 		break;
 	}
@@ -329,6 +330,7 @@ void rxrpc_kernel_free_oob(struct sk_buff *oob)
 
 	switch (oob->mark) {
 	case RXRPC_OOB_CHALLENGE:
+		atomic_dec(&sp->chall.conn->n_oobq);
 		rxrpc_put_connection(sp->chall.conn, rxrpc_conn_put_oob);
 		break;
 	}

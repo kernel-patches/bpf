@@ -1056,3 +1056,51 @@ void sctp_auth_free(struct sctp_endpoint *ep)
 	ep->auth_hmacs_list = NULL;
 	ep->auth_chunk_list = NULL;
 }
+
+int sctp_auth_ep_copy(struct sctp_endpoint *dst,
+		      const struct sctp_endpoint *src, gfp_t gfp)
+{
+	struct sctp_shared_key *sh_key, *new_key;
+
+	sctp_auth_free(dst);
+	sctp_auth_destroy_keys(&dst->endpoint_shared_keys);
+
+	dst->auth_enable = src->auth_enable;
+	dst->active_key_id = src->active_key_id;
+
+	if (src->auth_hmacs_list) {
+		dst->auth_hmacs_list = kzalloc_flex(*dst->auth_hmacs_list,
+						    hmac_ids,
+						    SCTP_AUTH_NUM_HMACS, gfp);
+		if (!dst->auth_hmacs_list)
+			goto nomem;
+		memcpy(dst->auth_hmacs_list, src->auth_hmacs_list,
+		       ntohs(src->auth_hmacs_list->param_hdr.length));
+	}
+
+	if (src->auth_chunk_list) {
+		dst->auth_chunk_list = kzalloc(sizeof(*dst->auth_chunk_list) +
+					       SCTP_NUM_CHUNK_TYPES, gfp);
+		if (!dst->auth_chunk_list)
+			goto nomem;
+		memcpy(dst->auth_chunk_list, src->auth_chunk_list,
+		       ntohs(src->auth_chunk_list->param_hdr.length));
+	}
+
+	key_for_each(sh_key, &src->endpoint_shared_keys) {
+		new_key = sctp_auth_shkey_create(sh_key->key_id, gfp);
+		if (!new_key)
+			goto nomem;
+		new_key->key = sh_key->key;
+		sctp_auth_key_hold(new_key->key);
+		new_key->deactivated = sh_key->deactivated;
+		list_add_tail(&new_key->key_list, &dst->endpoint_shared_keys);
+	}
+
+	return 0;
+
+nomem:
+	sctp_auth_free(dst);
+	sctp_auth_destroy_keys(&dst->endpoint_shared_keys);
+	return -ENOMEM;
+}

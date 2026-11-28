@@ -27,6 +27,11 @@
 #include <asm/errno.h>
 #endif
 
+/* Consumed entries are freed in batches of this size, unless the ring is
+ * smaller than two batches
+ */
+#define PTR_RING_BATCH	(SMP_CACHE_BYTES * 2 / (int)sizeof(void *))
+
 struct ptr_ring {
 	int producer ____cacheline_aligned_in_smp;
 	spinlock_t producer_lock;
@@ -506,7 +511,7 @@ static inline void **__ptr_ring_init_queue_alloc_noprof(unsigned int size, gfp_t
 static inline void __ptr_ring_set_size(struct ptr_ring *r, int size)
 {
 	r->size = size;
-	r->batch = SMP_CACHE_BYTES * 2 / sizeof(*(r->queue));
+	r->batch = PTR_RING_BATCH;
 	/* We need to set batch at least to 1 to make logic
 	 * in __ptr_ring_discard_one work correctly.
 	 * Batching too much (because ring is small) would cause a lot of

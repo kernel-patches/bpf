@@ -17,3 +17,12 @@ Description:
 		subclass	USB interface subclass, default is 06 (hex)
 		protocol	USB interface protocol, default is 00 (hex)
 		=========	=============================================
+
+		host_addr and dev_addr accept a MAC address as six byte
+		pairs separated by ':' or '.', in any mixture
+		(aa:bb:cc:dd:ee:ff, aa.bb.cc.dd.ee.ff), or as twelve
+		hexadecimal digits with no separator (aabbccddeeff) at the
+		beginning of the input.  Trailing characters are ignored.
+		The address must be unicast and not all-zero.  Anything
+		else is rejected: the write fails with EINVAL and the
+		attribute keeps its previous value.

@@ -416,6 +416,7 @@ static void ipip_tunnel_setup(struct net_device *dev)
 	dev->addr_len		= 4;
 	dev->lltx		= true;
 	netif_keep_dst(dev);
+	netif_set_tso_max_size(dev, GSO_MAX_SIZE);
 
 	dev->features		|= IPIP_FEATURES;
 	dev->hw_features	|= IPIP_FEATURES;

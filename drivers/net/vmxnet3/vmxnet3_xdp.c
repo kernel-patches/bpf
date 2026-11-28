@@ -33,6 +33,23 @@ vmxnet3_xdp_get_tq(struct vmxnet3_adapter *adapter)
 	return tq;
 }
 
+/* Recreate the rx queues in the mode given by adapter->xdp_bpf_prog and
+ * reactivate the quiesced device.
+ */
+static int
+vmxnet3_xdp_restart_dev(struct vmxnet3_adapter *adapter)
+{
+	int err;
+
+	vmxnet3_reset_dev(adapter);
+	vmxnet3_rq_destroy_all(adapter);
+	vmxnet3_adjust_rx_ring_size(adapter);
+	err = vmxnet3_rq_create_all(adapter);
+	if (err)
+		return err;
+	return vmxnet3_activate_dev(adapter);
+}
+
 static int
 vmxnet3_xdp_set(struct net_device *netdev, struct netdev_bpf *bpf,
 		struct netlink_ext_ack *extack)
@@ -55,46 +72,61 @@ vmxnet3_xdp_set(struct net_device *netdev, struct netdev_bpf *bpf,
 		adapter->netdev->features &= ~NETIF_F_LRO;
 	}
 
-	old_bpf_prog = rcu_dereference(adapter->xdp_bpf_prog);
+	old_bpf_prog = rtnl_dereference(adapter->xdp_bpf_prog);
 	if (!new_bpf_prog && !old_bpf_prog)
 		return 0;
 
 	running = netif_running(netdev);
 	need_update = !!old_bpf_prog != !!new_bpf_prog;
 
-	if (running && need_update)
-		vmxnet3_quiesce_dev(adapter);
-
-	vmxnet3_xdp_exchange_program(adapter, new_bpf_prog);
-	if (old_bpf_prog)
-		bpf_prog_put(old_bpf_prog);
-
-	if (!running || !need_update)
-		return 0;
-
-	if (new_bpf_prog)
-		xdp_features_set_redirect_target(netdev, false);
-	else
-		xdp_features_clear_redirect_target(netdev);
-
-	vmxnet3_reset_dev(adapter);
-	vmxnet3_rq_destroy_all(adapter);
-	vmxnet3_adjust_rx_ring_size(adapter);
-	err = vmxnet3_rq_create_all(adapter);
-	if (err) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "failed to re-create rx queues for XDP.");
-		return -EOPNOTSUPP;
+	if (!running || !need_update) {
+		vmxnet3_xdp_exchange_program(adapter, new_bpf_prog);
+		goto done;
 	}
-	err = vmxnet3_activate_dev(adapter);
+
+	vmxnet3_quiesce_dev(adapter);
+	vmxnet3_xdp_exchange_program(adapter, new_bpf_prog);
+	err = vmxnet3_xdp_restart_dev(adapter);
+	if (err && new_bpf_prog) {
+		/* Attach failed (old_bpf_prog is NULL here): the core drops
+		 * its reference to the new program and keeps nothing
+		 * attached. Bring the device back up without XDP.
+		 */
+		NL_SET_ERR_MSG_MOD(extack, "failed to restart device for XDP");
+		vmxnet3_xdp_exchange_program(adapter, NULL);
+		if (vmxnet3_xdp_restart_dev(adapter))
+			goto err_close;
+		return err;
+	}
 	if (err) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "failed to activate device for XDP.");
-		return -EOPNOTSUPP;
+		/* Detach failed. The core may ignore an error here (XDP link
+		 * release), so complete the detach on a closed device.
+		 */
+		netdev_err(netdev, "XDP removal failed to restart, closing\n");
+		goto err_close;
 	}
 	clear_bit(VMXNET3_STATE_BIT_RESETTING, &adapter->state);
 
+done:
+	if (need_update) {
+		if (new_bpf_prog)
+			xdp_features_set_redirect_target(netdev, false);
+		else
+			xdp_features_clear_redirect_target(netdev);
+	}
+	if (old_bpf_prog)
+		bpf_prog_put(old_bpf_prog);
 	return 0;
+
+err_close:
+	/* The device is left quiesced, with IRQs freed and NAPI disabled,
+	 * as vmxnet3_close() expects after a quiesce: close the interface.
+	 * vmxnet3_force_close() would quiesce it and free the IRQs again.
+	 */
+	dev_close(netdev);
+	if (new_bpf_prog)
+		return err;
+	goto done;
 }
 
 /* This is the main xdp call used by kernel to set/unset eBPF program. */

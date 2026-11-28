@@ -64,6 +64,7 @@ extern const int phy_basic_ports_array[3];
 #define PHY_RST_AFTER_CLK_EN	0x00000002
 #define PHY_POLL_CABLE_TEST	0x00000004
 #define PHY_ALWAYS_CALL_SUSPEND	0x00000008
+#define PHY_BROKEN_FORCED	0x00000010
 #define MDIO_DEVICE_IS_PHY	0x80000000
 
 /**
@@ -649,10 +650,14 @@ struct phy_oatc14_sqi_capability {
  * @mdix_ctrl: User setting of crossover
  * @pma_extable: Cached value of PMA/PMD Extended Abilities Register
  * @interrupts: Flag interrupts have been enabled
- * @irq_suspended: Flag indicating PHY is suspended and therefore interrupt
- *                 handling shall be postponed until PHY has resumed
- * @irq_rerun: Flag indicating interrupts occurred while PHY was suspended,
- *             requiring a rerun of the interrupt handler after resume
+ * @irq_suspended: Flag indicating a system sleep transition, so interrupt
+ *                 handling shall be postponed until the PHY has resumed
+ * @irq_rerun: Set by the postponed interrupt that disabled the line
+ * @irq_rerun_line: The line the postponed interrupt disabled
+ * @irq_wake_enabled: Set while @irq_rerun_line is enabled for the noirq
+ *                    phase, as it wakes the system
+ * @irq_prepared: Set for a PHY with MAC-managed PM from the prepare callback
+ *                until the suspend callback runs
  * @default_timestamp: Flag indicating whether we are using the phy
  *		       timestamp as the default one
  * @interface: enum phy_interface_t value
@@ -675,6 +680,10 @@ struct phy_oatc14_sqi_capability {
  * @n_ports: Number of ports currently attached to the PHY
  * @max_n_ports: Max number of ports this PHY can expose
  * @lock:  Mutex for serialization access to PHY
+ * @irq_pm_lock: Held by the PM callbacks, and by the requesting and freeing
+ *               of the interrupt where they test and clear @irq_rerun and
+ *               @irq_wake_enabled; taken before @lock; phy_interrupt()
+ *               never takes it
  * @state_queue: Work queue for state machine
  * @link_down_events: Number of times link was lost
  * @shared: Pointer to private data shared by phys in one package
@@ -726,8 +735,14 @@ struct phy_device {
 
 	/* Interrupts are enabled */
 	unsigned interrupts:1;
-	unsigned irq_suspended:1;
-	unsigned irq_rerun:1;
+	/* Not bitfields: phy_interrupt() and the PM callbacks write them
+	 * without phydev->lock
+	 */
+	bool irq_suspended;
+	bool irq_rerun;
+	int irq_rerun_line;
+	bool irq_wake_enabled;
+	bool irq_prepared;
 
 	unsigned default_timestamp:1;
 
@@ -805,6 +820,10 @@ struct phy_device {
 	struct delayed_work state_queue;
 
 	struct mutex lock;
+	/* Held where the PM callbacks and the requesting and freeing of the
+	 * interrupt test and clear irq_rerun and irq_wake_enabled
+	 */
+	struct mutex irq_pm_lock;
 
 	/* This may be modified under the rtnl lock */
 	bool sfp_bus_attached;

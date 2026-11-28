@@ -52,11 +52,13 @@ int zl3073x_chan_tod_write(struct zl3073x_dev *zldev, u8 ch,
 			   struct timespec64 ts);
 int zl3073x_chan_tod_adjust(struct zl3073x_dev *zldev, u8 ch,
 			    struct timespec64 delta);
+int zl3073x_chan_phase_step_ready_wait(struct zl3073x_dev *zldev);
 int zl3073x_chan_phase_step(struct zl3073x_dev *zldev, u8 ch,
 			    u16 out_mask, s32 step_cycles, bool tod_step);
 
 int zl3073x_chan_df_offset_set(struct zl3073x_dev *zldev, u8 ch, s64 offset);
 
+int zl3073x_chan_tie_ready_wait(struct zl3073x_dev *zldev);
 int zl3073x_chan_tie_write(struct zl3073x_dev *zldev, u8 ch, s64 delta_ns);
 
 /**

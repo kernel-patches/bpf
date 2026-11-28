@@ -746,10 +746,9 @@ fec_enet_txq_put_data_tso(struct fec_enet_priv_tx_q *txq, struct sk_buff *skb,
 
 	addr = dma_map_single(&fep->pdev->dev, data, size, DMA_TO_DEVICE);
 	if (dma_mapping_error(&fep->pdev->dev, addr)) {
-		dev_kfree_skb_any(skb);
 		if (net_ratelimit())
 			netdev_err(ndev, "Tx DMA memory map failed\n");
-		return NETDEV_TX_OK;
+		return -ENOMEM;
 	}
 
 	bdp->cbd_datlen = cpu_to_fec16(size);
@@ -792,8 +791,11 @@ fec_enet_txq_put_hdr_tso(struct fec_enet_priv_tx_q *txq,
 	unsigned int estatus = 0;
 
 	status = fec16_to_cpu(bdp->cbd_sc);
-	status &= ~BD_ENET_TX_STATS;
-	status |= (BD_ENET_TX_TC | BD_ENET_TX_READY);
+	status &= ~(BD_ENET_TX_STATS | BD_ENET_TX_READY);
+	status |= BD_ENET_TX_TC;
+	/* Keep the first descriptor unavailable until all mappings succeed. */
+	if (bdp != txq->bd.cur)
+		status |= BD_ENET_TX_READY;
 
 	bufaddr = txq->tso_hdrs + index * TSO_HEADER_SIZE;
 	dmabuf = txq->tso_hdrs_dma + index * TSO_HEADER_SIZE;
@@ -808,10 +810,9 @@ fec_enet_txq_put_hdr_tso(struct fec_enet_priv_tx_q *txq,
 		dmabuf = dma_map_single(&fep->pdev->dev, bufaddr,
 					hdr_len, DMA_TO_DEVICE);
 		if (dma_mapping_error(&fep->pdev->dev, dmabuf)) {
-			dev_kfree_skb_any(skb);
 			if (net_ratelimit())
 				netdev_err(ndev, "Tx DMA memory map failed\n");
-			return NETDEV_TX_OK;
+			return -ENOMEM;
 		}
 	}
 
@@ -901,6 +902,10 @@ static int fec_enet_txq_submit_tso(struct fec_enet_priv_tx_q *txq,
 	txq->tx_buf[index].buf_p = skb;
 
 	skb_tx_timestamp(skb);
+	dma_wmb();
+	txq->bd.cur->cbd_sc |= cpu_to_fec16(BD_ENET_TX_READY);
+	/* Make the READY update visible before advancing the ring cursor. */
+	dma_wmb();
 	txq->bd.cur = bdp;
 
 	/* Trigger transmission start */
@@ -922,7 +927,7 @@ err_release:
 					 DMA_TO_DEVICE);
 
 		/* Clear standard buffer descriptor fields */
-		tmp_bdp->cbd_sc = 0;
+		tmp_bdp->cbd_sc &= cpu_to_fec16(BD_ENET_TX_WRAP);
 		tmp_bdp->cbd_datlen = 0;
 		tmp_bdp->cbd_bufaddr = 0;
 
@@ -937,7 +942,7 @@ err_release:
 
 	dev_kfree_skb_any(skb);
 
-	return ret;
+	return NETDEV_TX_OK;
 }
 
 static netdev_tx_t

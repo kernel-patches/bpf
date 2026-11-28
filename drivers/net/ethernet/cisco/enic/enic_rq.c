@@ -330,8 +330,6 @@ static void enic_rq_indicate_buf(struct enic *enic, struct vnic_rq *rq,
 	u16 bytes_written, vlan_tci, checksum;
 	u32 rss_hash;
 
-	rqstats->packets++;
-
 	cq_enet_rq_desc_dec((struct cq_enet_rq_desc *)cq_desc, &ingress_port,
 			    &fcoe, &eop, &sop, &rss_type, &csum_not_calc,
 			    &rss_hash, &bytes_written, &packet_error,
@@ -340,8 +338,15 @@ static void enic_rq_indicate_buf(struct enic *enic, struct vnic_rq *rq,
 			    &tcp_udp_csum_ok, &udp, &tcp, &ipv4_csum_ok, &ipv6,
 			    &ipv4, &ipv4_fragment, &fcs_ok);
 
-	if (enic_rq_pkt_error(rq, packet_error, fcs_ok, bytes_written))
+	if (enic_rq_pkt_error(rq, packet_error, fcs_ok, bytes_written)) {
+		rqstats->packets++;
 		return;
+	}
+	if (unlikely(READ_ONCE(enic->vf_rx_quarantined))) {
+		dev_core_stats_rx_dropped_inc(enic->netdev);
+		return;
+	}
+	rqstats->packets++;
 
 	if (eop && bytes_written > 0) {
 		/* Good receive

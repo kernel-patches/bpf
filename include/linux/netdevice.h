@@ -257,11 +257,11 @@ struct netdev_hw_addr_list {
 	 */
 	int			_count;
 
+	/* Set for dev->mc only */
+	bool			is_dev_mc;
+
 	/* Auxiliary tree for faster lookup on addition and deletion */
 	struct rb_root		tree;
-
-	/* Set for dev->mc only, the device the list belongs to */
-	struct net_device	*mc_dev;
 };
 
 #define netdev_hw_addr_list_count(l) ((l)->_count)
@@ -326,7 +326,6 @@ struct header_ops {
 	void	(*cache_update)(struct hh_cache *hh,
 				const struct net_device *dev,
 				const unsigned char *haddr);
-	bool	(*validate)(const char *ll_header, unsigned int len);
 	__be16	(*parse_protocol)(const struct sk_buff *skb);
 };
 
@@ -1930,7 +1929,6 @@ enum netdev_reg_state {
  *	@max_mtu:	Interface Maximum MTU value
  *	@type:		Interface hardware type
  *	@hard_header_len: Maximum hardware header length.
- *	@min_header_len:  Minimum hardware header length
  *
  *	@needed_headroom: Extra headroom the hardware may need, but not in all
  *			  cases can this be guaranteed
@@ -2293,7 +2291,6 @@ struct net_device {
 	unsigned int		min_mtu;
 	unsigned int		max_mtu;
 	unsigned short		type;
-	unsigned char		min_header_len;
 	unsigned char		name_assign_type;
 
 	int			group;
@@ -2531,6 +2528,18 @@ struct net_device {
 	unsigned long		change_proto_down:1;
 	unsigned long		netns_immutable:1;
 	unsigned long		fcoe_mtu:1;
+	/**
+	 * @xdp_pending: an XDP program is being installed, but is not in
+	 *	@xdp_state yet. Most users should access it implicitly via
+	 *	helpers like dev_xdp_prog_count(), rather than directly.
+	 */
+	unsigned long		xdp_pending:1;
+	/**
+	 * @xdp_from_upper: the program in @xdp_state was installed by an
+	 *	upper device with netif_xdp_propagate(); it belongs to the
+	 *	upper and can't be replaced or removed through this device.
+	 */
+	unsigned long		xdp_from_upper:1;
 
 	struct list_head	net_notifier_list;
 
@@ -3233,7 +3242,8 @@ struct netdev_lag_upper_info {
 
 struct netdev_lag_lower_state_info {
 	u8 link_up : 1,
-	   tx_enabled : 1;
+	   tx_enabled : 1,
+	   rx_enabled : 1;
 };
 
 #include <linux/notifier.h>
@@ -3580,21 +3590,6 @@ static inline __be16 dev_parse_header_protocol(const struct sk_buff *skb)
 	return dev->header_ops->parse_protocol(skb);
 }
 
-/* ll_header must have at least hard_header_len allocated */
-static inline bool dev_validate_header(const struct net_device *dev,
-				       char *ll_header, int len)
-{
-	if (likely(len >= dev->hard_header_len))
-		return true;
-	if (len < dev->min_header_len)
-		return false;
-
-	if (dev->header_ops && dev->header_ops->validate)
-		return dev->header_ops->validate(ll_header, len);
-
-	return false;
-}
-
 static inline bool dev_has_header(const struct net_device *dev)
 {
 	return dev->header_ops && dev->header_ops->create;
@@ -3805,6 +3800,20 @@ static inline void netif_tx_wake_all_queues(struct net_device *dev)
 
 static __always_inline void netif_tx_stop_queue(struct netdev_queue *dev_queue)
 {
+	/* A queue already stopped by the driver keeps the trans_start of
+	 * the stop that set DRV_XOFF, so repeated stops from a driver hang
+	 * check do not postpone dev_watchdog(). Neither the stamp nor the
+	 * bit is written: a wake racing with this call leaves the queue
+	 * running, as if it came after the stop.
+	 */
+	if (test_bit(__QUEUE_STATE_DRV_XOFF, &dev_queue->state)) {
+		/* Full barrier, as given by set_bit() followed by
+		 * smp_mb__after_atomic(), see netif_txq_try_stop()
+		 */
+		smp_mb();
+		return;
+	}
+
 	/* Paired with READ_ONCE() from dev_watchdog() */
 	WRITE_ONCE(dev_queue->trans_start, jiffies);
 
@@ -4357,7 +4366,8 @@ static inline void dev_consume_skb_any(struct sk_buff *skb)
 
 u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 			     const struct bpf_prog *xdp_prog);
-void generic_xdp_tx(struct sk_buff *skb, const struct bpf_prog *xdp_prog);
+void generic_xdp_tx(struct sk_buff *skb, const struct bpf_prog *xdp_prog,
+		    u32 act);
 int do_xdp_generic(const struct bpf_prog *xdp_prog, struct sk_buff **pskb);
 int netif_rx(struct sk_buff *skb);
 int __netif_rx(struct sk_buff *skb);
@@ -4445,6 +4455,7 @@ struct sk_buff *dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
 			struct netlink_ext_ack *extack);
 u8 dev_xdp_prog_count(struct net_device *dev);
+bool dev_xdp_has_own_prog(struct net_device *dev);
 int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf);
 int dev_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf);
 u8 dev_xdp_sb_prog_count(struct net_device *dev);
@@ -4981,23 +4992,33 @@ static inline void netif_tx_unlock_bh(struct net_device *dev)
 	}						\
 }
 
+/**
+ * netif_disable_subqueue() - stop subqueue and wait for xmit to finish
+ * @dev: network device
+ * @queue_index: sub queue index
+ *
+ * Stop the subqueue like netif_stop_subqueue(), but also make sure that
+ * ndo_start_xmit() is not running on it once this function returns.
+ * Does not synchronize with xmit of lltx devices.
+ */
+static inline void
+netif_disable_subqueue(struct net_device *dev, u16 queue_index)
+{
+	struct netdev_queue *txq = netdev_get_tx_queue(dev, queue_index);
+
+	__netif_tx_lock_bh(txq);
+	netif_tx_stop_queue(txq);
+	__netif_tx_unlock_bh(txq);
+}
+
 static inline void netif_tx_disable(struct net_device *dev)
 {
 	unsigned int i;
-	int cpu;
 
-	local_bh_disable();
-	cpu = smp_processor_id();
-	spin_lock(&dev->tx_global_lock);
-	for (i = 0; i < dev->num_tx_queues; i++) {
-		struct netdev_queue *txq = netdev_get_tx_queue(dev, i);
-
-		__netif_tx_lock(txq, cpu);
-		netif_tx_stop_queue(txq);
-		__netif_tx_unlock(txq);
-	}
-	spin_unlock(&dev->tx_global_lock);
-	local_bh_enable();
+	spin_lock_bh(&dev->tx_global_lock);
+	for (i = 0; i < dev->num_tx_queues; i++)
+		netif_disable_subqueue(dev, i);
+	spin_unlock_bh(&dev->tx_global_lock);
 }
 
 #ifndef CONFIG_PREEMPT_RT
@@ -5225,6 +5246,7 @@ static inline void __dev_mc_unsync(struct net_device *dev,
 
 /* Functions used for secondary unicast and multicast support */
 void dev_set_rx_mode(struct net_device *dev);
+void netif_rx_mode_schedule_update(struct net_device *dev);
 void netif_rx_mode_schedule_retry(struct net_device *dev);
 int netif_set_promiscuity(struct net_device *dev, int inc);
 int dev_set_promiscuity(struct net_device *dev, int inc);

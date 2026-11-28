@@ -962,6 +962,13 @@ listen_overflow:
 	}
 
 embryonic_reset:
+	if (!fastopen) {
+		if (!inet_csk_reqsk_queue_drop(req->rsk_listener, req)) {
+			*req_stolen = true;
+			return NULL;
+		}
+		__NET_INC_STATS(sock_net(sk), LINUX_MIB_EMBRYONICRSTS);
+	}
 	if (!(flg & TCP_FLAG_RST)) {
 		/* Received a bad SYN pkt - for TFO We try not to reset
 		 * the local connection unless it's really necessary to
@@ -972,13 +979,6 @@ embryonic_reset:
 	} else if (fastopen) { /* received a valid RST pkt */
 		reqsk_fastopen_remove(sk, req, true);
 		tcp_reset(sk, skb);
-	}
-	if (!fastopen) {
-		bool unlinked = inet_csk_reqsk_queue_drop(req->rsk_listener, req);
-
-		if (unlinked)
-			__NET_INC_STATS(sock_net(sk), LINUX_MIB_EMBRYONICRSTS);
-		*req_stolen = !unlinked;
 	}
 	return NULL;
 }

@@ -1334,9 +1334,11 @@ static void neigh_update_process_arp_queue(struct neighbour *neigh)
 		 * the packet in the output path.  So what we need to do
 		 * here is re-lookup the top-level neigh in the path so
 		 * we can reinject the packet there.
+		 * When skb->dev is neigh->dev 'neigh' is the top-level one.
+		 * dst can be a route via another device after a redirect.
 		 */
 		n2 = NULL;
-		if (dst &&
+		if (dst && skb->dev != neigh->dev &&
 		    READ_ONCE(dst->obsolete) != DST_OBSOLETE_DEAD) {
 			n2 = dst_neigh_lookup_skb(dst, skb);
 			if (n2)
@@ -3595,6 +3597,9 @@ static void __neigh_notify(struct neighbour *n, int type, int flags,
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
 	struct net *net;
+
+	if (n->dead && type != RTM_DELNEIGH)
+		return;
 
 	rcu_read_lock();
 	net = dev_net_rcu(n->dev);

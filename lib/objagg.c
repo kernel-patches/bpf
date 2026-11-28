@@ -327,7 +327,7 @@ static int objagg_obj_init_with_hints(struct objagg *objagg,
 	return 0;
 
 err_parent_assign:
-	objagg_obj_put(objagg, parent);
+	__objagg_obj_put(objagg, parent);
 	return err;
 }
 

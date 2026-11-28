@@ -2493,7 +2493,12 @@ EXPORT_SYMBOL(fman_get_rx_extra_headroom);
  */
 struct fman *fman_bind(struct device *fm_dev)
 {
-	return (struct fman *)(dev_get_drvdata(get_device(fm_dev)));
+	struct fman *fman = dev_get_drvdata(get_device(fm_dev));
+
+	if (!fman)
+		put_device(fm_dev);
+
+	return fman;
 }
 EXPORT_SYMBOL(fman_bind);
 

@@ -4,6 +4,7 @@
  * Copyright (c) 2008,2009 Katalix Systems Ltd
  */
 #include <linux/refcount.h>
+#include <linux/timer.h>
 
 #ifndef _L2TP_CORE_H_
 #define _L2TP_CORE_H_
@@ -80,6 +81,7 @@ struct l2tp_session {
 	u32			nr;		/* session NR state (receive) */
 	u32			ns;		/* session NR state (send) */
 	struct sk_buff_head	reorder_q;	/* receive reorder queue */
+	struct timer_list	reorder_timer;
 	u32			nr_max;		/* max NR. Depends on tunnel */
 	u32			nr_window_size;	/* NR window size */
 	u32			nr_oos;		/* NR of last OOS packet */
@@ -254,7 +256,6 @@ void l2tp_session_delete(struct l2tp_session *session);
 void l2tp_recv_common(struct l2tp_session *session, struct sk_buff *skb,
 		      unsigned char *ptr, unsigned char *optr, u16 hdrflags,
 		      int length);
-int l2tp_udp_encap_recv(struct sock *sk, struct sk_buff *skb);
 
 /* Transmit path helpers for sending packets over the tunnel socket. */
 int l2tp_xmit_skb(struct l2tp_session *session, struct sk_buff *skb);

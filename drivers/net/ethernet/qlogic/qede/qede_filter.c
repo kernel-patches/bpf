@@ -915,8 +915,7 @@ netdev_features_t qede_fix_features(struct net_device *dev,
 {
 	struct qede_dev *edev = netdev_priv(dev);
 
-	if (edev->xdp_prog || edev->ndev->mtu > PAGE_SIZE ||
-	    !(features & NETIF_F_GRO))
+	if (edev->ndev->mtu > PAGE_SIZE)
 		features &= ~NETIF_F_GRO_HW;
 
 	return features;
@@ -937,15 +936,8 @@ int qede_set_features(struct net_device *dev, netdev_features_t features)
 		args.u.features = features;
 		args.func = &qede_set_features_reload;
 
-		/* Make sure that we definitely need to reload.
-		 * In case of an eBPF attached program, there will be no FW
-		 * aggregations, so no need to actually reload.
-		 */
 		__qede_lock(edev);
-		if (edev->xdp_prog)
-			args.func(edev, &args);
-		else
-			qede_reload(edev, &args, true);
+		qede_reload(edev, &args, true);
 		__qede_unlock(edev);
 
 		return 1;

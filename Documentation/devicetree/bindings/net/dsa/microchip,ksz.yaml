@@ -129,10 +129,12 @@ allOf:
       patternProperties:
         "^(ethernet-)?ports$":
           patternProperties:
-            "^(ethernet-)?port@[0-2]$":
+            "^(ethernet-)?port@":
               $ref: dsa-port.yaml#
               unevaluatedProperties: false
               properties:
+                reg:
+                  maximum: 2
                 microchip,rmii-clk-internal:
                   $ref: /schemas/types.yaml#/definitions/flag
                   description:

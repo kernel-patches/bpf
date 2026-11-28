@@ -203,7 +203,10 @@
 #define BUS_IDLE_TIMING			0xd8
 #define I3C_VER_ID			0xe0
 #define I3C_VER_TYPE			0xe4
-#define EXTENDED_CAPABILITY		0xe8
+#define QUEUE_SIZE_CAPABILITY		0xe8
+#define QUEUE_SIZE_CAPABILITY_RX_BUF(x)	FIELD_GET(GENMASK(7, 4), (x))
+/* Sizes are encoded, 0 meaning 2 DWORDs and every further step doubling it. */
+#define QUEUE_SIZE_TO_DWORDS(x)		(2U << (x))
 #define SLAVE_CONFIG			0xec
 
 #define DYN_ADDR_LO_MASK GENMASK(4, 0)
@@ -978,8 +981,8 @@ static int dw_i3c_master_i3c_xfers(struct i3c_dev_desc *dev,
 			ntxwords += DIV_ROUND_UP(i3c_xfers[i].len, 4);
 	}
 
-	if (ntxwords > master->caps.datafifodepth ||
-	    nrxwords > master->caps.datafifodepth)
+	if (ntxwords > master->caps.txfifodepth ||
+	    nrxwords > master->caps.rxfifodepth)
 		return -EOPNOTSUPP;
 
 	struct dw_i3c_xfer *xfer __free(kfree) = dw_i3c_master_alloc_xfer(master, i3c_nxfers);
@@ -1136,8 +1139,8 @@ static int dw_i3c_master_i2c_xfers(struct i2c_dev_desc *dev,
 			ntxwords += DIV_ROUND_UP(i2c_xfers[i].len, 4);
 	}
 
-	if (ntxwords > master->caps.datafifodepth ||
-	    nrxwords > master->caps.datafifodepth)
+	if (ntxwords > master->caps.txfifodepth ||
+	    nrxwords > master->caps.rxfifodepth)
 		return -EOPNOTSUPP;
 
 	struct dw_i3c_xfer *xfer __free(kfree) = dw_i3c_master_alloc_xfer(master, i2c_nxfers);
@@ -1666,7 +1669,7 @@ int dw_i3c_common_probe(struct dw_i3c_master *master,
 			struct platform_device *pdev)
 {
 	int ret, irq;
-	u32 thld_ctrl;
+	u32 thld_ctrl, val;
 	const struct dw_i3c_drvdata *drvdata;
 	unsigned long quirks = 0;
 
@@ -1738,7 +1741,14 @@ int dw_i3c_common_probe(struct dw_i3c_master *master,
 	master->caps.cmdfifodepth = QUEUE_STATUS_LEVEL_CMD(ret);
 
 	ret = readl(master->regs + DATA_BUFFER_STATUS_LEVEL);
-	master->caps.datafifodepth = DATA_BUFFER_STATUS_LEVEL_TX(ret);
+	master->caps.txfifodepth = DATA_BUFFER_STATUS_LEVEL_TX(ret);
+
+	val = readl(master->regs + QUEUE_SIZE_CAPABILITY);
+	master->caps.rxfifodepth =
+		QUEUE_SIZE_TO_DWORDS(QUEUE_SIZE_CAPABILITY_RX_BUF(val));
+
+	master->base.max_tx_bytes = master->caps.txfifodepth * sizeof(u32);
+	master->base.max_rx_bytes = master->caps.rxfifodepth * sizeof(u32);
 
 	ret = readl(master->regs + DEVICE_ADDR_TABLE_POINTER);
 	master->datstartaddr = ret;

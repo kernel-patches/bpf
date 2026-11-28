@@ -388,8 +388,11 @@ dpll_msg_add_pin_phase_adjust(struct sk_buff *msg, struct dpll_pin *pin,
 	ret = ops->phase_adjust_get(pin, dpll_pin_on_dpll_priv(dpll, pin),
 				    dpll, dpll_priv(dpll),
 				    &phase_adjust, extack);
-	if (ret)
+	if (ret) {
+		if (ret == -ENODATA)
+			return 0;
 		return ret;
+	}
 	if (nla_put_s32(msg, DPLL_A_PIN_PHASE_ADJUST, phase_adjust))
 		return -EMSGSIZE;
 
@@ -411,8 +414,11 @@ dpll_msg_add_phase_offset(struct sk_buff *msg, struct dpll_pin *pin,
 	ret = ops->phase_offset_get(pin, dpll_pin_on_dpll_priv(dpll, pin),
 				    dpll, dpll_priv(dpll), &phase_offset,
 				    extack);
-	if (ret)
+	if (ret) {
+		if (ret == -ENODATA)
+			return 0;
 		return ret;
+	}
 	if (nla_put_64bit(msg, DPLL_A_PIN_PHASE_OFFSET, sizeof(phase_offset),
 			  &phase_offset, DPLL_A_PIN_PAD))
 		return -EMSGSIZE;
@@ -1452,11 +1458,11 @@ dpll_pin_phase_adj_set(struct dpll_pin *pin, struct nlattr *phase_adj_attr,
 	ret = ops->phase_adjust_get(pin, dpll_pin_on_dpll_priv(dpll, pin),
 				    dpll, dpll_priv(dpll), &old_phase_adj,
 				    extack);
-	if (ret) {
+	if (ret && ret != -ENODATA) {
 		NL_SET_ERR_MSG(extack, "unable to get old phase adjust value");
 		return ret;
 	}
-	if (phase_adj == old_phase_adj)
+	if (!ret && phase_adj == old_phase_adj)
 		return 0;
 
 	ret = ops->phase_adjust_set(pin, dpll_pin_on_dpll_priv(dpll, pin),

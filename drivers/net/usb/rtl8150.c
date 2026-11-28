@@ -97,6 +97,7 @@ enum rtl8150_usb_ep {
 #define	RX_REG_SET		1
 #define	RTL8150_UNPLUG		2
 #define	RX_URB_FAIL		3
+#define RTL8150_QUIET		4
 
 /* Define these values to match your device */
 #define	VENDOR_ID_REALTEK		0x0bda
@@ -353,11 +354,18 @@ static void free_all_urbs(rtl8150_t * dev)
 	usb_free_urb(dev->intr_urb);
 }
 
-static void unlink_all_urbs(rtl8150_t * dev)
+static void terminate_all_urbs(rtl8150_t *dev)
 {
-	usb_kill_urb(dev->rx_urb);
-	usb_kill_urb(dev->tx_urb);
-	usb_kill_urb(dev->intr_urb);
+	usb_poison_urb(dev->rx_urb);
+	usb_poison_urb(dev->tx_urb);
+	usb_poison_urb(dev->intr_urb);
+}
+
+static void enable_all_urbs(rtl8150_t *dev)
+{
+	usb_unpoison_urb(dev->rx_urb);
+	usb_unpoison_urb(dev->tx_urb);
+	usb_unpoison_urb(dev->intr_urb);
 }
 
 static inline struct sk_buff *pull_skb(rtl8150_t *dev)
@@ -446,7 +454,8 @@ goon:
 
 	return;
 resched:
-	tasklet_schedule(&dev->tl);
+	if (!test_bit(RTL8150_QUIET, &dev->flags))
+		tasklet_schedule(&dev->tl);
 }
 
 static void write_bulk_callback(struct urb *urb)
@@ -518,7 +527,7 @@ resubmit:
 	res = usb_submit_urb (urb, GFP_ATOMIC);
 	if (res == -ENODEV)
 		netif_device_detach(dev->netdev);
-	else if (res)
+	else if (res && res != -EPERM)
 		dev_err(&dev->udev->dev,
 			"can't resubmit intr, %s-%s/input0, status %d\n",
 			dev->udev->bus->bus_name, dev->udev->devpath, res);
@@ -528,18 +537,28 @@ static int rtl8150_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	rtl8150_t *dev = usb_get_intfdata(intf);
 
+	spin_lock_irq(&dev->rx_pool_lock);
+	set_bit(RTL8150_QUIET, &dev->flags);
+	spin_unlock_irq(&dev->rx_pool_lock);
+
 	netif_device_detach(dev->netdev);
 
-	if (netif_running(dev->netdev)) {
-		usb_kill_urb(dev->rx_urb);
-		usb_kill_urb(dev->intr_urb);
-	}
+	usb_poison_urb(dev->rx_urb);
+	usb_poison_urb(dev->intr_urb);
+
 	return 0;
 }
 
 static int rtl8150_resume(struct usb_interface *intf)
 {
 	rtl8150_t *dev = usb_get_intfdata(intf);
+
+	spin_lock_irq(&dev->rx_pool_lock);
+	clear_bit(RTL8150_QUIET, &dev->flags);
+	spin_unlock_irq(&dev->rx_pool_lock);
+
+	usb_unpoison_urb(dev->rx_urb);
+	usb_unpoison_urb(dev->intr_urb);
 
 	netif_device_attach(dev->netdev);
 	if (netif_running(dev->netdev)) {
@@ -618,7 +637,11 @@ try_again:
 
 	return;
 tlsched:
-	tasklet_schedule(&dev->tl);
+	spin_lock_irq(&dev->rx_pool_lock);
+	if (!test_bit(RTL8150_UNPLUG, &dev->flags) &&
+			!test_bit(RTL8150_QUIET, &dev->flags))
+		tasklet_schedule(&dev->tl);
+	spin_unlock_irq(&dev->rx_pool_lock);
 }
 
 static int enable_net_traffic(rtl8150_t * dev)
@@ -755,20 +778,22 @@ static int rtl8150_open(struct net_device *netdev)
 
 	usb_fill_bulk_urb(dev->rx_urb, dev->udev, usb_rcvbulkpipe(dev->udev, 1),
 		      dev->rx_skb->data, RTL8150_MTU, read_bulk_callback, dev);
-	if ((res = usb_submit_urb(dev->rx_urb, GFP_KERNEL))) {
-		if (res == -ENODEV)
-			netif_device_detach(dev->netdev);
-		dev_warn(&netdev->dev, "rx_urb submit failed: %d\n", res);
-		return res;
-	}
 	usb_fill_int_urb(dev->intr_urb, dev->udev, usb_rcvintpipe(dev->udev, 3),
-		     dev->intr_buff, INTBUFSIZE, intr_callback,
-		     dev, dev->intr_interval);
-	if ((res = usb_submit_urb(dev->intr_urb, GFP_KERNEL))) {
+			dev->intr_buff, INTBUFSIZE, intr_callback,
+			dev, dev->intr_interval);
+	res = usb_submit_urb(dev->intr_urb, GFP_KERNEL);
+	if (res) {
 		if (res == -ENODEV)
 			netif_device_detach(dev->netdev);
 		dev_warn(&netdev->dev, "intr_urb submit failed: %d\n", res);
-		usb_kill_urb(dev->rx_urb);
+		return res;
+	}
+	res = usb_submit_urb(dev->rx_urb, GFP_KERNEL);
+	if (res) {
+		if (res == -ENODEV)
+			netif_device_detach(dev->netdev);
+		usb_kill_urb(dev->intr_urb);
+		dev_warn(&netdev->dev, "rx_urb submit failed: %d\n", res);
 		return res;
 	}
 	enable_net_traffic(dev);
@@ -783,9 +808,12 @@ static int rtl8150_close(struct net_device *netdev)
 	rtl8150_t *dev = netdev_priv(netdev);
 
 	netif_stop_queue(netdev);
+	set_bit(RTL8150_QUIET, &dev->flags);
 	if (!test_bit(RTL8150_UNPLUG, &dev->flags))
 		disable_net_traffic(dev);
-	unlink_all_urbs(dev);
+	terminate_all_urbs(dev);
+	tasklet_kill(&dev->tl);
+	enable_all_urbs(dev);
 
 	return 0;
 }
@@ -970,7 +998,8 @@ static void rtl8150_disconnect(struct usb_interface *intf)
 		set_bit(RTL8150_UNPLUG, &dev->flags);
 		tasklet_kill(&dev->tl);
 		unregister_netdev(dev->netdev);
-		unlink_all_urbs(dev);
+		terminate_all_urbs(dev);
+		tasklet_kill(&dev->tl);
 		free_all_urbs(dev);
 		free_skb_pool(dev);
 		dev_kfree_skb(dev->rx_skb);

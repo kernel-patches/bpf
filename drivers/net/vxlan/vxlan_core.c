@@ -1434,6 +1434,67 @@ errout:
 	return err;
 }
 
+static bool vxlan_snoop_should_move(struct vxlan_fdb *f,
+				    const union vxlan_addr *src_ip,
+				    u32 ifindex,
+				    enum skb_drop_reason *reason)
+{
+	struct vxlan_rdst *rdst;
+
+	*reason = SKB_NOT_DROPPED_YET;
+
+	/* Don't override an fdb with nexthop with a learnt entry */
+	if (rcu_access_pointer(f->nh)) {
+		*reason = SKB_DROP_REASON_VXLAN_ENTRY_EXISTS;
+		return false;
+	}
+
+	rdst = first_remote_rcu(f);
+	if (likely(vxlan_addr_equal(&rdst->remote_ip, src_ip) &&
+		   (!ifindex || rdst->remote_ifindex == ifindex)))
+		return false;
+
+	/* Don't migrate static entries, drop packets */
+	if (f->state & (NUD_PERMANENT | NUD_NOARP)) {
+		*reason = SKB_DROP_REASON_VXLAN_ENTRY_EXISTS;
+		return false;
+	}
+
+	return true;
+}
+
+static enum skb_drop_reason vxlan_snoop_move(struct net_device *dev,
+					     struct vxlan_fdb *f,
+					     const u8 *src_mac,
+					     union vxlan_addr *src_ip,
+					     u32 ifindex)
+{
+	struct vxlan_dev *vxlan = netdev_priv(dev);
+	enum skb_drop_reason reason;
+	struct vxlan_rdst *rdst;
+
+	/* The entry may have changed before the lock was taken */
+	if (hlist_unhashed(&f->fdb_node))
+		return SKB_NOT_DROPPED_YET;
+
+	if (!vxlan_snoop_should_move(f, src_ip, ifindex, &reason))
+		return reason;
+
+	rdst = first_remote_rcu(f);
+	if (net_ratelimit())
+		netdev_info(dev,
+			    "%pM migrated from %pIS to %pIS\n",
+			    src_mac, &rdst->remote_ip.sa, &src_ip->sa);
+
+	dst_cache_reset(&rdst->dst_cache);
+	rdst->remote_ip = *src_ip;
+	rdst->remote_ifindex = ifindex;
+	rdst->offloaded = false;
+	vxlan_fdb_notify(vxlan, f, rdst, RTM_NEWNEIGH, true, NULL);
+
+	return SKB_NOT_DROPPED_YET;
+}
+
 /* Watch incoming packets to learn mapping between Ethernet address
  * and Tunnel endpoint.
  */
@@ -1459,31 +1520,21 @@ static enum skb_drop_reason vxlan_snoop(struct net_device *dev,
 
 	f = vxlan_find_mac_rcu(vxlan, cfg, src_mac, vni);
 	if (likely(f)) {
-		struct vxlan_rdst *rdst = first_remote_rcu(f);
+		enum skb_drop_reason reason;
 		unsigned long now = jiffies;
 
 		if (READ_ONCE(f->updated) != now)
 			WRITE_ONCE(f->updated, now);
 
-		/* Don't override an fdb with nexthop with a learnt entry */
-		if (rcu_access_pointer(f->nh))
-			return SKB_DROP_REASON_VXLAN_ENTRY_EXISTS;
+		if (likely(!vxlan_snoop_should_move(f, src_ip, ifindex,
+						    &reason)))
+			return reason;
 
-		if (likely(vxlan_addr_equal(&rdst->remote_ip, src_ip) &&
-			   rdst->remote_ifindex == ifindex))
-			return SKB_NOT_DROPPED_YET;
+		spin_lock(&vxlan->hash_lock);
+		reason = vxlan_snoop_move(dev, f, src_mac, src_ip, ifindex);
+		spin_unlock(&vxlan->hash_lock);
 
-		/* Don't migrate static entries, drop packets */
-		if (f->state & (NUD_PERMANENT | NUD_NOARP))
-			return SKB_DROP_REASON_VXLAN_ENTRY_EXISTS;
-
-		if (net_ratelimit())
-			netdev_info(dev,
-				    "%pM migrated from %pIS to %pIS\n",
-				    src_mac, &rdst->remote_ip.sa, &src_ip->sa);
-
-		rdst->remote_ip = *src_ip;
-		vxlan_fdb_notify(vxlan, f, rdst, RTM_NEWNEIGH, true, NULL);
+		return reason;
 	} else {
 		/* learned new entry */
 		spin_lock(&vxlan->hash_lock);
@@ -2551,10 +2602,10 @@ void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 			if (cfg->df == VXLAN_DF_SET) {
 				df = htons(IP_DF);
 			} else if (cfg->df == VXLAN_DF_INHERIT) {
-				struct ethhdr *eth = eth_hdr(skb);
+				__be16 inner_proto = skb_protocol(skb, true);
 
-				if (ntohs(eth->h_proto) == ETH_P_IPV6 ||
-				    (ntohs(eth->h_proto) == ETH_P_IP &&
+				if (inner_proto == htons(ETH_P_IPV6) ||
+				    (inner_proto == htons(ETH_P_IP) &&
 				     old_iph->frag_off & htons(IP_DF)))
 					df = htons(IP_DF);
 			}
@@ -4765,18 +4816,17 @@ static int vxlan_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	if (cfg->remote_ifindex && nla_put_u32(skb, IFLA_VXLAN_LINK, cfg->remote_ifindex))
 		goto nla_put_failure;
 
-	if (!vxlan_addr_any(&cfg->saddr)) {
-		if (cfg->saddr.sa.sa_family == AF_INET) {
-			if (nla_put_in_addr(skb, IFLA_VXLAN_LOCAL,
-					    cfg->saddr.sin.sin_addr.s_addr))
-				goto nla_put_failure;
+	/* Report the address family even when the local address is unspecified. */
+	if (cfg->saddr.sa.sa_family == AF_INET) {
+		if (nla_put_in_addr(skb, IFLA_VXLAN_LOCAL,
+				    cfg->saddr.sin.sin_addr.s_addr))
+			goto nla_put_failure;
 #if IS_ENABLED(CONFIG_IPV6)
-		} else {
-			if (nla_put_in6_addr(skb, IFLA_VXLAN_LOCAL6,
-					     &cfg->saddr.sin6.sin6_addr))
-				goto nla_put_failure;
+	} else {
+		if (nla_put_in6_addr(skb, IFLA_VXLAN_LOCAL6,
+				     &cfg->saddr.sin6.sin6_addr))
+			goto nla_put_failure;
 #endif
-		}
 	}
 
 	if (nla_put_u8(skb, IFLA_VXLAN_TTL, cfg->ttl) ||

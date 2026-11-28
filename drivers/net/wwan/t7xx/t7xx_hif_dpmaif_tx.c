@@ -162,9 +162,12 @@ static void t7xx_dpmaif_tx_done(struct work_struct *work)
 	struct dpmaif_hw_info *hw_info;
 	int ret;
 
-	ret = pm_runtime_resume_and_get(dpmaif_ctrl->dev);
-	if (ret < 0 && ret != -EACCES)
+	pm_runtime_get_noresume(dpmaif_ctrl->dev);
+	ret = pm_runtime_resume(dpmaif_ctrl->dev);
+	if (ret < 0 && ret != -EACCES) {
+		pm_runtime_put_noidle(dpmaif_ctrl->dev);
 		return;
+	}
 
 	/* The device may be in low power state. Disable sleep if needed */
 	t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
@@ -445,6 +448,8 @@ static void t7xx_do_tx_hw_push(struct dpmaif_ctrl *dpmaif_ctrl)
 static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 {
 	struct dpmaif_ctrl *dpmaif_ctrl = arg;
+	bool resume_failed = false;
+	bool txq_stopped;
 	int ret;
 
 	while (!kthread_should_stop()) {
@@ -460,14 +465,41 @@ static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 				break;
 		}
 
-		ret = pm_runtime_resume_and_get(dpmaif_ctrl->dev);
-		if (ret < 0 && ret != -EACCES)
-			return ret;
+		pm_runtime_get_noresume(dpmaif_ctrl->dev);
+		ret = pm_runtime_resume(dpmaif_ctrl->dev);
+		if (ret < 0 && ret != -EACCES) {
+			pm_runtime_put_noidle(dpmaif_ctrl->dev);
+			/* Do not exit: t7xx_dpmaif_tx_thread_rel() kthread_stop()s
+			 * this task. Retry until the resume works or we are stopped.
+			 */
+			if (!resume_failed)
+				dev_err(dpmaif_ctrl->dev,
+					"Failed to resume for TX push: %d\n", ret);
+			resume_failed = true;
+			wait_event_interruptible_timeout(dpmaif_ctrl->tx_wq,
+							 kthread_should_stop(),
+							 HZ);
+			continue;
+		}
+		resume_failed = false;
 
-		t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
-		t7xx_do_tx_hw_push(dpmaif_ctrl);
-		t7xx_pci_enable_sleep(dpmaif_ctrl->t7xx_dev);
+		/* A runtime suspended device was resumed above and had its queues
+		 * restarted, so a stopped queue here belongs to a system suspend
+		 * or an exception: wait for t7xx_dpmaif_resume() or
+		 * t7xx_dpmaif_start() to restart it instead of spinning.
+		 */
+		txq_stopped = !t7xx_select_tx_queue(dpmaif_ctrl);
+		if (!txq_stopped) {
+			t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
+			t7xx_do_tx_hw_push(dpmaif_ctrl);
+			t7xx_pci_enable_sleep(dpmaif_ctrl->t7xx_dev);
+		}
 		pm_runtime_put_autosuspend(dpmaif_ctrl->dev);
+
+		if (txq_stopped)
+			wait_event_interruptible(dpmaif_ctrl->tx_wq,
+						 t7xx_select_tx_queue(dpmaif_ctrl) ||
+						 kthread_should_stop());
 	}
 
 	return 0;

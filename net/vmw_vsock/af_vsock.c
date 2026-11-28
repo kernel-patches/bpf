@@ -2406,7 +2406,7 @@ out:
 
 static int vsock_connectible_wait_data(struct sock *sk,
 				       struct wait_queue_entry *wait,
-				       long timeout,
+				       long *timeout,
 				       struct vsock_transport_recv_notify_data *recv_data,
 				       size_t target)
 {
@@ -2432,7 +2432,7 @@ static int vsock_connectible_wait_data(struct sock *sk,
 		}
 
 		/* Don't wait for non-blocking sockets. */
-		if (timeout == 0) {
+		if (*timeout == 0) {
 			err = -EAGAIN;
 			break;
 		}
@@ -2444,13 +2444,13 @@ static int vsock_connectible_wait_data(struct sock *sk,
 		}
 
 		release_sock(sk);
-		timeout = schedule_timeout(timeout);
+		*timeout = schedule_timeout(*timeout);
 		lock_sock(sk);
 
 		if (signal_pending(current)) {
-			err = sock_intr_errno(timeout);
+			err = sock_intr_errno(*timeout);
 			break;
-		} else if (timeout == 0) {
+		} else if (*timeout == 0) {
 			err = -EAGAIN;
 			break;
 		}
@@ -2509,7 +2509,7 @@ static int __vsock_stream_recvmsg(struct sock *sk, struct msghdr *msg,
 	while (1) {
 		ssize_t read;
 
-		err = vsock_connectible_wait_data(sk, &wait, timeout,
+		err = vsock_connectible_wait_data(sk, &wait, &timeout,
 						  &recv_data, target);
 		if (err <= 0)
 			break;
@@ -2565,7 +2565,7 @@ static int __vsock_seqpacket_recvmsg(struct sock *sk, struct msghdr *msg,
 
 	timeout = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
 
-	err = vsock_connectible_wait_data(sk, &wait, timeout, NULL, 0);
+	err = vsock_connectible_wait_data(sk, &wait, &timeout, NULL, 0);
 	if (err <= 0)
 		goto out;
 

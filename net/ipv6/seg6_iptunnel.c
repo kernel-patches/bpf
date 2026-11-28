@@ -472,7 +472,7 @@ static int seg6_do_srh(struct sk_buff *skb, struct dst_entry *cache_dst)
 			return err;
 
 		skb_mac_header_rebuild(skb);
-		skb_push(skb, skb->mac_len);
+		skb_push_rcsum(skb, skb->mac_len);
 
 		if (tinfo->mode == SEG6_IPTUN_MODE_L2ENCAP)
 			err = __seg6_do_srh_encap(skb, tinfo->srh,
@@ -871,11 +871,11 @@ static int seg6_build_state(struct net *net, struct nlattr *nla,
 
 	slwt = seg6_lwt_lwtunnel(newts);
 
-	err = dst_cache_init(&slwt->cache_input, GFP_ATOMIC);
+	err = dst_cache_init(&slwt->cache_input, GFP_KERNEL);
 	if (err)
 		goto err_free_newts;
 
-	err = dst_cache_init(&slwt->cache_output, GFP_ATOMIC);
+	err = dst_cache_init(&slwt->cache_output, GFP_KERNEL);
 	if (err)
 		goto err_destroy_input;
 

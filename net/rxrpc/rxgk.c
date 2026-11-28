@@ -239,6 +239,16 @@ static int rxgk_init_connection_security(struct rxrpc_connection *conn,
 	_enter("{%d,%u},{%x}",
 	       conn->debug_id, conn->rxgk.key_number, key_serial(conn->key));
 
+	switch (token->rxgk->level) {
+	case RXRPC_SECURITY_PLAIN:
+	case RXRPC_SECURITY_AUTH:
+	case RXRPC_SECURITY_ENCRYPT:
+		break;
+	default:
+		ret = -EKEYREJECTED;
+		goto error;
+	}
+
 	conn->security_ix = token->security_index;
 	conn->security_level = token->rxgk->level;
 
@@ -253,16 +263,6 @@ static int rxgk_init_connection_security(struct rxrpc_connection *conn,
 		return PTR_ERR(gk);
 	conn->rxgk.enctype = gk->krb5->etype;
 	conn->rxgk.keys[gk->key_number & 3] = gk;
-
-	switch (conn->security_level) {
-	case RXRPC_SECURITY_PLAIN:
-	case RXRPC_SECURITY_AUTH:
-	case RXRPC_SECURITY_ENCRYPT:
-		break;
-	default:
-		ret = -EKEYREJECTED;
-		goto error;
-	}
 
 	ret = 0;
 error:
@@ -936,11 +936,12 @@ static int rxgk_construct_response(struct rxrpc_connection *conn,
 	if (IS_ERR(gk))
 		return PTR_ERR(gk);
 
-	auth_len = 20 + (4 + appdata->len) + 12 + (1 + 4) * 4;
+	auth_len = 20 + (4 + xdr_round_up(appdata->len)) + 12 + (1 + 4) * 4;
 	authx_len = crypto_krb5_how_much_buffer(gk->krb5, KRB5_ENCRYPT_MODE,
 						auth_len, &auth_offset);
 	len = sizeof(struct rxrpc_wire_header) +
-		8 + (4 + xdr_round_up(gk->key->ticket.len)) + (4 + authx_len);
+		8 + (4 + xdr_round_up(gk->key->ticket.len)) +
+		(4 + xdr_round_up(authx_len));
 
 	response = alloc_skb_with_frags(0, len, 0, &ret, GFP_NOFS);
 	if (!response)

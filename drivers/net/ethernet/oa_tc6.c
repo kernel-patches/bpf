@@ -89,7 +89,8 @@ struct oa_tc6 {
 	bool int_flag;
 	bool disable_traffic;
 	bool prot_ctrl;
-	enum oa_tc6_quirk_flag quirk_flags;
+	bool mdio_indirect_mode;
+	struct oa_tc6_quirks quirks;
 	struct gpio_desc *reset_gpio;
 };
 
@@ -434,24 +435,149 @@ int oa_tc6_write_register_mms(struct oa_tc6 *tc6, u8 mms, u16 address,
 }
 EXPORT_SYMBOL_GPL(oa_tc6_write_register_mms);
 
-static int oa_tc6_check_phy_reg_direct_access_capability(struct oa_tc6 *tc6)
-{
-	u32 regval;
-	int ret;
-
-	ret = oa_tc6_read_register(tc6, OA_TC6_REG_STDCAP, &regval);
-	if (ret)
-		return ret;
-
-	if (!(regval & OA_TC6_STDCAP_DIRECT_PHY_REG_ACCESS))
-		return -ENODEV;
-
-	return 0;
-}
-
 static void oa_tc6_handle_link_change(struct net_device *netdev)
 {
 	phy_print_status(netdev->phydev);
+}
+
+static int oa_tc6_mdioacc_wait_done(struct oa_tc6 *tc6, u32 *regval)
+{
+	int ret, err;
+
+	ret = read_poll_timeout(oa_tc6_read_register, err,
+				err || (*regval & OA_TC6_MDIOACC_TRDONE),
+				100, 30000, false, tc6, OA_TC6_REG_MDIOACC(1),
+				regval);
+	if (ret)
+		return ret;
+
+	return err;
+}
+
+/* On a turnaround error no PHY answered and the DATA field must be ignored.
+ * Return all ones, like an MDIO bus with no PHY at that address, so that
+ * bus scanning skips the address instead of failing.
+ */
+static int oa_tc6_mdioacc_read_data(u32 reg_val)
+{
+	if (reg_val & OA_TC6_MDIOACC_TAERR)
+		return 0xffff;
+
+	return FIELD_GET(OA_TC6_MDIOACC_DATA, reg_val);
+}
+
+static int oa_tc6_mdioacc_write_done(struct oa_tc6 *tc6)
+{
+	u32 reg_val;
+	int ret;
+
+	ret = oa_tc6_mdioacc_wait_done(tc6, &reg_val);
+	if (ret)
+		return ret;
+
+	return reg_val & OA_TC6_MDIOACC_TAERR ? -EIO : 0;
+}
+
+static int oa_tc6_indirect_mdiobus_read_c45(struct oa_tc6 *tc6, int addr,
+					    int devnum, int regnum)
+{
+	u32 reg_val;
+	int ret;
+
+	reg_val = FIELD_PREP(OA_TC6_MDIOACC_OP, OA_TC6_MDIOACC_OP_ADDR);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_ST, OA_TC6_MDIOACC_ST_C45);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_PRTAD, addr);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DEVAD, devnum);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DATA, regnum);
+
+	ret = oa_tc6_write_register(tc6, OA_TC6_REG_MDIOACC(0), reg_val);
+	if (ret)
+		return ret;
+
+	reg_val = FIELD_PREP(OA_TC6_MDIOACC_OP, OA_TC6_MDIOACC_OP_RD);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_ST, OA_TC6_MDIOACC_ST_C45);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_PRTAD, addr);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DEVAD, devnum);
+
+	ret = oa_tc6_write_register(tc6, OA_TC6_REG_MDIOACC(1), reg_val);
+	if (ret)
+		return ret;
+
+	ret = oa_tc6_mdioacc_wait_done(tc6, &reg_val);
+	if (ret)
+		return ret;
+
+	return oa_tc6_mdioacc_read_data(reg_val);
+}
+
+static int oa_tc6_indirect_mdiobus_write_c45(struct oa_tc6 *tc6, int addr,
+					     int devnum, int regnum, u16 val)
+{
+	u32 reg_val;
+	int ret;
+
+	reg_val = FIELD_PREP(OA_TC6_MDIOACC_OP, OA_TC6_MDIOACC_OP_ADDR);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_ST, OA_TC6_MDIOACC_ST_C45);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_PRTAD, addr);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DEVAD, devnum);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DATA, regnum);
+
+	ret = oa_tc6_write_register(tc6, OA_TC6_REG_MDIOACC(0), reg_val);
+	if (ret)
+		return ret;
+
+	reg_val = FIELD_PREP(OA_TC6_MDIOACC_OP, OA_TC6_MDIOACC_OP_WR);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_ST, OA_TC6_MDIOACC_ST_C45);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_PRTAD, addr);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DEVAD, devnum);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DATA, val);
+
+	ret = oa_tc6_write_register(tc6, OA_TC6_REG_MDIOACC(1), reg_val);
+	if (ret)
+		return ret;
+
+	return oa_tc6_mdioacc_write_done(tc6);
+}
+
+static int oa_tc6_indirect_mdiobus_read(struct oa_tc6 *tc6, int addr,
+					int regnum)
+{
+	u32 reg_val;
+	int ret;
+
+	reg_val = FIELD_PREP(OA_TC6_MDIOACC_OP, OA_TC6_MDIOACC_OP_RD);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_ST, OA_TC6_MDIOACC_ST_C22);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_PRTAD, addr);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DEVAD, regnum);
+
+	ret = oa_tc6_write_register(tc6, OA_TC6_REG_MDIOACC(1), reg_val);
+	if (ret)
+		return ret;
+
+	ret = oa_tc6_mdioacc_wait_done(tc6, &reg_val);
+	if (ret)
+		return ret;
+
+	return oa_tc6_mdioacc_read_data(reg_val);
+}
+
+static int oa_tc6_indirect_mdiobus_write(struct oa_tc6 *tc6, int addr,
+					 int regnum, u16 val)
+{
+	u32 reg_val;
+	int ret;
+
+	reg_val = FIELD_PREP(OA_TC6_MDIOACC_OP, OA_TC6_MDIOACC_OP_WR);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_ST, OA_TC6_MDIOACC_ST_C22);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_PRTAD, addr);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DEVAD, regnum);
+	reg_val |= FIELD_PREP(OA_TC6_MDIOACC_DATA, val);
+
+	ret = oa_tc6_write_register(tc6, OA_TC6_REG_MDIOACC(1), reg_val);
+	if (ret)
+		return ret;
+
+	return oa_tc6_mdioacc_write_done(tc6);
 }
 
 static int oa_tc6_mdiobus_read(struct mii_bus *bus, int addr, int regnum)
@@ -459,6 +585,9 @@ static int oa_tc6_mdiobus_read(struct mii_bus *bus, int addr, int regnum)
 	struct oa_tc6 *tc6 = bus->priv;
 	u32 regval;
 	int ret;
+
+	if (tc6->mdio_indirect_mode)
+		return oa_tc6_indirect_mdiobus_read(tc6, addr, regnum);
 
 	ret = oa_tc6_read_register(tc6, OA_TC6_PHY_STD_REG_ADDR_BASE |
 				   (regnum & OA_TC6_PHY_STD_REG_ADDR_MASK),
@@ -473,6 +602,9 @@ static int oa_tc6_mdiobus_write(struct mii_bus *bus, int addr, int regnum,
 				u16 val)
 {
 	struct oa_tc6 *tc6 = bus->priv;
+
+	if (tc6->mdio_indirect_mode)
+		return oa_tc6_indirect_mdiobus_write(tc6, addr, regnum, val);
 
 	return oa_tc6_write_register(tc6, OA_TC6_PHY_STD_REG_ADDR_BASE |
 				     (regnum & OA_TC6_PHY_STD_REG_ADDR_MASK),
@@ -505,6 +637,10 @@ int oa_tc6_mdiobus_read_c45(struct mii_bus *bus, int addr, int devnum,
 	int mms;
 	int ret;
 
+	if (tc6->mdio_indirect_mode)
+		return oa_tc6_indirect_mdiobus_read_c45(tc6, addr, devnum,
+							regnum);
+
 	mms = oa_tc6_get_phy_c45_mms(devnum);
 	if (mms < 0)
 		return mms;
@@ -523,6 +659,10 @@ int oa_tc6_mdiobus_write_c45(struct mii_bus *bus, int addr, int devnum,
 	struct oa_tc6 *tc6 = bus->priv;
 	int mms;
 
+	if (tc6->mdio_indirect_mode)
+		return oa_tc6_indirect_mdiobus_write_c45(tc6, addr, devnum,
+							 regnum, val);
+
 	mms = oa_tc6_get_phy_c45_mms(devnum);
 	if (mms < 0)
 		return mms;
@@ -533,7 +673,20 @@ EXPORT_SYMBOL_GPL(oa_tc6_mdiobus_write_c45);
 
 static int oa_tc6_mdiobus_register(struct oa_tc6 *tc6)
 {
+	u32 regval;
 	int ret;
+
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_STDCAP, &regval);
+	if (ret)
+		return ret;
+
+	if (!(regval & OA_TC6_STDCAP_DIRECT_PHY_REG_ACCESS)) {
+		if (!(regval & OA_TC6_STDCAP_INDIRECT_PHY_REG_ACCESS)) {
+			netdev_err(tc6->netdev, "MDIO direct/indirect access not supported\n");
+			return -ENODEV;
+		}
+		tc6->mdio_indirect_mode = true;
+	}
 
 	tc6->mdiobus = mdiobus_alloc();
 	if (!tc6->mdiobus) {
@@ -582,15 +735,8 @@ static int oa_tc6_phy_init(struct oa_tc6 *tc6)
 {
 	int ret;
 
-	if (tc6->quirk_flags & OA_TC6_BROKEN_PHY)
+	if (tc6->quirks.quirk_flags & OA_TC6_BROKEN_PHY)
 		return 0;
-
-	ret = oa_tc6_check_phy_reg_direct_access_capability(tc6);
-	if (ret) {
-		netdev_err(tc6->netdev,
-			   "Direct PHY register access is not supported by the MAC-PHY\n");
-		return ret;
-	}
 
 	ret = oa_tc6_mdiobus_register(tc6);
 	if (ret)
@@ -621,7 +767,7 @@ static int oa_tc6_phy_init(struct oa_tc6 *tc6)
 
 static void oa_tc6_phy_exit(struct oa_tc6 *tc6)
 {
-	if (tc6->quirk_flags & OA_TC6_BROKEN_PHY)
+	if (tc6->quirks.quirk_flags & OA_TC6_BROKEN_PHY)
 		return;
 
 	phy_disconnect(tc6->phydev);
@@ -651,6 +797,8 @@ static int oa_tc6_sw_reset_macphy(struct oa_tc6 *tc6)
 	ret = oa_tc6_write_register(tc6, OA_TC6_REG_RESET, regval);
 	if (ret)
 		return ret;
+
+	fsleep(tc6->quirks.softreset_settle_us);
 
 	/* Poll for soft reset complete for every 1ms until 1s timeout */
 	ret = readx_poll_timeout(oa_tc6_read_status0, tc6, regval,
@@ -1475,7 +1623,9 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,
 	spin_lock_init(&tc6->tx_skb_lock);
 
 	if (quirks)
-		tc6->quirk_flags = quirks->quirk_flags;
+		tc6->quirks = *quirks;
+	if (!tc6->quirks.hwreset_settle_us)
+		tc6->quirks.hwreset_settle_us = 1000;
 
 	/* Set the SPI controller to pump at realtime priority */
 	tc6->spi->rt = true;
@@ -1515,12 +1665,12 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,
 					     "failed to get reset gpio\n"));
 
 	if (tc6->reset_gpio) {
-		/* Keep the reset asserted for 10 us and then allow 1 ms of
-		 * settle time for the crystal oscillator startup.
+		/* Keep the reset asserted for 10 us and then allow the reset
+		 * settle time (1 ms by default).
 		 */
 		fsleep(10);
 		gpiod_set_value_cansleep(tc6->reset_gpio, 0);
-		fsleep(1000);
+		fsleep(tc6->quirks.hwreset_settle_us);
 	}
 
 	/* Check the PROTE bit status so that we can reset the device */

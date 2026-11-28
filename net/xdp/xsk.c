@@ -11,6 +11,8 @@
 
 #define pr_fmt(fmt) "AF_XDP: %s: " fmt, __func__
 
+#include <linux/if_arp.h>
+#include <linux/if_vlan.h>
 #include <linux/if_xdp.h>
 #include <linux/init.h>
 #include <linux/sched/mm.h>
@@ -604,18 +606,6 @@ out:
 }
 EXPORT_SYMBOL(xsk_tx_peek_desc);
 
-static u32 xsk_tx_peek_release_fallback(struct xsk_buff_pool *pool, u32 max_entries)
-{
-	struct xdp_desc *descs = pool->tx_descs;
-	u32 nb_pkts = 0;
-
-	while (nb_pkts < max_entries && xsk_tx_peek_desc(pool, &descs[nb_pkts]))
-		nb_pkts++;
-
-	xsk_tx_release(pool);
-	return nb_pkts;
-}
-
 static void xsk_tx_commit_batch(struct xsk_buff_pool *pool,
 				struct xsk_tx_batch *batch)
 {
@@ -762,11 +752,6 @@ u32 xsk_tx_peek_release_desc_batch(struct xsk_buff_pool *pool, u32 nb_pkts)
 		goto out;
 
 	umem_shared = !list_is_singular(&pool->xsk_tx_list);
-
-	if (umem_shared && !(pool->umem->flags & XDP_UMEM_SG_FLAG)) {
-		rcu_read_unlock();
-		return xsk_tx_peek_release_fallback(pool, nb_pkts);
-	}
 
 	/* This is the backpressure mechanism for the Tx path. Try to
 	 * reserve space in the completion queue for all packets, but
@@ -1028,9 +1013,36 @@ static int xsk_skb_metadata(struct sk_buff *skb, void *buffer,
 
 static int xsk_skb_sw_csum(struct sk_buff *skb, struct xsk_buff_pool *pool)
 {
-	if (unlikely(pool->tx_sw_csum &&
-		     skb->ip_summed == CHECKSUM_PARTIAL))
+	struct ethhdr eth_buf, *eth;
+	int nhoff = ETH_HLEN;
+	__be16 proto;
+
+	if (unlikely(skb->ip_summed != CHECKSUM_PARTIAL))
+		return 0;
+
+	if (unlikely(pool->tx_sw_csum))
 		return skb_checksum_help(skb);
+
+	if (unlikely(skb->dev->type != ARPHRD_ETHER))
+		return 0;
+
+	eth = skb_header_pointer(skb, 0, sizeof(*eth), &eth_buf);
+	if (unlikely(!eth))
+		return -EINVAL;
+
+	proto = eth->h_proto;
+	if (eth_type_vlan(proto)) {
+		proto = __vlan_get_protocol(skb, proto, &nhoff);
+		if (unlikely(!proto))
+			return -EINVAL;
+	}
+
+	if (unlikely(skb_checksum_start_offset(skb) < nhoff))
+		return -EINVAL;
+
+	skb->protocol = proto;
+	skb_set_network_header(skb, nhoff);
+	skb_set_transport_header(skb, skb_checksum_start_offset(skb));
 
 	return 0;
 }

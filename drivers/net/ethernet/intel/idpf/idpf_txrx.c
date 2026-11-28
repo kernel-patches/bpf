@@ -1357,16 +1357,15 @@ static void idpf_rxq_sw_queue_rel(struct idpf_rxq_group *rx_qgrp)
 }
 
 /**
- * idpf_rxq_group_rel - Release all resources for rxq groups
+ * idpf_rxq_grps_free - Free an Rx queue group array and everything in it
  * @rsrc: pointer to queue and vector resources
+ * @rxq_grps: group array to free, not reachable through @rsrc any more
  */
-static void idpf_rxq_group_rel(struct idpf_q_vec_rsrc *rsrc)
+static void idpf_rxq_grps_free(struct idpf_q_vec_rsrc *rsrc,
+			       struct idpf_rxq_group *rxq_grps)
 {
-	if (!rsrc->rxq_grps)
-		return;
-
 	for (unsigned int i = 0; i < rsrc->num_rxq_grp; i++) {
-		struct idpf_rxq_group *rx_qgrp = &rsrc->rxq_grps[i];
+		struct idpf_rxq_group *rx_qgrp = &rxq_grps[i];
 		u16 num_rxq;
 
 		if (idpf_is_queue_model_split(rsrc->rxq_model)) {
@@ -1392,13 +1391,36 @@ static void idpf_rxq_group_rel(struct idpf_q_vec_rsrc *rsrc)
 }
 
 /**
- * idpf_vport_queue_grp_rel_all - Release all queue groups
+ * idpf_rxq_group_rel - Release all resources for rxq groups
+ * @vport: vport the queue groups belong to
  * @rsrc: pointer to queue and vector resources
  */
-static void idpf_vport_queue_grp_rel_all(struct idpf_q_vec_rsrc *rsrc)
+static void idpf_rxq_group_rel(struct idpf_vport *vport,
+			       struct idpf_q_vec_rsrc *rsrc)
+{
+	struct idpf_rxq_group *rxq_grps;
+
+	if (!rsrc->rxq_grps)
+		return;
+
+	spin_lock(&vport->rxq_grps_lock);
+	rxq_grps = rsrc->rxq_grps;
+	rsrc->rxq_grps = NULL;
+	spin_unlock(&vport->rxq_grps_lock);
+
+	idpf_rxq_grps_free(rsrc, rxq_grps);
+}
+
+/**
+ * idpf_vport_queue_grp_rel_all - Release all queue groups
+ * @vport: vport the queue groups belong to
+ * @rsrc: pointer to queue and vector resources
+ */
+static void idpf_vport_queue_grp_rel_all(struct idpf_vport *vport,
+					 struct idpf_q_vec_rsrc *rsrc)
 {
 	idpf_txq_group_rel(rsrc);
-	idpf_rxq_group_rel(rsrc);
+	idpf_rxq_group_rel(vport, rsrc);
 }
 
 /**
@@ -1417,7 +1439,7 @@ void idpf_vport_queues_rel(struct idpf_vport *vport,
 	idpf_rx_desc_rel_all(rsrc);
 
 	idpf_xdpsqs_put(vport);
-	idpf_vport_queue_grp_rel_all(rsrc);
+	idpf_vport_queue_grp_rel_all(vport, rsrc);
 
 	kfree(vport->txqs);
 	vport->txqs = NULL;
@@ -1802,18 +1824,19 @@ static int idpf_rxq_group_alloc(struct idpf_vport *vport,
 				u16 num_rxq)
 {
 	struct idpf_adapter *adapter = vport->adapter;
+	struct idpf_rxq_group *rxq_grps;
 	bool hs, rsc;
-	int err = 0;
+	int err;
 
-	rsrc->rxq_grps = kzalloc_objs(struct idpf_rxq_group, rsrc->num_rxq_grp);
-	if (!rsrc->rxq_grps)
+	rxq_grps = kzalloc_objs(struct idpf_rxq_group, rsrc->num_rxq_grp);
+	if (!rxq_grps)
 		return -ENOMEM;
 
 	hs = idpf_vport_get_hsplit(vport) == ETHTOOL_TCP_DATA_SPLIT_ENABLED;
 	rsc = idpf_is_feature_ena(vport, NETIF_F_GRO_HW);
 
 	for (unsigned int i = 0; i < rsrc->num_rxq_grp; i++) {
-		struct idpf_rxq_group *rx_qgrp = &rsrc->rxq_grps[i];
+		struct idpf_rxq_group *rx_qgrp = &rxq_grps[i];
 
 		rx_qgrp->vport = vport;
 		if (!idpf_is_queue_model_split(rsrc->rxq_model)) {
@@ -1914,9 +1937,17 @@ setup_rxq:
 		}
 	}
 
+	/* Publish only once every group is built, the PTP aux worker reads
+	 * the array as soon as it becomes visible.
+	 */
+	spin_lock(&vport->rxq_grps_lock);
+	rsrc->rxq_grps = rxq_grps;
+	spin_unlock(&vport->rxq_grps_lock);
+
+	return 0;
+
 err_alloc:
-	if (err)
-		idpf_rxq_group_rel(rsrc);
+	idpf_rxq_grps_free(rsrc, rxq_grps);
 
 	return err;
 }
@@ -1947,7 +1978,7 @@ static int idpf_vport_queue_grp_alloc_all(struct idpf_vport *vport,
 	return 0;
 
 err_out:
-	idpf_vport_queue_grp_rel_all(rsrc);
+	idpf_vport_queue_grp_rel_all(vport, rsrc);
 
 	return err;
 }
@@ -3864,7 +3895,10 @@ static irqreturn_t idpf_vport_intr_clean_queues(int __always_unused irq,
 static void idpf_vport_intr_napi_del_all(struct idpf_q_vec_rsrc *rsrc)
 {
 	for (u16 v_idx = 0; v_idx < rsrc->num_q_vectors; v_idx++)
-		netif_napi_del(&rsrc->q_vectors[v_idx].napi);
+		__netif_napi_del(&rsrc->q_vectors[v_idx].napi);
+
+	/* Observe an RCU grace period after __netif_napi_del() calls. */
+	synchronize_net();
 }
 
 /**
@@ -4132,12 +4166,17 @@ static int idpf_vport_intr_req_irq(struct idpf_vport *vport,
 
 		name = kasprintf(GFP_KERNEL, "%s-%s-%s-%d", drv_name, if_name,
 				 vec_name, vector);
+		if (!name) {
+			err = -ENOMEM;
+			goto free_q_irqs;
+		}
 
 		err = request_irq(irq_num, idpf_vport_intr_clean_queues, 0,
 				  name, q_vector);
 		if (err) {
 			netdev_err(vport->netdev,
 				   "Request_irq failed, error: %d\n", err);
+			kfree(name);
 			goto free_q_irqs;
 		}
 

@@ -724,6 +724,19 @@ static struct sk_buff *udp_gro_receive_segment(struct list_head *head,
 		if (!NAPI_GRO_CB(p)->same_flow)
 			continue;
 
+		/* encap_mark is set here only if an inner network header
+		 * was parsed (UDP tunnels, IPIP, SIT, GRE, also when carried
+		 * over FOU/GUE). udp_hdr() then points at the inner L4
+		 * header and the network offsets describe the inner packet.
+		 * FOU/GUE carrying an L4 protocol directly clear it and
+		 * leave udp_hdr() at the outer UDP header, as for plain UDP.
+		 * Never match packets across the two cases.
+		 */
+		if (NAPI_GRO_CB(p)->encap_mark != NAPI_GRO_CB(skb)->encap_mark) {
+			NAPI_GRO_CB(p)->same_flow = 0;
+			continue;
+		}
+
 		uh2 = udp_hdr(p);
 
 		/* Match ports only, as csum is always non zero */
@@ -971,6 +984,9 @@ INDIRECT_CALLABLE_SCOPE int udp4_gro_complete(struct sk_buff *skb, int nhoff)
 
 		skb_shinfo(skb)->gso_type |= (SKB_GSO_FRAGLIST|SKB_GSO_UDP_L4);
 		skb_shinfo(skb)->gso_segs = NAPI_GRO_CB(skb)->count;
+
+		if (skb->encapsulation)
+			skb->inner_transport_header = skb->transport_header;
 
 		__skb_incr_checksum_unnecessary(skb);
 

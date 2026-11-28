@@ -23,6 +23,7 @@ properties:
     enum:
       - nxp,imx94-netc-blk-ctrl
       - nxp,imx95-netc-blk-ctrl
+      - nxp,imx952-netc-blk-ctrl
 
   reg:
     maxItems: 3

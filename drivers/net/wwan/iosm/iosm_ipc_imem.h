@@ -390,14 +390,6 @@ struct iosm_imem *ipc_imem_init(struct iosm_pcie *pcie, unsigned int device_id,
 				void __iomem *mmio, struct device *dev);
 
 /**
- * ipc_imem_pm_s2idle_sleep - Set PM variables to sleep/active for
- *			      s2idle sleep/active
- * @ipc_imem:	Pointer to imem data-struct
- * @sleep:	Set PM Variable to sleep/active
- */
-void ipc_imem_pm_s2idle_sleep(struct iosm_imem *ipc_imem, bool sleep);
-
-/**
  * ipc_imem_pm_suspend - The HAL shall ask the shared memory layer
  *			 whether D3 is allowed.
  * @ipc_imem:	Pointer to imem data-struct

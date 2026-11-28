@@ -46,7 +46,6 @@ netdev_features_t                   gso_partial_features        read_mostly     
 unsigned_int                        min_mtu
 unsigned_int                        max_mtu
 unsigned_short                      type
-unsigned_char                       min_header_len
 unsigned_char                       name_assign_type
 int                                 group
 struct net_device_stats             stats
@@ -169,6 +168,8 @@ unsigned_long:1                     see_all_hwtstamp_requests
 unsigned_long:1                     change_proto_down
 unsigned_long:1                     netns_immutable
 unsigned_long:1                     fcoe_mtu
+unsigned_long:1                     xdp_pending
+unsigned_long:1                     xdp_from_upper
 struct list_head                    net_notifier_list
 struct macsec_ops*                  macsec_ops
 struct udp_tunnel_nic_info*         udp_tunnel_nic_info

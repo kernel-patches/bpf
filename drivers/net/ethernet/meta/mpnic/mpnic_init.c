@@ -8,6 +8,7 @@
 #include <linux/iopoll.h>
 #include <linux/log2.h>
 #include <linux/sizes.h>
+#include <net/tcp.h>
 
 #include "mpnic.h"
 #include "mpnic_txrx.h"
@@ -198,12 +199,9 @@ static void mpnic_txb_init(struct mpnic_dev *mpd)
 
 static void mpnic_rxb_init(struct mpnic_dev *mpd)
 {
-	/* Accept all packets that miss dmac tcam, until l2 filtering is
-	 * implemented.
-	 */
 	mpnic_wr64(mpd, MPNIC_RXB_PORT_CLASS_CFG(0),
 		   FIELD_PREP(MPNIC_RXB_PORT_CLASS_CFG_DEFAULT_L2_ACTION,
-			      MPNIC_L2_ACTION_PASS));
+			      MPNIC_L2_ACTION_DROP));
 	mpnic_wr64(mpd, MPNIC_RXB_PORT_CFG(0),
 		   FIELD_PREP(MPNIC_RXB_PORT_CFG_FCS_STRIP_MODE,
 			      MPNIC_FCS_MODE_STRIP));
@@ -225,6 +223,16 @@ static void mpnic_rxb_init(struct mpnic_dev *mpd)
 		   MPNIC_RXB_INIT_COMMON_CRDT_MAX_THRSH);
 
 	mpnic_wr64(mpd, MPNIC_RXB_BMC_CRDTS(0), MPNIC_RXB_INIT_BMC_CRDTS);
+
+	/* One bit per DMAC TCAM entry, set means pass on hit */
+	for (int i = 0; i < MPNIC_RXB_DMAC_ACTION_CNT; i++)
+		mpnic_wr64(mpd, MPNIC_RXB_DMAC_ACTION(i), ~0ULL);
+
+	/* Start with all DMAC TCAM entries disabled */
+	for (int i = 0; i < MPNIC_RXB_DMAC_TCAM_CNT; i++)
+		mpnic_wr64(mpd, MPNIC_RXB_DMAC_TCAM_OP,
+			   FIELD_PREP(MPNIC_RXB_DMAC_TCAM_OP_TCAM_ENTRY, i) |
+			   MPNIC_RXB_DMAC_TCAM_OP_UNLOAD_TRIG);
 
 	mpnic_wr64(mpd, MPNIC_RXB_MEM_INIT_REQ, MPNIC_MEM_INIT_RXB_VAL);
 }
@@ -298,6 +306,19 @@ static void mpnic_txglb_init(struct mpnic_dev *mpd)
 	 * programmed with its addresses.
 	 */
 	mpnic_wr64(mpd, MPNIC_TOF_TCAM_DEST_REMAP, 0);
+	mpnic_wr64(mpd, MPNIC_TOF_MODE,
+		   FIELD_PREP(MPNIC_TOF_MODE_IPV4_ID_MODE,
+			      MPNIC_IPV4_ID_MODE_INCREMENT) |
+		   FIELD_PREP(MPNIC_TOF_MODE_IPV4_ZERO_CSUM, 1) |
+		   FIELD_PREP(MPNIC_TOF_MODE_TCP_ZERO_CSUM, 1) |
+		   FIELD_PREP(MPNIC_TOF_MODE_UDP_ZERO_CSUM, 0) |
+		   FIELD_PREP(MPNIC_TOF_MODE_L4_ZERO_CSUM, 0));
+	mpnic_wr64(mpd, MPNIC_TOF_TCP_FLAG_CLR,
+		   FIELD_PREP(MPNIC_TOF_TCP_FLAG_CLR_FIRST_SEGMENT,
+			      TCPHDR_PSH | TCPHDR_FIN) |
+		   FIELD_PREP(MPNIC_TOF_TCP_FLAG_CLR_MIDDLE_SEGMENT,
+			      TCPHDR_PSH | TCPHDR_CWR | TCPHDR_FIN) |
+		   FIELD_PREP(MPNIC_TOF_TCP_FLAG_CLR_LAST_SEGMENT, TCPHDR_CWR));
 
 	mpnic_wr64(mpd, MPNIC_TCM_MEM_INIT_REQ, MPNIC_MEM_INIT_TCM_VAL);
 	mpnic_wr64(mpd, MPNIC_TDE_MEM_INIT_REQ, MPNIC_MEM_INIT_TDE_VAL);

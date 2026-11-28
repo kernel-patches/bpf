@@ -283,7 +283,7 @@ void otx2_qos_disable_sq(struct otx2_nic *pfvf, int qidx)
 	struct otx2_hw *hw = &pfvf->hw;
 	struct otx2_snd_queue *sq;
 	struct otx2_cq_queue *cq;
-	int pool_id, sq_idx;
+	int pool_id, sq_idx, err;
 
 	sq_idx = hw->non_qos_queues + qidx;
 
@@ -311,8 +311,16 @@ void otx2_qos_disable_sq(struct otx2_nic *pfvf, int qidx)
 	otx2_cleanup_tx_cqes(pfvf, cq);
 
 	mutex_lock(&pfvf->mbox.lock);
-	otx2_qos_ctx_disable(pfvf, sq_idx, pool_id);
+	err = otx2_qos_ctx_disable(pfvf, sq_idx, pool_id);
 	mutex_unlock(&pfvf->mbox.lock);
+	if (err) {
+		/* The SQ, aura and pool may still be enabled, so don't free
+		 * the memory they point to.
+		 */
+		netdev_err(pfvf->netdev,
+			   "Failed to disable QoS SQ %d (%d)\n", sq_idx, err);
+		return;
+	}
 
 	otx2_qos_sq_free_sqbs(pfvf, sq_idx);
 	otx2_qos_aura_pool_free(pfvf, pool_id);

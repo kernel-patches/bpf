@@ -127,7 +127,6 @@ enum tn40_swnodes {
 struct tn40_nodes {
 	char phy_name[32];
 	char mdio_name[32];
-	struct property_entry phy_props[3];
 	struct software_node swnodes[SWNODE_MAX];
 	const struct software_node *group[SWNODE_MAX + 1];
 };

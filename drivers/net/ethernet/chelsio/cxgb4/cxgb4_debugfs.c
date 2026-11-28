@@ -664,20 +664,13 @@ static ssize_t tp_la_write(struct file *file, const char __user *buf,
 			   size_t count, loff_t *pos)
 {
 	int err;
-	char s[32];
-	unsigned long val;
-	size_t size = min(sizeof(s) - 1, count);
+	u16 val;
 	struct adapter *adap = file_inode(file)->i_private;
 
-	if (copy_from_user(s, buf, size))
-		return -EFAULT;
-	s[size] = '\0';
-	err = kstrtoul(s, 0, &val);
+	err = kstrtou16_from_user(buf, count, 0, &val);
 	if (err)
 		return err;
-	if (val > 0xffff)
-		return -EINVAL;
-	adap->params.tp.la_mask = val << 16;
+	adap->params.tp.la_mask = (u32)val << 16;
 	t4_set_reg_field(adap, TP_DBG_LA_CONFIG_A, 0xffff0000U,
 			 adap->params.tp.la_mask);
 	return count;

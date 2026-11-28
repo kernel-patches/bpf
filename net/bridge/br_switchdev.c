@@ -11,17 +11,33 @@
 
 static struct static_key_false br_switchdev_tx_fwd_offload;
 
-static bool nbp_switchdev_can_offload_tx_fwd(const struct net_bridge_port *p,
-					     const struct sk_buff *skb)
+/*
+ * Returns the hwdom of the egress port if the frame can use TX forwarding
+ * offload to it, or 0.
+ */
+static int nbp_switchdev_tx_fwd_hwdom(const struct net_bridge_port *p,
+				      const struct sk_buff *skb)
 {
+	int hwdom;
+
 	if (!static_branch_unlikely(&br_switchdev_tx_fwd_offload))
-		return false;
+		return 0;
 
 	if (br_multicast_igmp_type(skb))
-		return false;
+		return 0;
 
-	return test_bit(BR_TX_FWD_OFFLOAD_BIT, &p->flags) &&
-	       (p->hwdom != BR_INPUT_SKB_CB(skb)->src_hwdom);
+	if (!test_bit(BR_TX_FWD_OFFLOAD_BIT, &p->flags))
+		return 0;
+
+	/*
+	 * nbp_switchdev_del() clears the hwdom before the flag, while the
+	 * port can stay in the bridge.
+	 */
+	hwdom = READ_ONCE(p->hwdom);
+	if (hwdom == BR_INPUT_SKB_CB(skb)->src_hwdom)
+		return 0;
+
+	return hwdom;
 }
 
 bool br_switchdev_frame_uses_tx_fwd_offload(struct sk_buff *skb)
@@ -41,7 +57,7 @@ void br_switchdev_frame_set_offload_fwd_mark(struct sk_buff *skb)
 void nbp_switchdev_frame_mark_tx_fwd_offload(const struct net_bridge_port *p,
 					     struct sk_buff *skb)
 {
-	if (nbp_switchdev_can_offload_tx_fwd(p, skb))
+	if (nbp_switchdev_tx_fwd_hwdom(p, skb))
 		BR_INPUT_SKB_CB(skb)->tx_fwd_offload = true;
 }
 
@@ -53,8 +69,10 @@ void nbp_switchdev_frame_mark_tx_fwd_offload(const struct net_bridge_port *p,
 void nbp_switchdev_frame_mark_tx_fwd_to_hwdom(const struct net_bridge_port *p,
 					      struct sk_buff *skb)
 {
-	if (nbp_switchdev_can_offload_tx_fwd(p, skb))
-		set_bit(p->hwdom, &BR_INPUT_SKB_CB(skb)->fwd_hwdoms);
+	int hwdom = nbp_switchdev_tx_fwd_hwdom(p, skb);
+
+	if (hwdom)
+		set_bit(hwdom, &BR_INPUT_SKB_CB(skb)->fwd_hwdoms);
 }
 
 void nbp_switchdev_frame_mark(const struct net_bridge_port *p,
@@ -221,10 +239,14 @@ static int nbp_switchdev_hwdom_set(struct net_bridge_port *joining)
 	struct net_bridge_port *p;
 	int hwdom;
 
-	/* joining is yet to be added to the port list. */
+	/*
+	 * joining can already be in the port list, and so can another port
+	 * that stopped the offload but stays a member. Both have no hwdom.
+	 */
 	list_for_each_entry(p, &br->port_list, list) {
-		if (netdev_phys_item_id_same(&joining->ppid, &p->ppid)) {
-			joining->hwdom = p->hwdom;
+		if (p->hwdom &&
+		    netdev_phys_item_id_same(&joining->ppid, &p->ppid)) {
+			WRITE_ONCE(joining->hwdom, p->hwdom);
 			return 0;
 		}
 	}
@@ -234,7 +256,7 @@ static int nbp_switchdev_hwdom_set(struct net_bridge_port *joining)
 		return -EBUSY;
 
 	set_bit(hwdom, &br->busy_hwdoms);
-	joining->hwdom = hwdom;
+	WRITE_ONCE(joining->hwdom, hwdom);
 	return 0;
 }
 
@@ -243,9 +265,9 @@ static void nbp_switchdev_hwdom_put(struct net_bridge_port *leaving)
 	struct net_bridge *br = leaving->br;
 	struct net_bridge_port *p;
 
-	/* leaving is no longer in the port list. */
+	/* leaving is still in the port list if it stays a member. */
 	list_for_each_entry(p, &br->port_list, list) {
-		if (p->hwdom == leaving->hwdom)
+		if (p != leaving && p->hwdom == leaving->hwdom)
 			return;
 	}
 
@@ -304,8 +326,10 @@ static void nbp_switchdev_del(struct net_bridge_port *p)
 	if (p->offload_count)
 		return;
 
-	if (p->hwdom)
+	if (p->hwdom) {
 		nbp_switchdev_hwdom_put(p);
+		WRITE_ONCE(p->hwdom, 0);
+	}
 
 	if (test_bit(BR_TX_FWD_OFFLOAD_BIT, &p->flags)) {
 		clear_bit(BR_TX_FWD_OFFLOAD_BIT, &p->flags);

@@ -89,9 +89,6 @@ int fwnode_mdiobus_phy_device_register(struct mii_bus *mdio,
 		phy->irq = mdio->irq[addr];
 	}
 
-	if (fwnode_property_read_bool(child, "broken-turn-around"))
-		mdio->phy_ignore_ta_mask |= 1 << addr;
-
 	/* Associate the fwnode with the device structure so it
 	 * can be looked up later
 	 */

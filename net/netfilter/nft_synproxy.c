@@ -137,6 +137,9 @@ static void nft_synproxy_do_eval(const struct nft_synproxy *priv,
 		return;
 	}
 
+	if (tcp->syn == tcp->ack || tcp->fin || tcp->rst)
+		return;
+
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
 		nft_synproxy_eval_v4(priv, regs, pkt, tcp, &_tcph, &opts);
