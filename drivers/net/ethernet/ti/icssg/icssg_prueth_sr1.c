@@ -811,13 +811,16 @@ static int prueth_netdev_init(struct prueth *prueth,
 		ret = -ENODEV;
 		goto free;
 	} else if (of_phy_is_fixed_link(eth_node)) {
+		of_node_put(emac->phy_node);
+		emac->phy_node = NULL;
+
 		ret = of_phy_register_fixed_link(eth_node);
 		if (ret) {
 			dev_err_probe(prueth->dev, ret, "failed to register fixed-link phy\n");
 			goto free;
 		}
 
-		emac->phy_node = eth_node;
+		emac->phy_node = of_node_get(eth_node);
 	}
 
 	ret = of_get_phy_mode(eth_node, &emac->phy_if);
@@ -877,6 +880,9 @@ static int prueth_netdev_init(struct prueth *prueth,
 	return 0;
 
 free:
+	if (of_phy_is_fixed_link(emac->phy_node))
+		of_phy_deregister_fixed_link(emac->phy_node);
+	of_node_put(emac->phy_node);
 	pruss_release_mem_region(prueth->pruss, &emac->dram);
 free_ndev:
 	emac->ndev = NULL;
