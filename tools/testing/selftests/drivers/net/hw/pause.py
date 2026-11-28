@@ -8,6 +8,7 @@ Driver-related behavior tests for Pause-based Flow Control.
 import errno
 import json
 import os
+import time
 
 from lib.py import KsftFailEx, KsftNamedVariant, KsftSkipEx
 from lib.py import NetDrvEpEnv
@@ -99,8 +100,8 @@ def controllable_lp(cfg):
     if controllable is not None:
         return controllable
 
-    before = int(cmd(f"cat /sys/class/net/{cfg.remote_ifname}/carrier_changes",
-                     host=cfg.remote).stdout)
+    carrier_changes_cmd = f"cat /sys/class/net/{cfg.remote_ifname}/carrier_changes"
+    before = int(cmd(carrier_changes_cmd, host=cfg.remote).stdout)
 
     ret, _ = ethtool_ret(f"-r {cfg.ifname}", is_get=False)
     if ret != 0:
@@ -108,8 +109,14 @@ def controllable_lp(cfg):
 
     wait_for_aneg(cfg, link_drop=True)
 
-    cfg.lp_controllable = int(cmd(f"cat /sys/class/net/{cfg.remote_ifname}/carrier_changes",
-                                  host=cfg.remote).stdout) > before
+    link_changed = False
+    end = time.monotonic() + 5
+    while not link_changed and time.monotonic() < end:
+        time.sleep(0.1)
+        after = int(cmd(carrier_changes_cmd, host=cfg.remote).stdout)
+        link_changed = after > before
+
+    cfg.lp_controllable = link_changed
     return cfg.lp_controllable
 
 def require_controllable_lp(cfg):
