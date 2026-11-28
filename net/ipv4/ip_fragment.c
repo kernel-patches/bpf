@@ -295,6 +295,17 @@ static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb, int *refs)
 	end = offset + skb->len - skb_network_offset(skb) - ihl;
 	err = -EINVAL;
 
+	/* A fragment must carry at least one byte after its IP header,
+	 * otherwise end < offset and the rb-tree ordering breaks.  Reject
+	 * before touching any qp state.
+	 */
+	if (end <= offset)
+		goto discard_qp;
+
+	/* tot_len must fit in the skb; IP_HDRINCL lets it diverge. */
+	if (ntohs(ip_hdr(skb)->tot_len) > skb->len - skb_network_offset(skb))
+		goto discard_qp;
+
 	/* Is this the final fragment? */
 	if ((flags & IP_MF) == 0) {
 		/* If we already have some bits beyond end
@@ -318,8 +329,6 @@ static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb, int *refs)
 			qp->q.len = end;
 		}
 	}
-	if (end == offset)
-		goto discard_qp;
 
 	err = -ENOMEM;
 	if (!pskb_pull(skb, skb_network_offset(skb) + ihl))

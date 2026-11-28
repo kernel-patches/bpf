@@ -125,6 +125,13 @@ static int ip6_frag_queue(struct net *net,
 	}
 
 	err = -EINVAL;
+
+	/* IPV6_HDRINCL allows payload_len to differ from the real packet
+	 * length.  Never let it promise more than the skb actually holds.
+	 */
+	if (ntohs(ipv6_hdr(skb)->payload_len) + sizeof(struct ipv6hdr) > skb->len)
+		goto discard_fq;
+
 	offset = ntohs(fhdr->frag_off) & ~0x7;
 	end = offset + (ntohs(ipv6_hdr(skb)->payload_len) -
 			((u8 *)(fhdr + 1) - (u8 *)(ipv6_hdr(skb) + 1)));
@@ -138,6 +145,13 @@ static int ip6_frag_queue(struct net *net,
 		__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMFAILS);
 		return -1;
 	}
+
+	/* A fragment must carry at least one byte after its fragment
+	 * header, otherwise end < offset and the rb-tree ordering breaks.
+	 * Reject before touching any fq state.
+	 */
+	if (end <= offset)
+		goto discard_fq;
 
 	ecn = ip6_frag_ecn(ipv6_hdr(skb));
 
@@ -178,9 +192,6 @@ static int ip6_frag_queue(struct net *net,
 			fq->q.len = end;
 		}
 	}
-
-	if (end == offset)
-		goto discard_fq;
 
 	err = -ENOMEM;
 	/* Point into the IP datagram 'data' part. */
