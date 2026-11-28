@@ -149,4 +149,6 @@ $(CXX_OBJS): $(RDIR)/%.bpf.o: progs/%.cpp | $(RDIR)
 		$(BPF_CC_FLAGS) -c $< -o $@ $(call skip_on_fail,BPF)
 endif
 
+$(RDIR)/test_uprobe_autoattach.bpf.o: bpf_arch_regs.h
+
 endif # BPF_CC

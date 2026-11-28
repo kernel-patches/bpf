@@ -2,6 +2,7 @@
 /* Copyright (c) 2022, Oracle and/or its affiliates. */
 
 #include <test_progs.h>
+#include "bpf_arch_regs.h"
 #include "test_uprobe_autoattach.skel.h"
 
 /* uprobe attach point */

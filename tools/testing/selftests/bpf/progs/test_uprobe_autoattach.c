@@ -6,7 +6,7 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-#include "bpf_misc.h"
+#include "bpf_arch_regs.h"
 
 int uprobe_byname_parm1 = 0;
 int uprobe_byname_ran = 0;
