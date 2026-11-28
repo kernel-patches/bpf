@@ -11,6 +11,7 @@ struct btf_type_tag_test {
 #include "btf_type_tag.skel.h"
 #include "btf_type_tag_user.skel.h"
 #include "btf_type_tag_percpu.skel.h"
+#include "btf_type_tag_iomem.skel.h"
 
 static void test_btf_decl_tag(void)
 {
@@ -224,6 +225,51 @@ cleanup:
 	btf__free(vmlinux_btf);
 }
 
+/* Load only @name. A load through an __iomem pointer has to fail. */
+static void test_btf_type_tag_mod_iomem(const char *name, bool fails)
+{
+	struct btf *vmlinux_btf = NULL, *module_btf = NULL;
+	struct btf_type_tag_iomem *skel = NULL;
+	struct bpf_program *prog;
+	char log[4096] = {};
+	int err;
+
+	if (load_btfs(&vmlinux_btf, &module_btf, /*needs_vmlinux_tag=*/false))
+		return;
+
+	/* skip the test if the module does not have __iomem tags */
+	if (btf__find_by_name_kind(module_btf, "iomem", BTF_KIND_TYPE_TAG) <= 0) {
+		printf("%s:SKIP: no __iomem btf_type_tag in bpf_testmod", __func__);
+		test__skip();
+		goto cleanup;
+	}
+
+	skel = btf_type_tag_iomem__open();
+	if (!ASSERT_OK_PTR(skel, "btf_type_tag_iomem"))
+		goto cleanup;
+
+	bpf_object__for_each_program(prog, skel->obj)
+		bpf_program__set_autoload(prog, !strcmp(bpf_program__name(prog), name));
+
+	prog = bpf_object__find_program_by_name(skel->obj, name);
+	if (!ASSERT_OK_PTR(prog, "find_program"))
+		goto cleanup;
+	bpf_program__set_log_buf(prog, log, sizeof(log));
+
+	err = btf_type_tag_iomem__load(skel);
+	if (fails) {
+		ASSERT_ERR(err, name);
+		ASSERT_HAS_SUBSTR(log, "invalid mem access 'scalar'", "log");
+	} else {
+		ASSERT_OK(err, name);
+	}
+
+cleanup:
+	btf_type_tag_iomem__destroy(skel);
+	btf__free(module_btf);
+	btf__free(vmlinux_btf);
+}
+
 void test_btf_tag(void)
 {
 	if (test__start_subtest("btf_decl_tag"))
@@ -246,4 +292,13 @@ void test_btf_tag(void)
 		test_btf_type_tag_vmlinux_percpu(true);
 	if (test__start_subtest("btf_type_tag_percpu_vmlinux_helper"))
 		test_btf_type_tag_vmlinux_percpu(false);
+
+	if (test__start_subtest("btf_type_tag_iomem_arg"))
+		test_btf_type_tag_mod_iomem("test_iomem_arg", true);
+	if (test__start_subtest("btf_type_tag_iomem_struct"))
+		test_btf_type_tag_mod_iomem("test_iomem_struct", true);
+	if (test__start_subtest("btf_type_tag_iomem_int"))
+		test_btf_type_tag_mod_iomem("test_iomem_int", true);
+	if (test__start_subtest("btf_type_tag_iomem_value"))
+		test_btf_type_tag_mod_iomem("test_iomem_value", false);
 }

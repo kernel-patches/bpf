@@ -650,6 +650,11 @@ struct bpf_testmod_btf_type_tag_3 {
 	struct bpf_testmod_btf_type_tag_1 __percpu *p;
 };
 
+struct bpf_testmod_btf_type_tag_4 {
+	struct bpf_testmod_btf_type_tag_1 __iomem *p;
+	int __iomem *q;
+};
+
 noinline int
 bpf_testmod_test_btf_type_tag_user_1(struct bpf_testmod_btf_type_tag_1 __user *arg) {
 	BTF_TYPE_EMIT(func_proto_typedef);
@@ -671,6 +676,16 @@ bpf_testmod_test_btf_type_tag_percpu_1(struct bpf_testmod_btf_type_tag_1 __percp
 noinline int
 bpf_testmod_test_btf_type_tag_percpu_2(struct bpf_testmod_btf_type_tag_3 *arg) {
 	return arg->p->a;
+}
+
+noinline int
+bpf_testmod_test_btf_type_tag_iomem_1(struct bpf_testmod_btf_type_tag_1 __iomem *arg) {
+	return !!arg;
+}
+
+noinline int
+bpf_testmod_test_btf_type_tag_iomem_2(struct bpf_testmod_btf_type_tag_4 *arg) {
+	return arg->p && arg->q;
 }
 
 noinline int bpf_testmod_loop_test(int n)
