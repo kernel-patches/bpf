@@ -1,0 +1,8 @@
+[
+  {
+    "name": "meta",
+    "directory": "bpf_objects",
+    "pattern": "*.o",
+    "filter": "ci/vmtest/configs/veristat_meta.cfg"
+  }
+]
