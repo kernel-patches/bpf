@@ -2139,12 +2139,18 @@ lookup:
 		struct sock *nsk;
 
 		sk = req->rsk_listener;
-		if (!xfrm4_policy_check(sk, XFRM_POLICY_IN, skb))
+
+		if (static_branch_unlikely(&ip4_min_ttl) &&
+		    iph->ttl < READ_ONCE(inet_sk(sk)->min_ttl)) {
+			__NET_INC_STATS(net, LINUX_MIB_TCPMINTTLDROP);
+			drop_reason = SKB_DROP_REASON_TCP_MINTTL;
+		} else if (!xfrm4_policy_check(sk, XFRM_POLICY_IN, skb)) {
 			drop_reason = SKB_DROP_REASON_XFRM_POLICY;
-		else
+		} else {
 			drop_reason = tcp_inbound_hash(sk, req, skb,
 						       &iph->saddr, &iph->daddr,
 						       AF_INET, dif, sdif);
+		}
 		if (unlikely(drop_reason)) {
 			sk_drops_skbadd(sk, skb);
 			reqsk_put(req);

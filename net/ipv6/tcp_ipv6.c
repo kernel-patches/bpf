@@ -1793,12 +1793,17 @@ lookup:
 		struct sock *nsk;
 
 		sk = req->rsk_listener;
-		if (!xfrm6_policy_check(sk, XFRM_POLICY_IN, skb))
+		if (static_branch_unlikely(&ip6_min_hopcount) &&
+		    hdr->hop_limit < READ_ONCE(tcp_inet6_sk(sk)->min_hopcount)) {
+			__NET_INC_STATS(net, LINUX_MIB_TCPMINTTLDROP);
+			drop_reason = SKB_DROP_REASON_TCP_MINTTL;
+		} else if (!xfrm6_policy_check(sk, XFRM_POLICY_IN, skb)) {
 			drop_reason = SKB_DROP_REASON_XFRM_POLICY;
-		else
+		} else {
 			drop_reason = tcp_inbound_hash(sk, req, skb,
 						       &hdr->saddr, &hdr->daddr,
 						       AF_INET6, dif, sdif);
+		}
 		if (drop_reason) {
 			sk_drops_skbadd(sk, skb);
 			reqsk_put(req);
