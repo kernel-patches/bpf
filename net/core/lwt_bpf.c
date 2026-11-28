@@ -278,7 +278,11 @@ static int bpf_lwt_xmit_reroute(struct sk_buff *skb)
 		fl6.daddr = iph6->daddr;
 		fl6.saddr = iph6->saddr;
 
-		dst = ip6_dst_lookup_flow(net, skb->sk, &fl6, NULL);
+		if (ipv6_addr_any(&fl6.saddr) &&
+		    sk && sk->sk_family != AF_INET6)
+			sk = NULL;
+
+		dst = ip6_dst_lookup_flow(net, sk, &fl6, NULL);
 		if (IS_ERR(dst)) {
 			err = PTR_ERR(dst);
 			goto err;
