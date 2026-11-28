@@ -1194,14 +1194,15 @@ int tls_set_device_offload(struct sock *sk)
 	if (rc)
 		goto release_lock;
 
+	ctx->tx_conf = TLS_HW;
 	tls_device_attach(ctx, sk, netdev);
-	up_read(&device_offload_lock);
-
 	/* following this assignment tls_is_skb_tx_device_offloaded
 	 * will return true and the context might be accessed
 	 * by the netdev's xmit function.
 	 */
 	smp_store_release(&sk->sk_validate_xmit_skb, tls_validate_xmit_skb);
+	up_read(&device_offload_lock);
+
 	dev_put(netdev);
 
 	return 0;
@@ -1281,6 +1282,7 @@ int tls_set_device_offload_rx(struct sock *sk, struct tls_context *ctx)
 	if (rc)
 		goto free_sw_resources;
 
+	ctx->rx_conf = TLS_HW;
 	tls_device_attach(ctx, sk, netdev);
 	up_read(&device_offload_lock);
 
@@ -1353,7 +1355,9 @@ static int tls_device_down(struct net_device *netdev)
 		/* Stop offloaded TX and switch to the fallback.
 		 * tls_is_skb_tx_device_offloaded will return false.
 		 */
-		WRITE_ONCE(ctx->sk->sk_validate_xmit_skb, tls_validate_xmit_skb_sw);
+		if (ctx->tx_conf == TLS_HW)
+			WRITE_ONCE(ctx->sk->sk_validate_xmit_skb,
+				   tls_validate_xmit_skb_sw);
 
 		/* Stop the RX and TX resync.
 		 * tls_dev_resync must not be called after tls_dev_del.
