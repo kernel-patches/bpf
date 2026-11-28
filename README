@@ -1,168 +1,134 @@
-Linux kernel
-============
+# BPF CI workflows (vmtest)
 
-The Linux kernel is the core of any Linux operating system. It manages hardware,
-system resources, and provides the fundamental services for all other software.
+Repository context and expectations for changes to workflows, scripts and CI policy.
+[README.md](README.md) provides the overview and validation entry points.
+KPD also copies these files into kernel mirrors; this guidance covers the CI files,
+while kernel changes follow the kernel's contribution rules.
 
-Quick Start
------------
+## What this repository owns
 
-* Report a bug: See Documentation/admin-guide/reporting-issues.rst
-* Get the latest kernel: https://kernel.org
-* Build the kernel: See Documentation/admin-guide/quickly-build-trimmed-linux.rst
-* Join the community: https://lore.kernel.org/
+This repository orchestrates BPF CI. KPD copies `.github` and top-level CI files
+into kernel mirrors such as `kernel-patches/bpf`, where patch-series PRs and base
+pushes run them. The default branch of `kernel-patches/vmtest` is `master`.
 
-Essential Documentation
------------------------
+| Path | Role |
+|---|---|
+| `.github/workflows/test.yml` | Entry point; matrix, build/test gates and concurrency |
+| `.github/scripts/matrix.py` | Architectures, toolchains, runners and enabled workloads |
+| `.github/workflows/kernel-{build,test,build-test}.yml` | Kernel/selftest artifacts, VM execution and workload fan-out |
+| `.github/workflows/veristat-*.yml` | Corpus preparation, measurements, baselines and publication |
+| `ci/veristat/` | Manifest/measurement/report CLIs and tests; see its README |
+| `ci/vmtest/configs/` | Kernel configs, selftest filters and kernel-splat policy |
+| `ci/diffs/` | Kernel patches applied before building; review applicability |
+| `.github/workflows/linux-next-sync.yml` | Build linux-next from bpf_base plus upstream linux-next |
+| `.github/workflows/ai-code-review.yml`, `ai-agent.yml`, `ci/claude/` | Automated review/investigation and publication |
 
-All users should be familiar with:
+`libbpf/ci` owns reusable build actions and VM machinery. This repository owns
+BPF CI corpus providers, filters, reporting/baseline policy and infrastructure
+assumptions. Use action, command and file interfaces across repositories; do not
+introduce a shared Python library for these scripts. Helpers stay within their component.
 
-* Building requirements: Documentation/process/changes.rst
-* Code of Conduct: Documentation/process/code-of-conduct.rst
-* License: See COPYING
+## Easy to get wrong
 
-Documentation can be built with make htmldocs or viewed online at:
-https://www.kernel.org/doc/html/latest/
+- **Caller context.** Reusable/injected workflows execute in other repositories.
+  `github.repository`, refs, permissions, secrets and workspace paths belong to the
+  run. Check caller and callee when changing inputs or conditions.
+- **Validation paths.** A PR here downloads a kernel tree; production tests a kernel
+  mirror's revision. Some lint/agent jobs have repository-specific gates. Feature
+  pushes do not exercise the same paths as PRs or base pushes.
+- **Independent gates.** Builds, selftests and veristat are separate workloads. Base
+  pushes can skip selftests while still measuring veristat and saving baselines.
+  Read the matrix and job/step conclusions; an overall failed run may have healthy
+  veristat jobs. A skipped job provides no coverage.
+- **Artifact identity.** Match architecture/toolchain, kernel image, selftests and
+  modules across build/runtime jobs. Do not hardcode a lane accepted as an input.
+- **Action versions.** `libbpf/ci@v4` is a moving tag; the downloaded SHA in a run log
+  is authoritative. Merging here propagates CI files through KPD. Updating an action
+  tag is a separate change affecting its callers.
+- **linux-next.** Its separate sync starts from bpf_base and merges upstream linux-next.
+  Successful KPD base updates do not prove linux-next has synced.
+- **Guest status.** `VMTEST_SCRIPT` selects a guest entrypoint. Preserve the action's
+  exitstatus-file contract so the host collects failures and artifacts. Inspect the
+  action before assuming guest paths, inherited environment or VM isolation.
+- **Filters and splats.** Selftest deny lists, veristat filters and kernel-splat allow/
+  deny lists serve different purposes. An allowed splat does not imply a test passed.
+  Explain exclusions and remove temporary workarounds once the underlying fix is available.
 
+## Veristat contracts
 
-Who Are You?
-============
+Veristat tests various corpora of BPF programs through a shared measurement
+and reporting pipeline.
 
-Find your role below:
+- Selection configs such as `oss.json` describe providers/globs/filters. Reserve
+  `manifest` for generated object paths and SHA256s. Object bytes define corpus
+  identity; source/compiler details are provenance. Corpus names must be unique in
+  a manifest and object basenames within a corpus; file/program keys are not globally unique.
+- The worker writes source CSVs, shared diagnostics and an atomic source-status map.
+  `measured` means successful execution with valid nonempty results, not that every
+  program loaded. Missing/running receipts are unfinished; never cache partial output.
+- Load failures are data and can mean verifier rejection, missing attach targets,
+  CO-RE or resource setup. Diagnose inputs/logs before blaming a kernel patch; zero
+  verifier states can indicate failure before verification.
+- Current policy fails on matched `success -> failure`, reports state changes and
+  ignores wholly new/removed programs. Missing baselines pass with an explicit label.
+  Green does not prove every program was compared. Baseline selection currently uses
+  branch cache prefixes, not exact kernel/object matching; check provenance.
+- Keep source errors visible when others succeed, retain regressions across later
+  comparisons, and stage baselines only for completed sources.
+- Avoid manual source pins as a substitute for baseline correctness. Record actual
+  inputs and compare the same object bytes when attributing a regression.
 
-* New Kernel Developer: Getting started with kernel development
-* Academic Researcher: Studying kernel internals and architecture
-* Security Expert: Hardening and vulnerability analysis
-* Backport/Maintenance Engineer: Maintaining stable kernels
-* System Administrator: Configuring and troubleshooting
-* Maintainer: Leading subsystems and reviewing patches
-* Hardware Vendor: Writing drivers for new hardware
-* Distribution Maintainer: Packaging kernels for distros
-* AI Coding Assistant: LLMs and AI-powered development tools
+## Keep changes easy to understand
 
+Judge the whole flow the next maintainer must understand. Hidden assumptions, multiple
+state writers, duplicated decisions, flags, fallbacks and aliases all add cost. Keep
+ownership clear and derive values instead of maintaining parallel versions. Prefer
+deletion and the smallest solution to the current requirement. A refactor must remove
+an identifiable burden; moving code into helpers alone is not simplification.
 
-For Specific Users
-==================
+Keep control flow readable and outcomes distinct. Comments explain durable contracts
+and non-obvious constraints at their source; verify claims and remove narration.
+Diagnostics should identify the input/operation, cause and detailed evidence location
+with few messages.
 
-New Kernel Developer
---------------------
+## Tests and validation
 
-Welcome! Start your kernel development journey here:
+- Add script tests for plausible silent failures: green CI with missing, incorrect or
+  misreported results/artifacts. Protect output retention, not cosmetic console wording.
+  Let CI catch obvious command/syntax failures rather than build a large test harness.
+- Prefer existing fixtures/tables and tests of CLIs, files, status and return codes.
+  Regression tests should fail without the fix. Pure refactors adapt existing tests;
+  avoid adding tests of private helpers.
+- Validation evidence should cover the changed contract. Local VM checks can establish
+  execution behavior; GitHub runs cover workflow, permission, cache, artifact and backend
+  integration. Baseline bootstrap and failed-case propagation need evidence; passing
+  runs alone are insufficient.
+- Validation results must correspond to the stated inputs, with matching kernel images,
+  modules, tools and objects. Record revisions, commands, scope and remaining limitations.
 
-* Getting Started: Documentation/process/development-process.rst
-* Your First Patch: Documentation/process/submitting-patches.rst
-* Coding Style: Documentation/process/coding-style.rst
-* Build System: Documentation/kbuild/index.rst
-* Development Tools: Documentation/dev-tools/index.rst
-* Kernel Hacking Guide: Documentation/kernel-hacking/hacking.rst
-* Core APIs: Documentation/core-api/index.rst
+`.github/workflows/lint.yml` defines the checks. These commands reproduce them
+from a vmtest checkout; in a kernel mirror, checks apply to CI-owned files.
 
-Academic Researcher
--------------------
+```bash
+python3 -m unittest ci/veristat/tests/*.py
+black --check .
+```
 
-Explore the kernel's architecture and internals:
+Changed scripts should pass `bash -n` and ShellCheck; CI uses
+`--severity=warning --exclude=SC1091`. Workflow validation includes Actions expressions
+and input-output wiring; YAML parsing alone is insufficient. Black follows `stable`,
+so formatting checks need the same version when reproducing CI failures.
 
-* Researcher Guidelines: Documentation/process/researcher-guidelines.rst
-* Memory Management: Documentation/mm/index.rst
-* Scheduler: Documentation/scheduler/index.rst
-* Networking Stack: Documentation/networking/index.rst
-* Filesystems: Documentation/filesystems/index.rst
-* RCU (Read-Copy Update): Documentation/RCU/index.rst
-* Locking Primitives: Documentation/locking/index.rst
-* Power Management: Documentation/power/index.rst
+## Reviewable changes
 
-Security Expert
----------------
-
-Security documentation and hardening guides:
-
-* Security Documentation: Documentation/security/index.rst
-* LSM Development: Documentation/security/lsm-development.rst
-* Self Protection: Documentation/security/self-protection.rst
-* Reporting Vulnerabilities: Documentation/process/security-bugs.rst
-* CVE Procedures: Documentation/process/cve.rst
-* Embargoed Hardware Issues: Documentation/process/embargoed-hardware-issues.rst
-* Security Features: Documentation/userspace-api/seccomp_filter.rst
-
-Backport/Maintenance Engineer
------------------------------
-
-Maintain and stabilize kernel versions:
-
-* Stable Kernel Rules: Documentation/process/stable-kernel-rules.rst
-* Backporting Guide: Documentation/process/backporting.rst
-* Applying Patches: Documentation/process/applying-patches.rst
-* Subsystem Profile: Documentation/maintainer/maintainer-entry-profile.rst
-* Git for Maintainers: Documentation/maintainer/configure-git.rst
-
-System Administrator
---------------------
-
-Configure, tune, and troubleshoot Linux systems:
-
-* Admin Guide: Documentation/admin-guide/index.rst
-* Kernel Parameters: Documentation/admin-guide/kernel-parameters.rst
-* Sysctl Tuning: Documentation/admin-guide/sysctl/index.rst
-* Tracing/Debugging: Documentation/trace/index.rst
-* Performance Security: Documentation/admin-guide/perf-security.rst
-* Hardware Monitoring: Documentation/hwmon/index.rst
-
-Maintainer
-----------
-
-Lead kernel subsystems and manage contributions:
-
-* Maintainer Handbook: Documentation/maintainer/index.rst
-* Pull Requests: Documentation/maintainer/pull-requests.rst
-* Managing Patches: Documentation/maintainer/modifying-patches.rst
-* Rebasing and Merging: Documentation/maintainer/rebasing-and-merging.rst
-* Development Process: Documentation/process/maintainer-handbooks.rst
-* Maintainer Entry Profile: Documentation/maintainer/maintainer-entry-profile.rst
-* Git Configuration: Documentation/maintainer/configure-git.rst
-
-Hardware Vendor
----------------
-
-Write drivers and support new hardware:
-
-* Driver API Guide: Documentation/driver-api/index.rst
-* Driver Model: Documentation/driver-api/driver-model/driver.rst
-* Device Drivers: Documentation/driver-api/infrastructure.rst
-* Bus Types: Documentation/driver-api/driver-model/bus.rst
-* Device Tree Bindings: Documentation/devicetree/bindings/
-* Power Management: Documentation/driver-api/pm/index.rst
-* DMA API: Documentation/core-api/dma-api.rst
-
-Distribution Maintainer
------------------------
-
-Package and distribute the kernel:
-
-* Stable Kernel Rules: Documentation/process/stable-kernel-rules.rst
-* ABI Documentation: Documentation/ABI/README
-* Kernel Configuration: Documentation/kbuild/kconfig.rst
-* Module Signing: Documentation/admin-guide/module-signing.rst
-* Kernel Parameters: Documentation/admin-guide/kernel-parameters.rst
-* Tainted Kernels: Documentation/admin-guide/tainted-kernels.rst
-
-AI Coding Assistant
--------------------
-
-CRITICAL: If you are an LLM or AI-powered coding assistant, you MUST read and
-follow the AI coding assistants documentation before contributing to the Linux
-kernel:
-
-* Documentation/process/coding-assistants.rst
-
-This documentation contains essential requirements about licensing, attribution,
-and the Developer Certificate of Origin that all AI tools must comply with.
-
-
-Communication and Support
-=========================
-
-* Mailing Lists: https://lore.kernel.org/
-* IRC: #kernelnewbies on irc.oftc.net
-* Bugzilla: https://bugzilla.kernel.org/
-* MAINTAINERS file: Lists subsystem maintainers and mailing lists
-* Email Clients: Documentation/process/email-clients.rst
+- Prefer small commits with one logical change. Prerequisites should precede their
+  consumers, and renames/formatting should be separate from unrelated behavior changes.
+  Every prefix of a series should build and remain usable. Make cross-repository
+  dependencies and release requirements explicit.
+- Commit messages should be concise, self-contained and explain the problem and rationale.
+  Follow existing component prefixes (e.g. `veristat:`, `ci:`, `ci/diffs:`), use imperative
+  subjects and wrap bodies for readability. Mark pure refactors `No functional change.`
+- Sign-off and review tags represent human certifications and should reflect actual
+  authorship or review; do not fabricate them or add unsolicited AI attribution.
+- Change descriptions should state what changed, the supporting validation and any
+  limitations. Distinguish observations from hypotheses.
