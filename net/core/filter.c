@@ -5957,6 +5957,48 @@ const struct bpf_func_proto bpf_sk_setsockopt_proto = {
 	.arg5_type	= ARG_MEM_SIZE,
 };
 
+/*
+ * security_inet_csk_clone() runs at the end of inet_csk_clone_lock(), the
+ * child is locked but not set up yet: its timers are not initialized, it
+ * holds no reference on icsk_ca_ops, an IPv6 child still points to the
+ * ipv6_pinfo of the listener and a MPTCP subflow has no msk.
+ */
+BPF_CALL_5(bpf_sk_clone_setsockopt, struct sock *, sk, int, level,
+	   int, optname, char *, optval, int, optlen)
+{
+	bool mptcp = sk_fullsock(sk) && sk_is_tcp(sk) && sk_is_mptcp(sk);
+
+	switch (level) {
+	case SOL_SOCKET:
+		if (optname == SO_KEEPALIVE ||
+		    (optname == SO_SNDBUF && mptcp))
+			return -EOPNOTSUPP;
+		break;
+	case SOL_TCP:
+		if (optname == TCP_KEEPIDLE || optname == TCP_CONGESTION ||
+		    (optname == TCP_NOTSENT_LOWAT && mptcp))
+			return -EOPNOTSUPP;
+		break;
+	case SOL_IPV6:
+		if (optname == IPV6_TCLASS)
+			return -EOPNOTSUPP;
+		break;
+	}
+
+	return _bpf_setsockopt(sk, level, optname, optval, optlen);
+}
+
+const struct bpf_func_proto bpf_sk_clone_setsockopt_proto = {
+	.func		= bpf_sk_clone_setsockopt,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID_SOCK_COMMON,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
+	.arg5_type	= ARG_MEM_SIZE,
+};
+
 BPF_CALL_5(bpf_sk_getsockopt, struct sock *, sk, int, level,
 	   int, optname, char *, optval, int, optlen)
 {
