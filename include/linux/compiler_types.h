@@ -67,7 +67,7 @@ static inline void __chk_io_ptr(const volatile void __iomem *ptr) { }
 # else
 #  define __user	BTF_TYPE_TAG(user)
 # endif
-# define __iomem
+# define __iomem	BTF_TYPE_TAG(iomem)
 # define __percpu	__percpu_qual BTF_TYPE_TAG(percpu)
 # define __rcu		BTF_TYPE_TAG(rcu)
 

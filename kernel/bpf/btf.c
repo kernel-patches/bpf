@@ -7662,6 +7662,13 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	if (!btf_type_is_struct_ptr(btf, t))
 		return true;
 
+	/*
+	 * An __iomem pointer holds the address of a device register. A load
+	 * through it would read the device, so treat it as a scalar too.
+	 */
+	if (btf_ptr_has_type_tag(btf, t, "iomem"))
+		return true;
+
 	/* this is a pointer to another type */
 	for (i = 0; i < prog->aux->ctx_arg_info_size; i++) {
 		const struct bpf_ctx_arg_aux *ctx_arg_info = &prog->aux->ctx_arg_info[i];
@@ -8050,6 +8057,14 @@ error:
 					mname, moff, tname, off, size);
 				return -EACCES;
 			}
+
+			/*
+			 * An __iomem pointer holds the address of a device
+			 * register. A load through it would read the device, so
+			 * hand out a scalar, which cannot be followed.
+			 */
+			if (btf_ptr_has_type_tag(btf, mtype, "iomem"))
+				return WALK_SCALAR;
 
 			err = btf_type_tag_walk(btf, &ctx, walk_type_tags,
 						ARRAY_SIZE(walk_type_tags));
