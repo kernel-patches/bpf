@@ -936,11 +936,12 @@ static int rxgk_construct_response(struct rxrpc_connection *conn,
 	if (IS_ERR(gk))
 		return PTR_ERR(gk);
 
-	auth_len = 20 + (4 + appdata->len) + 12 + (1 + 4) * 4;
+	auth_len = 20 + (4 + xdr_round_up(appdata->len)) + 12 + (1 + 4) * 4;
 	authx_len = crypto_krb5_how_much_buffer(gk->krb5, KRB5_ENCRYPT_MODE,
 						auth_len, &auth_offset);
 	len = sizeof(struct rxrpc_wire_header) +
-		8 + (4 + xdr_round_up(gk->key->ticket.len)) + (4 + authx_len);
+		8 + (4 + xdr_round_up(gk->key->ticket.len)) +
+		(4 + xdr_round_up(authx_len));
 
 	response = alloc_skb_with_frags(0, len, 0, &ret, GFP_NOFS);
 	if (!response)
