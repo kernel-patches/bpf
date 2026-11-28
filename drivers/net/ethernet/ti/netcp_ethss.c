@@ -3042,6 +3042,7 @@ static int init_slave(struct gbe_priv *gbe_dev, struct gbe_slave *slave,
 	} else {
 		dev_err(gbe_dev->dev, "unknown ethss(0x%x)\n",
 			gbe_dev->ss_version);
+		of_node_put(slave->phy_node);
 		return -EINVAL;
 	}
 
@@ -3208,6 +3209,7 @@ static void free_secondary_ports(struct gbe_priv *gbe_dev)
 
 		if (slave->phy)
 			phy_disconnect(slave->phy);
+		of_node_put(slave->phy_node);
 		list_del(&slave->slave_list);
 	}
 	if (gbe_dev->dummy_ndev)
@@ -3780,6 +3782,7 @@ static int gbe_release(void *intf_priv)
 
 	gbe_intf->ndev->ethtool_ops = NULL;
 	list_del(&gbe_intf->gbe_intf_list);
+	of_node_put(gbe_intf->slave->phy_node);
 	devm_kfree(gbe_intf->dev, gbe_intf->slave);
 	devm_kfree(gbe_intf->dev, gbe_intf);
 	return 0;
