@@ -340,7 +340,7 @@ static void amdgpu_gem_object_close(struct drm_gem_object *obj,
 
 	drm_exec_init(&exec, DRM_EXEC_IGNORE_DUPLICATES, 0);
 	drm_exec_until_all_locked(&exec) {
-		r = drm_exec_prepare_obj(&exec, &bo->tbo.base, 1);
+		r = drm_exec_prepare_obj(&exec, &bo->tbo.base, 2); /* clear_freed + last_tlb_inv */
 		drm_exec_retry_on_contention(&exec);
 		if (unlikely(r))
 			goto out_unlock;
@@ -371,10 +371,13 @@ static void amdgpu_gem_object_close(struct drm_gem_object *obj,
 		dev_err(adev->dev, "failed to clear page "
 			"tables on GEM object close (%ld)\n", r);
 	if (r || !fence)
-		goto out_unlock;
+		goto out_tlb;
 
-	amdgpu_bo_fence(bo, fence, true);
+	dma_resv_add_fence(bo->tbo.base.resv, fence, DMA_RESV_USAGE_BOOKKEEP);
 	dma_fence_put(fence);
+
+out_tlb:
+	dma_resv_add_fence(bo->tbo.base.resv, vm->last_tlb_inv, DMA_RESV_USAGE_BOOKKEEP);
 
 out_unlock:
 	if (r && !drm_dev_is_unplugged(adev_to_drm(adev)))
@@ -500,6 +503,14 @@ int amdgpu_gem_create_ioctl(struct drm_device *dev, void *data,
 		r = amdgpu_bo_reserve(vm->root.bo, false);
 		if (r)
 			return r;
+
+		/* ttm_bo_init_reserved() + clear fence */
+		r = dma_resv_reserve_fences(vm->root.bo->tbo.base.resv,
+					    TTM_NUM_MOVE_FENCES + 1);
+		if (r) {
+			amdgpu_bo_unreserve(vm->root.bo);
+			return r;
+		}
 
 		resv = vm->root.bo->tbo.base.resv;
 	}

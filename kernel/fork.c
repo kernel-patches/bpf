@@ -2328,9 +2328,12 @@ __latent_entropy struct task_struct *copy_process(
 	retval = copy_mm(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_signal;
-	retval = copy_namespaces(clone_flags, p);
+	retval = user_events_fork(p, clone_flags);
 	if (retval)
 		goto bad_fork_cleanup_mm;
+	retval = copy_namespaces(clone_flags, p);
+	if (retval)
+		goto bad_fork_cleanup_user_events;
 	retval = copy_io(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_namespaces;
@@ -2598,7 +2601,6 @@ __latent_entropy struct task_struct *copy_process(
 
 	trace_task_newtask(p, clone_flags);
 	uprobe_copy_process(p, clone_flags);
-	user_events_fork(p, clone_flags);
 
 	copy_oom_score_adj(clone_flags, p);
 
@@ -2625,11 +2627,19 @@ bad_fork_cleanup_io:
 		exit_io_context(p);
 bad_fork_cleanup_namespaces:
 	exit_nsproxy_namespaces(p);
+bad_fork_cleanup_user_events:
+	user_events_exit(p);
 bad_fork_cleanup_mm:
 	sched_cache_fork_cleanup(p);
 	if (p->mm) {
-		mm_clear_owner(p->mm, p);
-		mmput(p->mm);
+		struct mm_struct *mm = p->mm;
+
+		/* Perf events and BPF programs can still reach p. */
+		task_lock(p);
+		p->mm = NULL;
+		task_unlock(p);
+		mm_clear_owner(mm, p);
+		mmput(mm);
 	}
 bad_fork_cleanup_signal:
 	if (!(clone_flags & CLONE_THREAD))
@@ -2663,6 +2673,11 @@ bad_fork_cleanup_count:
 	exit_cred_namespaces(p);
 	exit_creds(p);
 bad_fork_free:
+	/*
+	 * If set, p->mm points at the parent's mm without a reference. Nobody
+	 * can access it concurrently anymore, but prevent later access.
+	 */
+	p->mm = NULL;
 	WRITE_ONCE(p->__state, TASK_DEAD);
 	exit_task_stack_account(p);
 	put_task_stack(p);

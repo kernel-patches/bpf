@@ -1264,6 +1264,7 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 	int i, cnt, size, ctx_field_size, ret, epilogue_cnt = 0, first = 0;
 	struct bpf_insn *epilogue_buf = env->epilogue_buf;
 	struct bpf_insn *insn_buf = env->insn_buf;
+	bool nospec, nospec_next = false;
 	struct bpf_insn *insn;
 	u32 target_size, size_default, off;
 	enum bpf_access_type type;
@@ -1338,8 +1339,13 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 
 		insn = &env->prog->insnsi[i];
 
-		if (env->insn_aux_data[i].nospec) {
-			WARN_ON_ONCE(env->insn_aux_data[i].alu_state);
+		/* A call or an atomic gets its nospec in front of the next insn */
+		nospec = env->insn_aux_data[i].nospec;
+		WARN_ON_ONCE(nospec && env->insn_aux_data[i].alu_state);
+		nospec |= nospec_next;
+		nospec_next = env->insn_aux_data[i].nospec_result;
+
+		if (nospec) {
 			struct bpf_insn *patch = insn_buf;
 
 			*patch++ = BPF_ST_NOSPEC();
@@ -1426,6 +1432,7 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			insn = bpf_patch_list_add(env, i, insn_buf, cnt);
 			if (IS_ERR(insn))
 				return PTR_ERR(insn);
+			nospec_next = false;
 			continue;
 		}
 
@@ -1866,6 +1873,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	prog->jited_len = func[0]->jited_len;
 	prog->aux->extable = func[0]->aux->extable;
 	prog->aux->num_exentries = func[0]->aux->num_exentries;
+	prog->aux->ksym.fp_start = func[0]->aux->ksym.fp_start;
+	prog->aux->ksym.fp_end = func[0]->aux->ksym.fp_end;
+	prog->aux->ksym.fp_ret = func[0]->aux->ksym.fp_ret;
 	prog->aux->func = func;
 	prog->aux->func_cnt = env->subprog_cnt - env->hidden_subprog_cnt;
 	prog->aux->real_func_cnt = env->subprog_cnt;
@@ -2645,6 +2655,10 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			 * the program array.
 			 */
 			prog->cb_access = 1;
+			prog->call_get_func_ip = 1;
+			if (prog_type == BPF_PROG_TYPE_TRACING &&
+			    (eatype == BPF_TRACE_FSESSION || eatype == BPF_TRACE_FSESSION_MULTI))
+				prog->call_session_cookie = 1;
 			if (!bpf_allow_tail_call_in_subprogs(env))
 				prog->aux->stack_depth = MAX_BPF_STACK;
 			prog->aux->max_pkt_offset = MAX_PACKET_OFF;

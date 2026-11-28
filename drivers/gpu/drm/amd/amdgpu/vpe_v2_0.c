@@ -31,9 +31,12 @@
 #include "vpe/vpe_2_0_0_sh_mask.h"
 
 MODULE_FIRMWARE("amdgpu/vpe_2_0_0.bin");
+MODULE_FIRMWARE("amdgpu/vpe_2_0_0_l.bin");
+MODULE_FIRMWARE("amdgpu/vpe_2_0_0_p.bin");
 MODULE_FIRMWARE("amdgpu/vpe_2_2_0.bin");
 
 #define VPE_THREAD1_UCODE_OFFSET	0x8000
+#define regVPEC_F32_CNTL_DEFAULT	0x08084001
 
 static uint32_t vpe_v2_0_get_reg_offset(struct amdgpu_vpe *vpe, uint32_t inst, uint32_t offset)
 {
@@ -80,7 +83,7 @@ static int vpe_v2_0_load_microcode(struct amdgpu_vpe *vpe)
 	if (adev->firmware.load_type == AMDGPU_FW_LOAD_PSP) {
 
 		f32_offset = vpe_get_reg_offset(vpe, 0, regVPEC_F32_CNTL);
-		f32_cntl = RREG32(f32_offset);
+		f32_cntl = regVPEC_F32_CNTL_DEFAULT;
 		f32_cntl = REG_SET_FIELD(f32_cntl, VPEC_F32_CNTL, HALT, 0);
 		f32_cntl = REG_SET_FIELD(f32_cntl, VPEC_F32_CNTL, TH1_RESET, 0);
 

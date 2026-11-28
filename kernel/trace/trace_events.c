@@ -707,7 +707,7 @@ void *trace_event_buffer_reserve(struct trace_event_buffer *fbuffer,
 {
 	struct trace_event_call *event_call = trace_file->event_call;
 
-	if ((trace_file->flags & EVENT_FILE_FL_PID_FILTER) &&
+	if (test_bit(EVENT_FILE_FL_PID_FILTER_BIT, &trace_file->flags) &&
 	    trace_event_ignore_this_pid(trace_file))
 		return NULL;
 
@@ -4317,7 +4317,7 @@ static void update_event_probe(struct event_probe_data *data)
 		set_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &data->file->flags);
 }
 
-static void
+static void notrace
 event_enable_probe(unsigned long ip, unsigned long parent_ip,
 		   struct trace_array *tr, struct ftrace_probe_ops *ops,
 		   void *data)
@@ -4334,7 +4334,7 @@ event_enable_probe(unsigned long ip, unsigned long parent_ip,
 	update_event_probe(edata);
 }
 
-static void
+static void notrace
 event_enable_count_probe(unsigned long ip, unsigned long parent_ip,
 			 struct trace_array *tr, struct ftrace_probe_ops *ops,
 			 void *data)
@@ -5026,8 +5026,8 @@ void __init trace_event_init(void)
 {
 	event_trace_memsetup();
 	init_ftrace_syscalls();
-	event_trace_enable();
 	event_trace_init_fields();
+	event_trace_enable();
 }
 
 #ifdef CONFIG_EVENT_TRACE_STARTUP_TEST
@@ -5205,7 +5205,7 @@ static DEFINE_PER_CPU(atomic_t, ftrace_test_event_disable);
 
 static struct trace_event_file event_trace_file __initdata;
 
-static void __init
+static void notrace __init
 function_test_events_call(unsigned long ip, unsigned long parent_ip,
 			  struct ftrace_ops *op, struct ftrace_regs *regs)
 {

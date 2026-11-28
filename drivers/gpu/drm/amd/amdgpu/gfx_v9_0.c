@@ -1369,6 +1369,9 @@ struct amdgpu_gfxoff_quirk {
 	u8 revision;
 };
 
+/* Match any chip revision in amdgpu_gfxoff_quirk.revision */
+#define AMDGPU_GFXOFF_QUIRK_ANY_REV	0xff
+
 static const struct amdgpu_gfxoff_quirk amdgpu_gfxoff_quirk_list[] = {
 	/* https://bugzilla.kernel.org/show_bug.cgi?id=204689 */
 	{ 0x1002, 0x15dd, 0x1002, 0x15dd, 0xc8 },
@@ -1378,6 +1381,7 @@ static const struct amdgpu_gfxoff_quirk amdgpu_gfxoff_quirk_list[] = {
 	{ 0x1002, 0x15dd, 0x1002, 0x15dd, 0xc6 },
 	/* Apple MacBook Pro (15-inch, 2019) Radeon Pro Vega 20 4 GB */
 	{ 0x1002, 0x69af, 0x106b, 0x019a, 0xc0 },
+	{ 0x1002, 0x15d8, 0x17aa, 0x318f, AMDGPU_GFXOFF_QUIRK_ANY_REV },
 	/* https://bbs.openkylin.top/t/topic/171497 */
 	{ 0x1002, 0x15d8, 0x19e5, 0x3e14, 0xc2 },
 	/* HP 705G4 DM with R5 2400G */
@@ -1394,7 +1398,8 @@ static bool gfx_v9_0_should_disable_gfxoff(struct pci_dev *pdev)
 		    pdev->device == p->chip_device &&
 		    pdev->subsystem_vendor == p->subsys_vendor &&
 		    pdev->subsystem_device == p->subsys_device &&
-		    pdev->revision == p->revision) {
+		    (p->revision == AMDGPU_GFXOFF_QUIRK_ANY_REV ||
+		     pdev->revision == p->revision)) {
 			return true;
 		}
 		++p;
@@ -4076,39 +4081,79 @@ err_priv_inst:
 	return r;
 }
 
-static void gfx_v9_0_deactivate_kcq_hqd(struct amdgpu_device *adev)
+/* caller must hold srbm_mutex and have selected me/pipe/queue */
+static bool gfx_v9_0_deactivate_hqd(struct amdgpu_device *adev,
+				    u32 me, u32 pipe, u32 queue)
 {
-	amdgpu_gfx_rlc_enter_safe_mode(adev, 0);
-	for (int i = 0; i < adev->gfx.num_compute_rings; i++) {
-		u32 tmp;
-		struct amdgpu_ring *ring = &adev->gfx.compute_ring[i];
+	int j;
 
-		mutex_lock(&adev->srbm_mutex);
-		soc15_grbm_select(adev, ring->me, ring->pipe, ring->queue, 0, 0);
-		tmp = RREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE);
-		/* disable the queue if it's active */
-		if (tmp & CP_HQD_ACTIVE__ACTIVE_MASK) {
-			int j;
+	/* disable the queue if it's active */
+	if (!(RREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE) & CP_HQD_ACTIVE__ACTIVE_MASK))
+		return false;
 
-			WREG32_SOC15(GC, 0, mmCP_HQD_DEQUEUE_REQUEST, 1);
-			for (j = 0; j < adev->usec_timeout; j++) {
-				tmp = RREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE);
-				if (!(tmp & CP_HQD_ACTIVE__ACTIVE_MASK))
-					break;
-				udelay(1);
-			}
-			if (j == AMDGPU_MAX_USEC_TIMEOUT) {
-				DRM_DEBUG("comp_%u_%u_%u dequeue request failed.\n",
-							ring->me, ring->pipe, ring->queue);
-				/* Manual disable if dequeue request times out */
-				WREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE, 0);
-			}
-			WREG32_SOC15(GC, 0, mmCP_HQD_DEQUEUE_REQUEST, 0);
-		}
-		soc15_grbm_select(adev, 0, 0, 0, 0, 0);
-		mutex_unlock(&adev->srbm_mutex);
+	WREG32_SOC15(GC, 0, mmCP_HQD_DEQUEUE_REQUEST, 1);
+	for (j = 0; j < adev->usec_timeout; j++) {
+		if (!(RREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE) &
+		      CP_HQD_ACTIVE__ACTIVE_MASK))
+			break;
+		udelay(1);
 	}
+	if (j == adev->usec_timeout) {
+		dev_dbg(adev->dev, "comp_%u_%u_%u dequeue request failed.\n",
+			me, pipe, queue);
+		/* Manual disable if dequeue request times out */
+		WREG32_SOC15(GC, 0, mmCP_HQD_ACTIVE, 0);
+	}
+	WREG32_SOC15(GC, 0, mmCP_HQD_DEQUEUE_REQUEST, 0);
+
+	return true;
+}
+
+/*
+ * MODE2 does not reset the CP HQD registers on gfx9 APUs. Besides the KCQs,
+ * the HQDs owned by KFD (HIQ and the user queues mapped by the HWS) also stay
+ * active, because KFD cannot unmap/destroy them while the reset domain is
+ * locked. After MODE2 the MEC then resumes with stale HQDs and the HWS no
+ * longer answers (qcm fence timeout on the next KFD queue). Deactivate every
+ * active HQD of all MECs except the KIQ, which is reprogrammed on resume.
+ */
+static void gfx_v9_0_deactivate_all_hqd(struct amdgpu_device *adev)
+{
+	struct amdgpu_ring *kiq_ring = &adev->gfx.kiq[0].ring;
+	u64 kiq_mqd_addr = kiq_ring->mqd_gpu_addr & ~0x3ULL;
+	u32 me, pipe, queue, n = 0;
+	u64 mqd_addr;
+
+	amdgpu_gfx_rlc_enter_safe_mode(adev, 0);
+	mutex_lock(&adev->srbm_mutex);
+	for (me = 1; me <= adev->gfx.mec.num_mec; me++) {
+		for (pipe = 0; pipe < adev->gfx.mec.num_pipe_per_mec; pipe++) {
+			for (queue = 0; queue < adev->gfx.mec.num_queue_per_pipe;
+			     queue++) {
+				if (me == kiq_ring->me && pipe == kiq_ring->pipe &&
+				    queue == kiq_ring->queue)
+					continue;
+				soc15_grbm_select(adev, me, pipe, queue, 0, 0);
+				/*
+				 * At least on Renoir the HQD registers of MEC2
+				 * pipes 2/3 read back as those of pipes 0/1, so
+				 * the KIQ shows up a second time. Skip it by its
+				 * MQD address instead of sending it a dequeue.
+				 */
+				mqd_addr = ((u64)RREG32_SOC15(GC, 0, mmCP_MQD_BASE_ADDR_HI) << 32) |
+					   RREG32_SOC15(GC, 0, mmCP_MQD_BASE_ADDR);
+				if (mqd_addr == kiq_mqd_addr)
+					continue;
+				if (gfx_v9_0_deactivate_hqd(adev, me, pipe, queue))
+					n++;
+			}
+		}
+	}
+	soc15_grbm_select(adev, 0, 0, 0, 0, 0);
+	mutex_unlock(&adev->srbm_mutex);
 	amdgpu_gfx_rlc_exit_safe_mode(adev, 0);
+
+	dev_dbg(adev->dev, "deactivated %u active compute HQDs before MODE2\n", n);
 }
 
 static int gfx_v9_0_hw_fini(struct amdgpu_ip_block *ip_block)
@@ -4136,8 +4181,8 @@ static int gfx_v9_0_hw_fini(struct amdgpu_ip_block *ip_block)
 	}
 
 	if ((adev->flags & AMD_IS_APU) && amdgpu_in_reset(adev) &&
-		amdgpu_asic_reset_method(adev) == AMD_RESET_METHOD_MODE2)
-		gfx_v9_0_deactivate_kcq_hqd(adev);
+	    amdgpu_asic_reset_method(adev) == AMD_RESET_METHOD_MODE2)
+		gfx_v9_0_deactivate_all_hqd(adev);
 
 	/* Use deinitialize sequence from CAIL when unbinding device from driver,
 	 * otherwise KIQ is hanging when binding back

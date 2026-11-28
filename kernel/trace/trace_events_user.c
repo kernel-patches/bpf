@@ -256,6 +256,11 @@ static void delayed_destroy_user_event(struct work_struct *work)
 		 * attempt to delete it later.
 		 */
 		pr_warn("user_events: Unable to delete event\n");
+		/*
+		 * Keep it as persistent so it can be still deleted
+		 * since nobody own this event
+		 */
+		user->reg_flags |= USER_EVENT_REG_PERSIST;
 		refcount_set(&user->refcnt, 1);
 	}
 out:
@@ -863,7 +868,7 @@ void user_event_mm_remove(struct task_struct *t)
 	queue_rcu_work(system_percpu_wq, &mm->put_rwork);
 }
 
-void user_event_mm_dup(struct task_struct *t, struct user_event_mm *old_mm)
+int user_event_mm_dup(struct task_struct *t, struct user_event_mm *old_mm)
 {
 	struct user_event_mm *mm = user_event_mm_alloc(t);
 	struct user_event_enabler *enabler;
@@ -872,7 +877,7 @@ void user_event_mm_dup(struct task_struct *t, struct user_event_mm *old_mm)
 	t->user_event_mm = NULL;
 
 	if (!mm)
-		return;
+		return -ENOMEM;
 
 	rcu_read_lock();
 
@@ -884,10 +889,12 @@ void user_event_mm_dup(struct task_struct *t, struct user_event_mm *old_mm)
 	rcu_read_unlock();
 
 	user_event_mm_attach(mm, t);
-	return;
+	return 0;
 error:
 	rcu_read_unlock();
 	user_event_mm_destroy(mm);
+
+	return -ENOMEM;
 }
 
 static bool current_user_event_enabler_exists(unsigned long uaddr,
@@ -1034,6 +1041,9 @@ static int user_event_parse_cmd(struct user_event_group *group,
 
 	if (flags)
 		*flags++ = '\0';
+
+	if (strstr(name, "/") != NULL)
+		return -EINVAL;
 
 	return user_event_parse(group, name, args, flags, newuser, reg_flags);
 }
@@ -1505,6 +1515,10 @@ static int destroy_user_event(struct user_event *user)
 	int ret = 0;
 
 	lockdep_assert_held(&event_mutex);
+
+	/* If there is a reference to a dynamic event */
+	if (trace_event_dyn_busy(&user->call))
+		return -EBUSY;
 
 	/*
 	 * Detach the fields before removing the call. Removing the event
