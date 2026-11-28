@@ -2686,9 +2686,14 @@ void r8169_apply_firmware(struct rtl8169_private *tp)
 
 	/* TODO: release firmware if rtl_fw_write_firmware signals failure. */
 	if (tp->rtl_fw) {
+		/* Keep phylib users (hwmon, PTP) off the bus meanwhile. */
+		if (tp->phydev)
+			phy_lock_mdio_bus(tp->phydev);
 		rtl_fw_write_firmware(tp, tp->rtl_fw);
 		/* At least one firmware doesn't reset tp->ocp_base. */
 		tp->ocp_base = OCP_STD_PHY_BASE;
+		if (tp->phydev)
+			phy_unlock_mdio_bus(tp->phydev);
 
 		/* PHY soft reset may still be in progress */
 		if (tp->phydev)
@@ -5228,6 +5233,7 @@ static void rtl_tx(struct net_device *dev, struct rtl8169_private *tp,
 		   int budget)
 {
 	unsigned int dirty_tx, bytes_compl = 0, pkts_compl = 0;
+	bool recheck = tp->irq_nvecs > 1;
 	struct sk_buff *skb;
 
 	dirty_tx = tp->dirty_tx;
@@ -5237,8 +5243,17 @@ static void rtl_tx(struct net_device *dev, struct rtl8169_private *tp,
 		u32 status;
 
 		status = le32_to_cpu(READ_ONCE(tp->TxDescArray[entry].opts1));
-		if (status & DescOwn)
-			break;
+		if (status & DescOwn) {
+			/* The vector-map TX interrupt can arrive before the
+			 * descriptor write-back is visible. A register read
+			 * makes it visible; look once more.
+			 */
+			if (!recheck)
+				break;
+			recheck = false;
+			RTL_R8(tp, IMR_CLEAR_VEC_MAP_REG);
+			continue;
+		}
 
 		skb = tp->tx_skb[entry].skb;
 		rtl8169_unmap_tx_skb(tp, entry);
@@ -5670,8 +5685,17 @@ static int rtl8169_poll(struct napi_struct *napi, int budget)
 	/* rtl8169_poll() is used only when there is a single RX ring. */
 	work_done = rtl_rx(dev, tp, &tp->rx_ring[0], budget, napi);
 
-	if (work_done < budget && napi_complete_done(napi, work_done))
-		rtl_irq_enable(tp);
+	if (work_done < budget) {
+		/* At least the RTL8125B stops receiving after running out of
+		 * RX descriptors until RxOverflow is cleared. All descriptors
+		 * are back with the chip now, so clear it, also when busy
+		 * polling keeps NAPI from completing.
+		 */
+		rtl_ack_events(tp, RxOverflow);
+
+		if (napi_complete_done(napi, work_done))
+			rtl_irq_enable(tp);
+	}
 
 	return work_done;
 }

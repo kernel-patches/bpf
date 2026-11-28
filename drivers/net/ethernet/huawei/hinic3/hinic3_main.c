@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+#include <linux/bitmap.h>
 #include <linux/etherdevice.h>
 #include <linux/netdevice.h>
 
@@ -32,6 +33,8 @@
 
 #define HINIC3_RX_PENDING_LIMIT_LOW   2
 #define HINIC3_RX_PENDING_LIMIT_HIGH  8
+
+#define HINIC3_RX_OOM_POLL_MS         250
 
 static void init_intr_coal_param(struct net_device *netdev)
 {
@@ -76,6 +79,43 @@ static void hinic3_free_intr_coalesce(struct net_device *netdev)
 	kfree(nic_dev->intr_coalesce);
 }
 
+static void hinic3_rx_oom_work(struct work_struct *work)
+{
+	struct hinic3_nic_dev *nic_dev =
+		container_of(work, struct hinic3_nic_dev, rx_oom_work.work);
+	struct hinic3_rxq *rxq;
+	u16 q_id;
+
+	if (!test_bit(HINIC3_INTF_UP, &nic_dev->flags)) {
+		/* hinic3_open() sets the flag after the vport is enabled and
+		 * hinic3_close() clears it before the channel goes away, so
+		 * keep the pending queues and retry.  The teardown path
+		 * disables the work, which bounds the retries.
+		 */
+		schedule_delayed_work(&nic_dev->rx_oom_work,
+				      msecs_to_jiffies(HINIC3_RX_OOM_POLL_MS));
+		return;
+	}
+
+	for (q_id = 0; q_id < nic_dev->q_params.num_qps; q_id++) {
+		rxq = &nic_dev->rxqs[q_id];
+
+		if (!test_and_clear_bit(q_id, nic_dev->rx_oom_bitmap))
+			continue;
+
+		napi_schedule(&rxq->irq_cfg->napi);
+	}
+}
+
+void hinic3_rx_oom_schedule(struct net_device *netdev, u16 q_id)
+{
+	struct hinic3_nic_dev *nic_dev = netdev_priv(netdev);
+
+	set_bit(q_id, nic_dev->rx_oom_bitmap);
+	schedule_delayed_work(&nic_dev->rx_oom_work,
+			      msecs_to_jiffies(HINIC3_RX_OOM_POLL_MS));
+}
+
 static int hinic3_alloc_txrxqs(struct net_device *netdev)
 {
 	struct hinic3_nic_dev *nic_dev = netdev_priv(netdev);
@@ -94,14 +134,29 @@ static int hinic3_alloc_txrxqs(struct net_device *netdev)
 		goto err_free_txqs;
 	}
 
+	nic_dev->rx_oom_bitmap = bitmap_zalloc(nic_dev->max_qps, GFP_KERNEL);
+	if (!nic_dev->rx_oom_bitmap) {
+		dev_err(hwdev->dev, "Failed to alloc rx oom bitmap\n");
+		err = -ENOMEM;
+		goto err_free_rxqs;
+	}
+	INIT_DELAYED_WORK(&nic_dev->rx_oom_work, hinic3_rx_oom_work);
+	/* The work starts disabled; hinic3_qps_irq_init() enables it and
+	 * hinic3_qps_irq_uninit() disables it again.
+	 */
+	disable_delayed_work(&nic_dev->rx_oom_work);
+
 	err = hinic3_init_intr_coalesce(netdev);
 	if (err) {
 		dev_err(hwdev->dev, "Failed to init_intr_coalesce\n");
-		goto err_free_rxqs;
+		goto err_free_rx_oom_bitmap;
 	}
 
 	return 0;
 
+err_free_rx_oom_bitmap:
+	bitmap_free(nic_dev->rx_oom_bitmap);
+	nic_dev->rx_oom_bitmap = NULL;
 err_free_rxqs:
 	hinic3_free_rxqs(netdev);
 err_free_txqs:
@@ -112,6 +167,12 @@ err_free_txqs:
 
 static void hinic3_free_txrxqs(struct net_device *netdev)
 {
+	struct hinic3_nic_dev *nic_dev = netdev_priv(netdev);
+
+	cancel_delayed_work_sync(&nic_dev->rx_oom_work);
+	bitmap_free(nic_dev->rx_oom_bitmap);
+	nic_dev->rx_oom_bitmap = NULL;
+
 	hinic3_free_intr_coalesce(netdev);
 	hinic3_free_rxqs(netdev);
 	hinic3_free_txqs(netdev);

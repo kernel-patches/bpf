@@ -354,6 +354,9 @@ int phy_mii_ioctl(struct phy_device *phydev, struct ifreq *ifr, int cmd)
 			switch (devad) {
 			case MII_BMCR:
 				if ((val & (BMCR_RESET | BMCR_ANENABLE)) == 0) {
+					if (phydev->drv &&
+					    (phydev->drv->flags & PHY_BROKEN_FORCED))
+						return -EOPNOTSUPP;
 					if (phydev->autoneg == AUTONEG_ENABLE)
 						change_autoneg = true;
 					phydev->autoneg = AUTONEG_DISABLE;
@@ -1190,6 +1193,10 @@ int phy_ethtool_ksettings_set(struct phy_device *phydev,
 	      duplex != DUPLEX_FULL)))
 		return -EINVAL;
 
+	if (autoneg == AUTONEG_DISABLE && phydev->drv &&
+	    (phydev->drv->flags & PHY_BROKEN_FORCED))
+		return -EOPNOTSUPP;
+
 	mutex_lock(&phydev->lock);
 	phydev->autoneg = autoneg;
 
@@ -1416,10 +1423,13 @@ static irqreturn_t phy_interrupt(int irq, void *phy_dat)
 	/* Wakeup interrupts may occur during a system sleep transition.
 	 * Postpone handling until the PHY has resumed.
 	 */
-	if (IS_ENABLED(CONFIG_PM_SLEEP) && phydev->irq_suspended) {
+	if (IS_ENABLED(CONFIG_PM_SLEEP) && READ_ONCE(phydev->irq_suspended)) {
 		struct net_device *netdev = phydev->attached_dev;
 
-		if (netdev) {
+		/* With MAC-managed PM, a postponed interrupt cannot tell
+		 * Wake-on-LAN from a link change the MAC causes.
+		 */
+		if (netdev && !phydev->mac_managed_pm) {
 			struct device *parent = netdev->dev.parent;
 
 			if (netdev->ethtool->wol_enabled)
@@ -1430,8 +1440,12 @@ static irqreturn_t phy_interrupt(int irq, void *phy_dat)
 				pm_wakeup_dev_event(parent, 0, true);
 		}
 
-		phydev->irq_rerun = 1;
-		disable_irq_nosync(irq);
+		/* Disable the line only once: an edge can rerun the thread. */
+		if (!phydev->irq_rerun) {
+			phydev->irq_rerun_line = irq;
+			phydev->irq_rerun = true;
+			disable_irq_nosync(irq);
+		}
 		return IRQ_HANDLED;
 	}
 
@@ -1480,6 +1494,14 @@ void phy_request_interrupt(struct phy_device *phydev)
 {
 	int err;
 
+	/* A line without users restarts at depth 0, so our disable is gone */
+	mutex_lock(&phydev->irq_pm_lock);
+	if (phydev->irq_rerun && !irq_has_action(phydev->irq_rerun_line)) {
+		phydev->irq_rerun = false;
+		phydev->irq_wake_enabled = false;
+	}
+	mutex_unlock(&phydev->irq_pm_lock);
+
 	err = request_threaded_irq(phydev->irq, NULL, phy_interrupt,
 				   IRQF_ONESHOT | IRQF_SHARED,
 				   phydev_name(phydev), phydev);
@@ -1506,8 +1528,17 @@ EXPORT_SYMBOL(phy_request_interrupt);
  */
 void phy_free_interrupt(struct phy_device *phydev)
 {
+	mutex_lock(&phydev->irq_pm_lock);
 	phy_disable_interrupts(phydev);
 	free_irq(phydev->irq, phydev);
+	/* free_irq() shuts down a line left without users and the next request
+	 * resets its depth; mdio_bus_phy_resume_irq() enables a shared line.
+	 */
+	if (!irq_has_action(phydev->irq)) {
+		phydev->irq_rerun = false;
+		phydev->irq_wake_enabled = false;
+	}
+	mutex_unlock(&phydev->irq_pm_lock);
 }
 EXPORT_SYMBOL(phy_free_interrupt);
 

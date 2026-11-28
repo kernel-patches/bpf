@@ -36,6 +36,9 @@ module_param(csum, bool, 0444);
 module_param(gso, bool, 0444);
 module_param(napi_tx, bool, 0644);
 
+/* RX queue stall timeout in seconds. */
+#define VIRTNET_RX_WATCHDOG_TIMEO 5
+
 #define VIRTIO_OFFLOAD_MAP_MIN	46
 #define VIRTIO_OFFLOAD_MAP_MAX	47
 #define VIRTIO_FEATURES_MAP_MIN	65
@@ -131,6 +134,7 @@ struct virtnet_rq_stats {
 	u64_stats_t xdp_redirects;
 	u64_stats_t xdp_drops;
 	u64_stats_t kicks;
+	u64_stats_t stalls;
 };
 
 #define VIRTNET_SQ_STAT(name, m) {name, offsetof(struct virtnet_sq_stats, m), -1}
@@ -164,6 +168,7 @@ static const struct virtnet_stat_desc virtnet_rq_stats_desc[] = {
 	VIRTNET_RQ_STAT("xdp_redirects", xdp_redirects),
 	VIRTNET_RQ_STAT("xdp_drops",     xdp_drops),
 	VIRTNET_RQ_STAT("kicks",         kicks),
+	VIRTNET_RQ_STAT("stalls",   stalls),
 };
 
 static const struct virtnet_stat_desc virtnet_sq_stats_desc_qstat[] = {
@@ -315,7 +320,16 @@ struct send_queue {
 
 	struct xsk_buff_pool *xsk_pool;
 
+	/* All-zero header shared by the AF_XDP packets sent on this queue */
+	struct virtio_net_common_hdr *xsk_hdr;
 	dma_addr_t xsk_hdr_dma_addr;
+};
+
+struct virtnet_rq_watchdog {
+	u16 last_used;
+	u16 calls;
+	unsigned long jiffies;
+	bool stalled;
 };
 
 /* Internal representation of a receive virtqueue */
@@ -331,6 +345,9 @@ struct receive_queue {
 
 	/* The number of rx notifications */
 	u16 calls;
+
+	/* RX watchdog state. */
+	struct virtnet_rq_watchdog watchdog;
 
 	/* Is dynamic interrupt moderation enabled? */
 	bool dim_enabled;
@@ -443,6 +460,9 @@ struct virtnet_info {
 	/* Work struct for setting rx mode */
 	struct work_struct rx_mode_work;
 
+	/* RX watchdog timer for stuck detection */
+	struct timer_list rx_watchdog;
+
 	/* Does the affinity hint is set for virtqueues? */
 	bool affinity_hint_set;
 
@@ -499,8 +519,6 @@ struct virtio_net_common_hdr {
 		struct virtio_net_hdr_v1_hash_tunnel tnl_hdr;
 	};
 };
-
-static struct virtio_net_common_hdr xsk_hdr;
 
 static void virtnet_sq_free_unused_buf(struct virtqueue *vq, void *buf);
 static void virtnet_sq_free_unused_buf_done(struct virtqueue *vq);
@@ -680,8 +698,10 @@ static void give_pages(struct receive_queue *rq, struct page *page)
 	struct page *end;
 
 	/* Find end of list, sew whole thing into vi->rq.pages. */
-	for (end = page; end->private; end = (struct page *)end->private);
-	end->private = (unsigned long)rq->pages;
+	for (end = page; page_private(end);
+	     end = (struct page *)page_private(end))
+		;
+	set_page_private(end, (unsigned long)rq->pages);
 	rq->pages = page;
 }
 
@@ -690,9 +710,9 @@ static struct page *get_a_page(struct receive_queue *rq, gfp_t gfp_mask)
 	struct page *p = rq->pages;
 
 	if (p) {
-		rq->pages = (struct page *)p->private;
+		rq->pages = (struct page *)page_private(p);
 		/* clear private here, it is used to chain pages */
-		p->private = 0;
+		set_page_private(p, 0);
 	} else
 		p = alloc_page(gfp_mask);
 	return p;
@@ -881,7 +901,7 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 		 * Currently, big packets mode doesn't use page pools.
 		 */
 		if (!rq->page_pool) {
-			page = (struct page *)page->private;
+			page = (struct page *)page_private(page);
 			if (page)
 				give_pages(rq, page);
 		}
@@ -929,7 +949,7 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 		skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page, offset,
 				frag_size, truesize);
 		len -= frag_size;
-		page = (struct page *)page->private;
+		page = (struct page *)page_private(page);
 		offset = 0;
 	}
 
@@ -2705,7 +2725,7 @@ static int add_recvbuf_big(struct virtnet_info *vi, struct receive_queue *rq,
 		sg_set_buf(&rq->sg[i], page_address(first), PAGE_SIZE);
 
 		/* chain new page in list head to match sg */
-		first->private = (unsigned long)list;
+		set_page_private(first, (unsigned long)list);
 		list = first;
 	}
 
@@ -2725,7 +2745,7 @@ static int add_recvbuf_big(struct virtnet_info *vi, struct receive_queue *rq,
 	sg_set_buf(&rq->sg[1], p + offset, PAGE_SIZE - offset);
 
 	/* chain first in list head */
-	first->private = (unsigned long)list;
+	set_page_private(first, (unsigned long)list);
 	err = virtqueue_add_inbuf(rq->vq, rq->sg, vi->big_packets_num_skbfrags + 2,
 				  first, gfp);
 	if (err < 0)
@@ -2989,6 +3009,12 @@ static int virtnet_receive(struct receive_queue *rq, int budget,
 		u64_stats_add(item, u64_stats_read(src));
 	}
 
+	/* Count a stall recovered by this poll. */
+	if (rq->watchdog.stalled) {
+		u64_stats_inc(&rq->stats.stalls);
+		rq->watchdog.stalled = false;
+	}
+
 	u64_stats_add(&rq->stats.packets, u64_stats_read(&stats.packets));
 	u64_stats_add(&rq->stats.bytes, u64_stats_read(&stats.bytes));
 	u64_stats_add(&rq->stats.alloc_fail, u64_stats_read(&stats.alloc_fail));
@@ -3088,6 +3114,74 @@ static int virtnet_poll(struct napi_struct *napi, int budget)
 	}
 
 	return received;
+}
+
+/*
+ * An RX queue is stalled if it has a backlog but makes no progress and
+ * gets no new interrupt for VIRTNET_RX_WATCHDOG_TIMEO seconds, usually
+ * because an interrupt was lost.  Mark it stalled and reschedule NAPI to
+ * drain the ring and refill the buffers.
+ */
+static void virtnet_rx_watchdog(struct timer_list *t)
+{
+	struct virtnet_info *vi = timer_container_of(vi, t, rx_watchdog);
+	unsigned long timeout = VIRTNET_RX_WATCHDOG_TIMEO * HZ;
+	int i;
+
+	for (i = 0; i < vi->curr_queue_pairs; i++) {
+		struct receive_queue *rq = &vi->rq[i];
+		u16 last_used = virtqueue_get_last_used_idx(rq->vq);
+		u16 calls = rq->calls;
+		bool backlog = virtqueue_poll(rq->vq, last_used);
+		bool progress = last_used != rq->watchdog.last_used;
+
+		if (!backlog || progress || calls != rq->watchdog.calls) {
+			rq->watchdog.last_used = last_used;
+			rq->watchdog.calls = calls;
+			rq->watchdog.jiffies = jiffies;
+			continue;
+		}
+
+		if (time_after(jiffies, rq->watchdog.jiffies + timeout)) {
+			unsigned int stall_ms =
+				jiffies_to_msecs(jiffies - rq->watchdog.jiffies);
+
+			netdev_warn(vi->dev,
+				    "RX queue %u stalled for %u ms, rescheduling NAPI\n",
+				    i, stall_ms);
+
+			rq->watchdog.stalled = true;
+			virtqueue_napi_schedule(&rq->napi, rq->vq);
+
+			/* Rate-limit to one event per timeout. */
+			rq->watchdog.jiffies = jiffies;
+		}
+	}
+
+	mod_timer(&vi->rx_watchdog, jiffies + HZ);
+}
+
+static void virtnet_rx_watchdog_init_queue(struct receive_queue *rq)
+{
+	rq->watchdog.last_used = virtqueue_get_last_used_idx(rq->vq);
+	rq->watchdog.calls = rq->calls;
+	rq->watchdog.jiffies = jiffies;
+	rq->watchdog.stalled = false;
+}
+
+static void virtnet_rx_watchdog_start(struct virtnet_info *vi)
+{
+	int i;
+
+	for (i = 0; i < vi->curr_queue_pairs; i++)
+		virtnet_rx_watchdog_init_queue(&vi->rq[i]);
+
+	mod_timer(&vi->rx_watchdog, jiffies + HZ);
+}
+
+static void virtnet_rx_watchdog_stop(struct virtnet_info *vi)
+{
+	timer_delete_sync(&vi->rx_watchdog);
 }
 
 static void virtnet_disable_queue_pair(struct virtnet_info *vi, int qp_index)
@@ -3252,6 +3346,8 @@ static int virtnet_open(struct net_device *dev)
 		vi->status = VIRTIO_NET_S_LINK_UP;
 		netif_carrier_on(dev);
 	}
+
+	virtnet_rx_watchdog_start(vi);
 
 	return 0;
 
@@ -3782,6 +3878,7 @@ static int virtnet_set_queues(struct virtnet_info *vi, u16 queue_pairs)
 	struct virtio_net_rss_config_trailer old_rss_trailer;
 	struct net_device *dev = vi->dev;
 	struct scatterlist sg;
+	u16 old_queue_pairs = vi->curr_queue_pairs;
 
 	if (!vi->has_cvq || !virtio_has_feature(vi->vdev, VIRTIO_NET_F_MQ))
 		return 0;
@@ -3839,7 +3936,14 @@ static int virtnet_set_queues(struct virtnet_info *vi, u16 queue_pairs)
 	if (vi->has_rss)
 		vi->rss_trailer.max_tx_vq = cpu_to_le16(queue_pairs);
 succ:
+	if (dev->flags & IFF_UP) {
+		/* Init new queues */
+		for (int i = old_queue_pairs; i < queue_pairs; i++)
+			virtnet_rx_watchdog_init_queue(&vi->rq[i]);
+	}
+
 	vi->curr_queue_pairs = queue_pairs;
+
 	if (dev->flags & IFF_UP) {
 		local_bh_disable();
 		for (int i = 0; i < vi->curr_queue_pairs; ++i)
@@ -3854,6 +3958,8 @@ static int virtnet_close(struct net_device *dev)
 {
 	struct virtnet_info *vi = netdev_priv(dev);
 	int i;
+
+	virtnet_rx_watchdog_stop(vi);
 
 	/* Prevent the config change callback from changing carrier
 	 * after close
@@ -4996,27 +5102,35 @@ drv_stats:
 static int __virtnet_get_hw_stats(struct virtnet_info *vi,
 				  struct virtnet_stats_ctx *ctx,
 				  struct virtio_net_ctrl_queue_stats *req,
-				  int req_size, void *reply, int res_size)
+				  int req_size, void *reply, int res_size,
+				  int first_vq, int last_vq, bool enable_cvq)
 {
 	struct virtio_net_stats_reply_hdr *hdr;
 	struct scatterlist sgs_in, sgs_out;
 	void *p;
 	u32 qid;
-	int ok;
 
 	sg_init_one(&sgs_out, req, req_size);
 	sg_init_one(&sgs_in, reply, res_size);
 
-	ok = virtnet_send_command_reply(vi, VIRTIO_NET_CTRL_STATS,
+	if (!virtnet_send_command_reply(vi, VIRTIO_NET_CTRL_STATS,
 					VIRTIO_NET_CTRL_STATS_GET,
-					&sgs_out, &sgs_in);
-
-	if (!ok)
-		return ok;
+					&sgs_out, &sgs_in))
+		return -EINVAL;
 
 	for (p = reply; p - reply < res_size; p += le16_to_cpu(hdr->size)) {
 		hdr = p;
+		if (!hdr->size)
+			return -EINVAL;
+
 		qid = le16_to_cpu(hdr->vq_index);
+		/* The vqs of the queue pairs beyond curr_queue_pairs lie
+		 * between last_vq and the control vq.
+		 */
+		if ((qid < first_vq || qid > last_vq) &&
+		    !(enable_cvq && qid == vi->max_queue_pairs * 2))
+			return -EINVAL;
+
 		virtnet_fill_stats(vi, qid, ctx, p, false, hdr->type);
 	}
 
@@ -5083,7 +5197,13 @@ static int virtnet_get_hw_stats(struct virtnet_info *vi,
 	if (!req)
 		return -ENOMEM;
 
-	reply = kmalloc(res_size, GFP_KERNEL);
+	/* virtnet_fill_stats() parses the whole payload of a record's type,
+	 * so reserve zeroed space after the reply to hold any payload.
+	 */
+	reply = kzalloc(res_size + max3(ctx->size[VIRTNET_Q_TYPE_RX],
+					ctx->size[VIRTNET_Q_TYPE_TX],
+					ctx->size[VIRTNET_Q_TYPE_CQ]),
+			GFP_KERNEL);
 	if (!reply) {
 		kfree(req);
 		return -ENOMEM;
@@ -5096,7 +5216,8 @@ static int virtnet_get_hw_stats(struct virtnet_info *vi,
 	if (enable_cvq)
 		virtnet_make_stat_req(vi, ctx, req, vi->max_queue_pairs * 2, &j);
 
-	ok = __virtnet_get_hw_stats(vi, ctx, req, sizeof(*req) * j, reply, res_size);
+	ok = __virtnet_get_hw_stats(vi, ctx, req, sizeof(*req) * j, reply,
+				    res_size, first_vq, last_vq, enable_cvq);
 
 	kfree(req);
 	kfree(reply);
@@ -5994,11 +6115,21 @@ static int virtnet_xsk_pool_enable(struct net_device *dev,
 	if (!rq->xsk_buffs)
 		return -ENOMEM;
 
-	hdr_dma = virtqueue_map_single_attrs(sq->vq, &xsk_hdr, vi->hdr_len,
+	/*
+	 * Don't map a static header: the kernel image is not in the linear
+	 * map on all architectures (e.g. arm64), so it can't be DMA mapped.
+	 */
+	sq->xsk_hdr = kzalloc_obj(*sq->xsk_hdr);
+	if (!sq->xsk_hdr) {
+		err = -ENOMEM;
+		goto err_free_buffs;
+	}
+
+	hdr_dma = virtqueue_map_single_attrs(sq->vq, sq->xsk_hdr, vi->hdr_len,
 					     DMA_TO_DEVICE, 0);
 	if (virtqueue_map_mapping_error(sq->vq, hdr_dma)) {
 		err = -ENOMEM;
-		goto err_free_buffs;
+		goto err_free_hdr;
 	}
 
 	err = xsk_pool_dma_map(pool, dma_dev, 0);
@@ -6027,6 +6158,9 @@ err_rq:
 err_xsk_map:
 	virtqueue_unmap_single_attrs(rq->vq, hdr_dma, vi->hdr_len,
 				     DMA_TO_DEVICE, 0);
+err_free_hdr:
+	kfree(sq->xsk_hdr);
+	sq->xsk_hdr = NULL;
 err_free_buffs:
 	kvfree(rq->xsk_buffs);
 	return err;
@@ -6056,6 +6190,8 @@ static int virtnet_xsk_pool_disable(struct net_device *dev, u16 qid)
 
 	virtqueue_unmap_single_attrs(sq->vq, sq->xsk_hdr_dma_addr,
 				     vi->hdr_len, DMA_TO_DEVICE, 0);
+	kfree(sq->xsk_hdr);
+	sq->xsk_hdr = NULL;
 	kvfree(rq->xsk_buffs);
 
 	return err;
@@ -6924,6 +7060,7 @@ static int virtnet_probe(struct virtio_device *vdev)
 	INIT_WORK(&vi->config_work, virtnet_config_changed_work);
 	INIT_WORK(&vi->rx_mode_work, virtnet_rx_mode_work);
 	disable_work(&vi->rx_mode_work);
+	timer_setup(&vi->rx_watchdog, virtnet_rx_watchdog, 0);
 
 	if (virtio_has_feature(vdev, VIRTIO_NET_F_MRG_RXBUF)) {
 		vi->mergeable_rx_bufs = true;
@@ -7051,7 +7188,7 @@ static int virtnet_probe(struct virtio_device *vdev)
 
 		err = virtnet_init_irq_moder(vi);
 		if (err)
-			goto free;
+			goto free_irq_moder;
 	}
 
 	/* Create page pools for receive queues.

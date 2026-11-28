@@ -240,9 +240,6 @@ static int t7xx_dpmaifq_release_pit_entry(struct dpmaif_rx_queue *rxq,
 	unsigned int old_rel_idx, new_rel_idx, hw_wr_idx;
 	int ret;
 
-	if (!rxq->que_started)
-		return 0;
-
 	if (rel_entry_num >= rxq->pit_size_cnt) {
 		dev_err(rxq->dpmaif_ctrl->dev, "Invalid PIT release index\n");
 		return -EINVAL;
@@ -565,6 +562,14 @@ static int t7xx_dpmaif_pit_release_and_add(struct dpmaif_rx_queue *rxq)
 	if (rxq->pit_remain_release_cnt < DPMAIF_PIT_CNT_THRESHOLD)
 		return 0;
 
+	/* The queue is stopped: keep the count, the entries are released by
+	 * the first poll after the queue has been restarted.
+	 * t7xx_dpmaif_rx_stop() waits for this poll before the hardware is
+	 * stopped.
+	 */
+	if (!READ_ONCE(rxq->que_started))
+		return 0;
+
 	ret = t7xx_dpmaifq_release_pit_entry(rxq, rxq->pit_remain_release_cnt);
 	if (ret)
 		return ret;
@@ -632,9 +637,9 @@ static int t7xx_dpmaif_set_data_to_skb(const struct dpmaif_rx_queue *rxq,
 	unsigned long long data_bus_addr, data_base_addr;
 	struct device *dev = rxq->dpmaif_ctrl->dev;
 	struct dpmaif_bat_skb *bat_skb;
-	unsigned int data_len;
+	unsigned int data_len, tailroom, max_len;
 	struct sk_buff *skb;
-	int data_offset;
+	unsigned long long data_offset;
 
 	bat_skb = rxq->bat_req->bat_skb;
 	bat_skb += t7xx_normal_pit_bid(pkt_info);
@@ -643,22 +648,35 @@ static int t7xx_dpmaif_set_data_to_skb(const struct dpmaif_rx_queue *rxq,
 	data_bus_addr = le32_to_cpu(pkt_info->pd.data_addr_h);
 	data_bus_addr = (data_bus_addr << 32) + le32_to_cpu(pkt_info->pd.data_addr_l);
 	data_base_addr = bat_skb->data_bus_addr;
-	data_offset = data_bus_addr - data_base_addr;
 	data_len = FIELD_GET(PD_PIT_DATA_LEN, le32_to_cpu(pkt_info->header));
 	skb = bat_skb->skb;
 	skb->len = 0;
 	skb_reset_tail_pointer(skb);
-	skb_reserve(skb, data_offset);
 
-	if (skb->tail + data_len > skb->end) {
-		dev_err(dev, "No buffer space available\n");
-		return -ENOBUFS;
+	if (data_bus_addr < data_base_addr) {
+		dev_err_ratelimited(dev, "Invalid PIT data address\n");
+		goto err_drop;
 	}
 
+	data_offset = data_bus_addr - data_base_addr;
+	tailroom = skb_tailroom(skb);
+	max_len = min(tailroom, bat_skb->data_len);
+	if (data_offset > max_len || data_len > max_len - data_offset) {
+		dev_err_ratelimited(dev, "Invalid PIT data offset or length\n");
+		goto err_drop;
+	}
+
+	skb_reserve(skb, (int)data_offset);
 	skb_put(skb, data_len);
 	skb_info->cur_skb = skb;
 	bat_skb->skb = NULL;
 	return 0;
+
+err_drop:
+	dev_kfree_skb_any(skb);
+	bat_skb->skb = NULL;
+	t7xx_dpmaif_set_bat_mask(rxq->bat_req, t7xx_normal_pit_bid(pkt_info));
+	return -ENOBUFS;
 }
 
 static int t7xx_dpmaif_get_rx_pkt(struct dpmaif_rx_queue *rxq,
@@ -674,7 +692,7 @@ static int t7xx_dpmaif_get_rx_pkt(struct dpmaif_rx_queue *rxq,
 
 	ret = t7xx_dpmaif_set_data_to_skb(rxq, pkt_info, skb_info);
 	if (ret < 0) {
-		dev_err(rxq->dpmaif_ctrl->dev, "RX set data to skb failed: %d\n", ret);
+		dev_err_ratelimited(rxq->dpmaif_ctrl->dev, "RX set data to skb failed: %d\n", ret);
 		return ret;
 	}
 
@@ -844,10 +862,11 @@ int t7xx_dpmaif_napi_rx_poll(struct napi_struct *napi, const int budget)
 	/* Ensure rx_processing is changed to 1 before actually begin RX flow */
 	smp_mb();
 
-	if (!rxq->que_started) {
+	if (!READ_ONCE(rxq->que_started)) {
 		atomic_set(&rxq->rx_processing, 0);
 		pm_runtime_put_autosuspend(rxq->dpmaif_ctrl->dev);
 		dev_err(rxq->dpmaif_ctrl->dev, "Work RXQ: %d has not been started\n", rxq->index);
+		napi_complete_done(napi, work_done);
 		return work_done;
 	}
 
@@ -911,8 +930,10 @@ void t7xx_dpmaif_irq_rx_done(struct dpmaif_ctrl *dpmaif_ctrl, const unsigned int
 	 * which can't be done from softirq context the poll function
 	 * is running in.
 	 */
-	ret = pm_runtime_resume_and_get(ctrl->dev);
+	pm_runtime_get_noresume(ctrl->dev);
+	ret = pm_runtime_resume(ctrl->dev);
 	if (ret < 0 && ret != -EACCES) {
+		pm_runtime_put_noidle(ctrl->dev);
 		dev_err(ctrl->dev, "Failed to resume device: %d\n", ret);
 		return;
 	}
@@ -1068,9 +1089,12 @@ static void t7xx_dpmaif_bat_release_work(struct work_struct *work)
 	struct dpmaif_rx_queue *rxq;
 	int ret;
 
-	ret = pm_runtime_resume_and_get(dpmaif_ctrl->dev);
-	if (ret < 0 && ret != -EACCES)
+	pm_runtime_get_noresume(dpmaif_ctrl->dev);
+	ret = pm_runtime_resume(dpmaif_ctrl->dev);
+	if (ret < 0 && ret != -EACCES) {
+		pm_runtime_put_noidle(dpmaif_ctrl->dev);
 		return;
+	}
 
 	t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
 
@@ -1121,14 +1145,16 @@ void t7xx_dpmaif_rx_stop(struct dpmaif_ctrl *dpmaif_ctrl)
 		struct dpmaif_rx_queue *rxq = &dpmaif_ctrl->rxq[i];
 		int timeout, value;
 
+		WRITE_ONCE(rxq->que_started, false);
+		/* Order the que_started store before the rx_processing load.
+		 * Pairs with the smp_mb() in t7xx_dpmaif_napi_rx_poll().
+		 */
+		smp_mb();
+
 		timeout = readx_poll_timeout_atomic(atomic_read, &rxq->rx_processing, value,
 						    !value, 0, DPMAIF_CHECK_INIT_TIMEOUT_US);
 		if (timeout)
 			dev_err(dpmaif_ctrl->dev, "Stop RX SW failed\n");
-
-		/* Ensure RX processing has stopped before we set rxq->que_started to false */
-		smp_mb();
-		rxq->que_started = false;
 	}
 }
 

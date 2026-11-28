@@ -14,6 +14,7 @@
 #include <linux/clk.h>
 #include <linux/hrtimer.h>
 #include <linux/if_vlan.h>
+#include <linux/list.h>
 #include <linux/stmmac.h>
 #include <linux/phylink.h>
 #include <linux/pci.h>
@@ -55,6 +56,11 @@ struct stmmac_tx_info {
 	bool last_segment;
 	bool is_jumbo;
 };
+
+/* Number of 802.1Q priorities. This is also the number of queues that have a
+ * per-priority register (PSRQ field, Qx_TX_FLOW_CTRL) on DWMAC4/XGMAC.
+ */
+#define STMMAC_NUM_PRIO_QUEUES	8
 
 #define STMMAC_TBS_AVAIL	BIT(0)
 #define STMMAC_TBS_EN		BIT(1)
@@ -142,6 +148,7 @@ struct stmmac_channel {
 	struct napi_struct rx_napi ____cacheline_aligned_in_smp;
 	struct napi_struct tx_napi ____cacheline_aligned_in_smp;
 	struct napi_struct rxtx_napi ____cacheline_aligned_in_smp;
+	struct timer_list rx_refill_timer;
 	struct stmmac_priv *priv_data;
 	spinlock_t lock;
 	u32 index;
@@ -210,6 +217,8 @@ enum stmmac_rfs_type {
 struct stmmac_rfs_entry {
 	unsigned long cookie;
 	u16 etype;
+	u8 vlan_prio;
+	struct list_head vlan_node;
 	int in_use;
 	int type;
 	int tc;
@@ -382,6 +391,7 @@ struct stmmac_priv {
 	unsigned int rfs_entries_cnt[STMMAC_RFS_T_MAX];
 	unsigned int rfs_entries_total;
 	struct stmmac_rfs_entry *rfs_entries;
+	struct list_head vlan_prio;
 
 	/* Pulse Per Second output */
 	struct stmmac_pps_cfg pps[STMMAC_PPS_MAX];
@@ -435,6 +445,18 @@ struct plat_stmmacenet_data *stmmac_plat_dat_alloc(struct device *dev);
 static inline bool stmmac_check_timestamp_cap(struct stmmac_priv *priv)
 {
 	return priv->dma_cap.time_stamp || priv->dma_cap.atime_stamp;
+}
+
+/* Most cores have one traffic class per queue, but newer XGMAC can have more
+ * queues than traffic classes (the number of TCs is reported by the HW
+ * feature register).
+ */
+static inline u32 stmmac_num_tc(const struct stmmac_priv *priv)
+{
+	if (!priv->dma_cap.numtc)
+		return priv->plat->tx_queues_to_use;
+
+	return min_t(u32, priv->dma_cap.numtc, priv->plat->tx_queues_to_use);
 }
 
 static inline bool stmmac_xdp_is_enabled(struct stmmac_priv *priv)

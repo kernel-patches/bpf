@@ -2460,7 +2460,7 @@ static int zl3073x_dpll_ptp_gettimex64(struct ptp_clock_info *info,
 	struct zl3073x_dpll *zldpll = container_of(info, struct zl3073x_dpll,
 						   ptp_info);
 
-	guard(mutex)(&zldpll->lock);
+	guard(mutex)(&zldpll->ptp_lock);
 
 	return zl3073x_chan_tod_read(zldpll->dev, zldpll->id, false, ts, sts);
 }
@@ -2478,9 +2478,57 @@ static int zl3073x_dpll_ptp_settime64(struct ptp_clock_info *info,
 	struct zl3073x_dpll *zldpll = container_of(info, struct zl3073x_dpll,
 						   ptp_info);
 
-	guard(mutex)(&zldpll->lock);
+	guard(mutex)(&zldpll->ptp_lock);
 
 	return zl3073x_chan_tod_write(zldpll->dev, zldpll->id, *ts);
+}
+
+/**
+ * zl3073x_dpll_ptp_phase_step - execute one output phase step
+ * @zldpll: DPLL channel
+ * @out_mask: bitmask of outputs to step
+ * @step_cycles: phase step in synthesizer clock cycles
+ * @tod_step: also step the ToD counter
+ *
+ * Waits for the previous phase step without the channel lock, as the device
+ * can take up to three seconds to complete it. A step with @tod_step is then
+ * issued under the channel lock and only in NCO mode, the only mode where the
+ * device expects a ToD step. A step of outputs only follows a ToD step of the
+ * same adjustment and is issued in any mode, so all outputs get the same step
+ * even if the channel has left NCO mode in the meantime.
+ *
+ * Context: Caller must hold zldev->phase_step_lock.
+ * Return:
+ * * %0			- success
+ * * %-EOPNOTSUPP	- @tod_step is set and channel is not in NCO mode
+ * * negative		- other error
+ */
+static int zl3073x_dpll_ptp_phase_step(struct zl3073x_dpll *zldpll,
+				       u16 out_mask, s32 step_cycles,
+				       bool tod_step)
+{
+	struct zl3073x_dev *zldev = zldpll->dev;
+	const struct zl3073x_chan *chan;
+	int rc;
+
+	rc = zl3073x_chan_phase_step_ready_wait(zldev);
+	if (rc)
+		return rc;
+
+	if (!tod_step)
+		return zl3073x_chan_phase_step(zldev, zldpll->id, out_mask,
+					       step_cycles, false);
+
+	mutex_lock(&zldpll->lock);
+	chan = zl3073x_chan_state_get(zldev, zldpll->id);
+	if (zl3073x_chan_mode_is_nco(chan))
+		rc = zl3073x_chan_phase_step(zldev, zldpll->id, out_mask,
+					     step_cycles, true);
+	else
+		rc = -EOPNOTSUPP;
+	mutex_unlock(&zldpll->lock);
+
+	return rc;
 }
 
 /**
@@ -2503,7 +2551,7 @@ static int zl3073x_dpll_ptp_settime64(struct ptp_clock_info *info,
  * Return:
  * * %0			- success (or partial success if a later synth group
  *			  failed after the first was already stepped)
- * * %-EOPNOTSUPP	- no synths available
+ * * %-EOPNOTSUPP	- no synths available or channel is not in NCO mode
  * * negative		- error
  */
 static int zl3073x_dpll_ptp_adjtime_phase_step(struct zl3073x_dpll *zldpll,
@@ -2517,10 +2565,13 @@ static int zl3073x_dpll_ptp_adjtime_phase_step(struct zl3073x_dpll *zldpll,
 	bool tod_stepped = false;
 	s32 step_cycles;
 	u32 synth_freq;
-	int rc;
+	int rc = 0;
 	u8 i;
 
+	mutex_lock(&zldev->phase_step_lock);
+
 	/* Build per-synth output masks from registered output pins */
+	mutex_lock(&zldpll->lock);
 	list_for_each_entry(pin, &zldpll->pins, list) {
 		u8 out_id, synth_id;
 
@@ -2540,8 +2591,11 @@ static int zl3073x_dpll_ptp_adjtime_phase_step(struct zl3073x_dpll *zldpll,
 		}
 		synth_mask[synth_id] |= BIT(out_id);
 	}
+	mutex_unlock(&zldpll->lock);
 
-	/* Process each synth group */
+	/* Process each synth group. The synth state is read before the PTP
+	 * clock is registered and does not change while it is.
+	 */
 	for (i = 0; i < ZL3073X_NUM_SYNTHS; i++) {
 		synth = zl3073x_synth_state_get(zldev, i);
 		if (!zl3073x_synth_is_enabled(synth) ||
@@ -2560,33 +2614,74 @@ static int zl3073x_dpll_ptp_adjtime_phase_step(struct zl3073x_dpll *zldpll,
 		/* Safe for s32: max synth freq is 750 MHz */
 		step_cycles = div_s64(delta * synth_freq, NSEC_PER_SEC);
 
-		rc = zl3073x_chan_phase_step(zldev, zldpll->id,
-					     synth_mask[i], step_cycles,
-					     !tod_stepped);
+		rc = zl3073x_dpll_ptp_phase_step(zldpll, synth_mask[i],
+						 step_cycles, !tod_stepped);
 		if (rc) {
 			if (tod_stepped) {
 				dev_warn(zldev->dev,
 					 "Partial phase step failure\n");
-				return 0;
+				rc = 0;
 			}
-			return rc;
+			goto unlock;
 		}
 		tod_stepped = true;
 	}
 
-	if (!first_synth_freq)
-		return -EOPNOTSUPP;
+	if (!first_synth_freq) {
+		rc = -EOPNOTSUPP;
+		goto unlock;
+	}
 
 	/* No enabled outputs found; step ToD counter only using the
 	 * first enabled synth's period (empty output mask).
 	 */
 	if (!tod_stepped) {
 		step_cycles = div_s64(delta * first_synth_freq, NSEC_PER_SEC);
-		return zl3073x_chan_phase_step(zldev, zldpll->id, 0,
-					       step_cycles, true);
+		rc = zl3073x_dpll_ptp_phase_step(zldpll, 0, step_cycles, true);
 	}
 
-	return 0;
+unlock:
+	mutex_unlock(&zldev->phase_step_lock);
+
+	return rc;
+}
+
+/**
+ * zl3073x_dpll_ptp_tie_write - adjust DPLL phase using TIE write
+ * @zldpll: DPLL channel
+ * @delta: phase adjustment in nanoseconds (must be in (-1s, 1s))
+ *
+ * Waits for the previous TIE write without the channel lock, as the device
+ * can take up to one second to complete it. The write is then issued under
+ * the channel lock, so it is issued only in a mode that supports TIE.
+ *
+ * Return:
+ * * %0			- success
+ * * %-EOPNOTSUPP	- channel mode does not support TIE
+ * * negative		- other error
+ */
+static int zl3073x_dpll_ptp_tie_write(struct zl3073x_dpll *zldpll, s64 delta)
+{
+	struct zl3073x_dev *zldev = zldpll->dev;
+	const struct zl3073x_chan *chan;
+	int rc;
+
+	mutex_lock(&zldev->tie_lock);
+	rc = zl3073x_chan_tie_ready_wait(zldev);
+	if (rc)
+		goto unlock_tie;
+
+	mutex_lock(&zldpll->lock);
+	chan = zl3073x_chan_state_get(zldev, zldpll->id);
+	if (zl3073x_chan_mode_supports_tie(chan))
+		rc = zl3073x_chan_tie_write(zldev, zldpll->id, delta);
+	else
+		rc = -EOPNOTSUPP;
+	mutex_unlock(&zldpll->lock);
+unlock_tie:
+	mutex_unlock(&zldev->tie_lock);
+
+	return rc;
 }
 
 /**
@@ -2616,17 +2711,26 @@ static int zl3073x_dpll_ptp_adjtime(struct ptp_clock_info *info, s64 delta)
 	const struct zl3073x_chan *chan;
 	bool sec_adjusted = false;
 	struct timespec64 ts;
+	bool is_nco, is_tie;
 	int rc;
 
 	if (!delta)
 		return 0;
 
-	guard(mutex)(&zldpll->lock);
+	guard(mutex)(&zldpll->ptp_lock);
+
+	/* Hold the channel lock only to read the mode. The ToD, TIE and phase
+	 * step operations below can wait for up to seconds and they do not
+	 * have to block the DPLL callbacks for that long.
+	 */
+	mutex_lock(&zldpll->lock);
+	chan = zl3073x_chan_state_get(zldev, zldpll->id);
+	is_nco = zl3073x_chan_mode_is_nco(chan);
+	is_tie = zl3073x_chan_mode_supports_tie(chan);
+	mutex_unlock(&zldpll->lock);
 
 	/* Modes without phase step or TIE use plain ToD adjust */
-	chan = zl3073x_chan_state_get(zldev, zldpll->id);
-	if (!zl3073x_chan_mode_is_nco(chan) &&
-	    !zl3073x_chan_mode_supports_tie(chan))
+	if (!is_nco && !is_tie)
 		return zl3073x_chan_tod_adjust(zldev, zldpll->id,
 					       ns_to_timespec64(delta));
 
@@ -2661,12 +2765,12 @@ static int zl3073x_dpll_ptp_adjtime(struct ptp_clock_info *info, s64 delta)
 	}
 
 	/* Apply sub-second delta via phase step (NCO) or TIE write */
-	if (zl3073x_chan_mode_is_nco(chan)) {
+	if (is_nco) {
 		rc = zl3073x_dpll_ptp_adjtime_phase_step(zldpll, delta);
 		if (!rc)
 			return 0;
 	} else {
-		rc = zl3073x_chan_tie_write(zldev, zldpll->id, delta);
+		rc = zl3073x_dpll_ptp_tie_write(zldpll, delta);
 		if (!rc)
 			return 0;
 	}
@@ -2719,6 +2823,7 @@ zl3073x_dpll_ptp_adjfine(struct ptp_clock_info *info, long scaled_ppm)
 	 */
 	offset = -div_s64((s64)scaled_ppm * 67108864LL, 15625);
 
+	guard(mutex)(&zldpll->ptp_lock);
 	guard(mutex)(&zldpll->lock);
 
 	chan = zl3073x_chan_state_get(zldpll->dev, zldpll->id);
@@ -2747,20 +2852,26 @@ static int zl3073x_dpll_ptp_adjphase(struct ptp_clock_info *info, s32 delta)
 {
 	struct zl3073x_dpll *zldpll = container_of(info, struct zl3073x_dpll,
 						   ptp_info);
-	struct zl3073x_dev *zldev = zldpll->dev;
 	const struct zl3073x_chan *chan;
+	bool is_tie;
 
 	if (!delta)
 		return 0;
 
-	guard(mutex)(&zldpll->lock);
+	guard(mutex)(&zldpll->ptp_lock);
 
-	chan = zl3073x_chan_state_get(zldev, zldpll->id);
+	/* Check the mode first, so a mode without TIE does not wait for
+	 * the TIE write of another channel.
+	 */
+	mutex_lock(&zldpll->lock);
+	chan = zl3073x_chan_state_get(zldpll->dev, zldpll->id);
+	is_tie = zl3073x_chan_mode_supports_tie(chan);
+	mutex_unlock(&zldpll->lock);
 
-	if (!zl3073x_chan_mode_supports_tie(chan))
+	if (!is_tie)
 		return -EOPNOTSUPP;
 
-	return zl3073x_chan_tie_write(zldev, zldpll->id, delta);
+	return zl3073x_dpll_ptp_tie_write(zldpll, delta);
 }
 
 static s32
@@ -2926,6 +3037,7 @@ zl3073x_dpll_alloc(struct zl3073x_dev *zldev, u8 ch)
 	zldpll->id = ch;
 	mutex_init(&zldpll->lock);
 	INIT_LIST_HEAD(&zldpll->pins);
+	mutex_init(&zldpll->ptp_lock);
 
 	return zldpll;
 }
@@ -2941,6 +3053,7 @@ zl3073x_dpll_free(struct zl3073x_dpll *zldpll)
 {
 	WARN(zldpll->dpll_dev, "DPLL device is still registered\n");
 
+	mutex_destroy(&zldpll->ptp_lock);
 	mutex_destroy(&zldpll->lock);
 	kfree(zldpll);
 }

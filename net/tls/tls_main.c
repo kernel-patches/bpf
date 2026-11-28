@@ -629,7 +629,6 @@ static int do_tls_setsockopt_conf(struct sock *sk, sockptr_t optval,
 	union tls_crypto_context tmp = {};
 	bool update = false;
 	int rc = 0;
-	int conf;
 
 	/* TLS and sockmap are mutually exclusive. A socket already in a
 	 * sockmap (i.e. with a psock attached) cannot be upgraded to TLS.
@@ -709,7 +708,6 @@ static int do_tls_setsockopt_conf(struct sock *sk, sockptr_t optval,
 
 	if (tx) {
 		rc = tls_set_device_offload(sk);
-		conf = TLS_HW;
 		if (!rc) {
 			TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSTXDEVICE);
 			TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXDEVICE);
@@ -725,11 +723,10 @@ static int do_tls_setsockopt_conf(struct sock *sk, sockptr_t optval,
 				TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSTXSW);
 				TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXSW);
 			}
-			conf = TLS_SW;
+			ctx->tx_conf = TLS_SW;
 		}
 	} else {
 		rc = tls_set_device_offload_rx(sk, ctx);
-		conf = TLS_HW;
 		if (!rc) {
 			TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSRXDEVICE);
 			TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSCURRRXDEVICE);
@@ -745,16 +742,12 @@ static int do_tls_setsockopt_conf(struct sock *sk, sockptr_t optval,
 				TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSRXSW);
 				TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSCURRRXSW);
 			}
-			conf = TLS_SW;
+			ctx->rx_conf = TLS_SW;
 		}
 		if (!update)
 			tls_sw_strparser_arm(sk, ctx);
 	}
 
-	if (tx)
-		ctx->tx_conf = conf;
-	else
-		ctx->rx_conf = conf;
 	update_sk_prot(sk, ctx);
 
 	if (update)

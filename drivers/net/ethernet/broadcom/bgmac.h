@@ -2,6 +2,7 @@
 #ifndef _BGMAC_H
 #define _BGMAC_H
 
+#include <linux/if_vlan.h>
 #include <linux/netdevice.h>
 
 #include "unimac.h"
@@ -330,6 +331,13 @@
 						 BGMAC_RX_FRAME_OFFSET)
 #define BGMAC_RX_MAX_FRAME_SIZE			1536
 #define BGMAC_RX_BUF_SIZE			(BGMAC_RX_FRAME_OFFSET + BGMAC_RX_MAX_FRAME_SIZE)
+/* Largest MTU whose VLAN tagged frames, FCS included, fit in one RX buffer */
+#define BGMAC_RX_MAX_MTU			(BGMAC_RX_MAX_FRAME_SIZE - VLAN_ETH_HLEN - \
+						 ETH_FCS_LEN)
+/* Most descriptors one frame can use, with a 16 bit length */
+#define BGMAC_RX_MAX_DESCS			(1 + DIV_ROUND_UP(U16_MAX - \
+								  BGMAC_RX_MAX_FRAME_SIZE, \
+								  BGMAC_RX_BUF_SIZE))
 #define BGMAC_RX_ALLOC_SIZE			(SKB_DATA_ALIGN(BGMAC_RX_BUF_SIZE + BGMAC_RX_BUF_OFFSET) + \
 						 SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
 
@@ -362,8 +370,6 @@
 #define BGMAC_CHIPCTL_7_IF_TYPE_RMII		0x00000000
 #define BGMAC_CHIPCTL_7_IF_TYPE_MII		0x00000040
 #define BGMAC_CHIPCTL_7_IF_TYPE_RGMII		0x00000080
-
-#define ETHER_MAX_LEN	(ETH_FRAME_LEN + ETH_FCS_LEN)
 
 /* Feature Flags */
 #define BGMAC_FEAT_TX_MASK_SETUP	BIT(0)
@@ -426,6 +432,7 @@ struct bgmac_dma_ring {
 	u32 index_base; /* Used for unaligned rings only, otherwise 0 */
 	u16 mmio_base;
 	bool unaligned;
+	u8 rx_skip; /* Continuation slots of a dropped RX frame */
 
 	struct bgmac_slot_info slots[BGMAC_RX_RING_SLOTS];
 };
@@ -435,6 +442,14 @@ struct bgmac_rx_header {
 	__le16 flags;
 	__le16 pad[12];
 };
+
+/* bgmac_rx_header::flags */
+#define BGMAC_RXF_DC_MASK			0x0f00	/* Descriptors used - 1 */
+#define BGMAC_RXF_OVF				0x0080	/* RX FIFO overflow */
+#define BGMAC_RXF_OVERSIZE			0x0010	/* Frame > max frame length */
+#define BGMAC_RXF_CRC				0x0008	/* CRC error */
+#define BGMAC_RXF_ERR				(BGMAC_RXF_OVF | BGMAC_RXF_OVERSIZE | \
+						 BGMAC_RXF_CRC)
 
 struct bgmac {
 	union {

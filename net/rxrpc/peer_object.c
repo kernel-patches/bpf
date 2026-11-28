@@ -156,6 +156,7 @@ void rxrpc_assess_MTU_size(struct rxrpc_local *local, struct rxrpc_peer *peer)
 	struct rtable *rt;
 	struct flowi fl;
 	struct flowi4 *fl4 = &fl.u.ip4;
+	unsigned int max_mtu;
 #ifdef CONFIG_AF_RXRPC_IPV6
 	struct flowi6 *fl6 = &fl.u.ip6;
 #endif
@@ -179,6 +180,7 @@ void rxrpc_assess_MTU_size(struct rxrpc_local *local, struct rxrpc_peer *peer)
 			return;
 		}
 		dst = &rt->dst;
+		max_mtu = IP_MAX_MTU;
 		break;
 
 #ifdef CONFIG_AF_RXRPC_IPV6
@@ -195,6 +197,7 @@ void rxrpc_assess_MTU_size(struct rxrpc_local *local, struct rxrpc_peer *peer)
 			_leave(" [route err %d]", dst->error);
 			return;
 		}
+		max_mtu = IP6_MAX_MTU;
 		break;
 #endif
 
@@ -202,7 +205,8 @@ void rxrpc_assess_MTU_size(struct rxrpc_local *local, struct rxrpc_peer *peer)
 		BUG();
 	}
 
-	peer->if_mtu = dst_mtu(dst);
+	/* A blackhole dst reports the device MTU with no IP_MAX_MTU clamp. */
+	peer->if_mtu = umin(dst_mtu(dst), max_mtu);
 	peer->hdrsize += dst->header_len + dst->trailer_len;
 	peer->tx_seg_max = dst->dev->gso_max_segs;
 	dst_release(dst);

@@ -100,6 +100,9 @@ static void fib6_walkers_replace_leaf(struct net *net, struct fib6_info *old,
 
 	read_lock(&net->ipv6.fib6_walker_lock);
 	FOR_WALKERS(net, w) {
+		/* Only walkers of this table are serialized by its tb6_lock */
+		if (w->root != &old->fib6_table->tb6_root)
+			continue;
 		if (w->state == FWS_C && w->leaf == old) {
 			pr_debug("walker %p adjusted by unlink of %p\n", w, old);
 			w->leaf = new;
@@ -123,12 +126,38 @@ static void fib6_walkers_skip_rt(struct net *net, struct fib6_info *rt)
 	fib6_walkers_replace_leaf(net, rt, next);
 }
 
+/*
+ * Draw fib6_sernum bumps from one sequence shared by all netns, so that a
+ * route cached against one netns does not match the sernum of another one,
+ * e.g. after its device moved, until the sequence wraps. Every netns starts
+ * at 1 and the sequence only hands out values from 2 up: 0 means no sernum
+ * to check.
+ */
+static atomic_t fib6_sernum_seq = ATOMIC_INIT(1);
+
+static int fib6_sernum_draw(void)
+{
+	int new, old = atomic_read(&fib6_sernum_seq);
+
+	do {
+		new = old < INT_MAX ? old + 1 : 2;
+	} while (!atomic_try_cmpxchg(&fib6_sernum_seq, &old, new));
+
+	return new;
+}
+
+/*
+ * Publish the drawn value with a cmpxchg on the netns sernum, drawing again if
+ * another bump got there first. The successful cmpxchg orders the routing
+ * change before the new sernum and the new sernum before the nodes stamped
+ * with it, and a stalled bump cannot overwrite a newer value.
+ */
 static int fib6_new_sernum(struct net *net)
 {
 	int new, old = atomic_read(&net->ipv6.fib6_sernum);
 
 	do {
-		new = old < INT_MAX ? old + 1 : 1;
+		new = fib6_sernum_draw();
 	} while (!atomic_try_cmpxchg(&net->ipv6.fib6_sernum, &old, new));
 
 	return new;

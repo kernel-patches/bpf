@@ -289,6 +289,30 @@ unsigned int inet_addr_type_dev_table(struct net *net,
 }
 EXPORT_SYMBOL(inet_addr_type_dev_table);
 
+bool inet_addr_is_mcast_or_bcast(struct net *net, u32 tb_id, __be32 addr,
+				 unsigned int addr_type)
+{
+	struct flowi4 fl4 = { .daddr = addr };
+	struct fib_result res;
+	bool is_bcast = false;
+	struct fib_table *tb;
+
+	if (addr_type == RTN_MULTICAST)
+		return true;
+	if (addr_type != RTN_BROADCAST || ipv4_is_zeronet(addr))
+		return false;
+	if (ipv4_is_lbcast(addr))
+		return true;
+
+	rcu_read_lock();
+	tb = fib_get_table(net, tb_id);
+	if (tb && !fib_table_lookup(tb, &fl4, &res, FIB_LOOKUP_NOREF))
+		is_bcast = res.type == RTN_BROADCAST;
+	rcu_read_unlock();
+	return is_bcast;
+}
+EXPORT_SYMBOL(inet_addr_is_mcast_or_bcast);
+
 __be32 fib_compute_spec_dst(struct sk_buff *skb)
 {
 	struct net_device *dev = skb->dev;

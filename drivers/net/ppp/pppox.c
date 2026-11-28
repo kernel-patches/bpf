@@ -93,9 +93,12 @@ int pppox_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		 */
 		sk->sk_state |= PPPOX_BOUND;
 		/* Let lockless receive paths finish queueing against the old
-		 * state.
+		 * state. The other receive paths take the socket lock, which
+		 * is held here, so they are already serialized with this
+		 * transition.
 		 */
-		synchronize_net();
+		if (pppox_protos[sk->sk_protocol]->lockless_rcv)
+			synchronize_net();
 		/* Drain packets queued before the handoff because a bound
 		 * socket is no longer readable.
 		 */

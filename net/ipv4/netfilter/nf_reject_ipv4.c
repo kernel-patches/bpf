@@ -119,6 +119,13 @@ struct sk_buff *nf_reject_skb_v4_unreach(struct net *net,
 	if (!nf_reject_iphdr_validate(oldskb))
 		return NULL;
 
+	/* Don't send the decrypted part of an skb onto the network: the
+	 * device decrypted a received skb, and this reply quotes it. Only
+	 * received skbs get here (bridge, netdev ingress).
+	 */
+	if (unlikely(skb_is_decrypted(oldskb)))
+		return NULL;
+
 	/* IP header checks: fragment. */
 	if (ip_hdr(oldskb)->frag_off & htons(IP_OFFSET))
 		return NULL;

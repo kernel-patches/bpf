@@ -524,6 +524,13 @@ int tcp_set_rcvlowat(struct sock *sk, int val);
 void tcp_set_rcvbuf(struct sock *sk, int val);
 int tcp_set_window_clamp(struct sock *sk, int val);
 
+static inline bool tcp_want_rx_tstamp_cmsg(const struct sock *sk)
+{
+	return READ_ONCE(sk->sk_flags) &
+		((1UL << SOCK_RCVTSTAMP) |
+		 (1UL << SOCK_TIMESTAMPING_ANY));
+}
+
 static inline void
 tcp_update_recv_tstamps(struct sk_buff *skb,
 			struct scm_timestamping_internal *tss)
@@ -1284,7 +1291,7 @@ static inline bool tcp_skb_can_collapse(const struct sk_buff *to,
 		      mptcp_skb_can_collapse(to, from) &&
 		      !skb_cmp_decrypted(to, from) &&
 		      skb_pure_zcopy_same(to, from) &&
-		      skb_frags_readable(to) == skb_frags_readable(from));
+		      skb_mem_provider_compat(to, from));
 }
 
 static inline bool tcp_skb_can_collapse_rx(const struct sk_buff *to,

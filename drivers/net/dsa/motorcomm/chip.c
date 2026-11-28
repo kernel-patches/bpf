@@ -26,6 +26,7 @@
 #include <net/ieee8021q.h>
 
 #include "chip.h"
+#include "devlink.h"
 #include "leds.h"
 #include "mdio_bus.h"
 #include "mib.h"
@@ -97,6 +98,101 @@ struct yt921x_reg_mdio {
 };
 
 /* TODO: SPI/I2C */
+
+/* Realign the SMI state machine as described below.
+ *
+ * An SMI register access is 4 MDIO frames. An interrupted access leaves the
+ * machine in an unknown state, and every following access fails or acts on a
+ * stale address.
+ *
+ * The driver used to assume every access succeeds, and relied on manual
+ * resetting when the state machine wedged. However, without a dedicated reset
+ * line, the reset itself goes through the same SMI interface, causing a
+ * chicken-and-egg problem. Furthermore, the driver verifies the chip id before
+ * firing the reset, so the reset can never be triggered reliably.
+ *
+ * (A/D: address/data, H/L: hi/lo byte, r/w: read/write, ?: the same flag within
+ * a rule)
+ *
+ * State Input Next Comment
+ * ----- ----- ---- -------
+ * AH    aw?   AL?  step #1
+ * AL?   aw?   DH?  step #2
+ * DH?   d?    DL?  step #3
+ * DL?   d?    AH   step #4
+ * A?    dr    A?   `0xdead` sentinel
+ * ALw   awr   AH   FSM reset
+ * D?r   awr   AH   abort, frame discarded
+ * DHw   awr   AH   abort, frame discarded
+ * DHw   dr    DHw  `0xdead` sentinel
+ * DLr   dw    ?    `0xdead` on following drs; next state undetermined
+ * DLw   awr   ALr  abort, frame consumed as next access's addr-hi
+ * DLw   dr    ?    `0xdead` sentinel; next state undetermined
+ *
+ * Any other REGAD/op combination is not characterized and never sent.
+ *
+ * The reset sequence is awr, dr, dr, awr, awr, dr, dr, plus one more dr
+ * as a heuristic sanity check. The sentinel cannot tell AH from AL, which is
+ * why the check is heuristic.
+ *
+ * This is bus-related, but I'm not sure whether it should go to
+ * yt921x_reg_ops - decide it later when we do have a second bus type.
+ */
+static int yt921x_reg_mdio_reset(void *context)
+{
+	struct yt921x_reg_mdio *mdio = context;
+	struct mii_bus *bus = mdio->bus;
+	int addr = mdio->addr;
+	u32 reg_addr;
+	u32 reg_data;
+	int res;
+
+	mutex_lock_nested(&bus->mdio_lock, MDIO_MUTEX_NESTED);
+
+	reg_addr = YT921X_SMI_SWITCHID(mdio->switchid) | YT921X_SMI_ADDR |
+		   YT921X_SMI_READ;
+	reg_data = YT921X_SMI_SWITCHID(mdio->switchid) | YT921X_SMI_DATA |
+		   YT921X_SMI_READ;
+
+	/* awr */
+	res = __mdiobus_write(bus, addr, reg_addr, 0);
+	if (res)
+		goto end;
+	/* dr */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	/* dr */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	/* awr */
+	res = __mdiobus_write(bus, addr, reg_addr, 0);
+	if (res)
+		goto end;
+	/* awr */
+	res = __mdiobus_write(bus, addr, reg_addr, 0);
+	if (res)
+		goto end;
+	/* dr */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	/* dr */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	/* Heuristic sanity check: expect the `0xdead` sentinel. */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	res = res != 0xdead ? -EIO : 0;
+
+end:
+	mutex_unlock(&bus->mdio_lock);
+
+	return res;
+}
 
 static int yt921x_reg_mdio_read(void *context, u32 reg, u32 *valp)
 {
@@ -1845,10 +1941,9 @@ yt921x_phylink_mac_link_down(struct phylink_config *config, unsigned int mode,
 	int port = dp->index;
 	int res;
 
-	/* No need to sync; port control block is hold until device remove */
 	pm = priv->ports[port].mib;
 	if (pm)
-		cancel_delayed_work(&pm->work);
+		cancel_delayed_work_sync(&pm->work);
 
 	mutex_lock(&priv->reg_lock);
 	res = yt921x_port_down(priv, port);
@@ -2002,11 +2097,11 @@ static void yt921x_dsa_port_teardown(struct dsa_switch *ds, int port)
 	struct yt921x_port *pp = &priv->ports[port];
 	struct yt921x_mib *pm = pp->mib;
 
-	/* get_stats64() might not be synchronized with port_teardown(), hold
-	 * the MIB block till the device teardown
-	 */
-	if (pm)
+	if (pm) {
 		disable_delayed_work_sync(&pm->work);
+		pp->mib = NULL;
+		kvfree(pm);
+	}
 }
 
 static int yt921x_dsa_port_setup(struct dsa_switch *ds, int port)
@@ -2014,12 +2109,11 @@ static int yt921x_dsa_port_setup(struct dsa_switch *ds, int port)
 	struct yt921x_priv *priv = dsa_to_yt921x_priv(ds);
 	struct yt921x_port *pp = &priv->ports[port];
 	const struct yt921x_info *info = priv->info;
-	struct device *dev = yt921x_priv_to_device(priv);
-	struct yt921x_mib *pm = pp->mib;
+	struct yt921x_mib *pm;
 	int res;
 
-	if (!pm && (BIT(port) & yt921x_info_ports_mask(info))) {
-		pm = devm_kzalloc_obj(dev, *pm);
+	if (BIT(port) & yt921x_info_ports_mask(info)) {
+		pm = kvzalloc_obj(*pm);
 		if (!pm)
 			return -ENOMEM;
 		pp->mib = pm;
@@ -2027,20 +2121,15 @@ static int yt921x_dsa_port_setup(struct dsa_switch *ds, int port)
 		pm->port = pp;
 		u64_stats_init(&pm->syncp);
 		INIT_DELAYED_WORK(&pm->work, yt921x_mib_poll);
-		/* Start disabled, so that the enable below always pairs with
-		 * either this disable or the one from a previous teardown
-		 */
-		disable_delayed_work_sync(&pm->work);
 	}
 
 	mutex_lock(&priv->reg_lock);
 	res = yt921x_port_setup(priv, port);
 	mutex_unlock(&priv->reg_lock);
-	if (res)
+	if (res) {
+		yt921x_dsa_port_teardown(ds, port);
 		return res;
-
-	if (pm)
-		enable_delayed_work(&pm->work);
+	}
 
 	return 0;
 }
@@ -2151,11 +2240,18 @@ static int yt921x_edata_read(struct yt921x_priv *priv, u8 addr, u8 *valp)
 
 static void yt921x_dsa_teardown(struct dsa_switch *ds)
 {
-#if IS_ENABLED(CONFIG_NET_DSA_YT921X_LEDS)
 	struct yt921x_priv *priv = dsa_to_yt921x_priv(ds);
 
+#if IS_ENABLED(CONFIG_NET_DSA_YT921X_LEDS)
 	yt921x_leds_remove(priv);
 #endif
+
+	dsa_devlink_resources_unregister(ds);
+
+	if (priv->mbus_ext)
+		yt921x_mbus_ext_cleanup(priv);
+	if (priv->mbus_int)
+		yt921x_mbus_int_cleanup(priv);
 }
 
 static int yt921x_chip_detect(struct yt921x_priv *priv)
@@ -2231,6 +2327,13 @@ static int yt921x_chip_reset(struct yt921x_priv *priv)
 	u16 eth_p_tag;
 	u32 val;
 	int res;
+
+	res = yt921x_reg_mdio_reset(priv->reg_ctx);
+	if (res) {
+		dev_err(dev, "Failed to realign SMI state machine: %i\n",
+			res);
+		return res;
+	}
 
 	res = yt921x_chip_detect(priv);
 	if (res)
@@ -2460,10 +2563,11 @@ static int yt921x_dsa_setup(struct dsa_switch *ds)
 		res = yt921x_mbus_ext_init(priv, child);
 		of_node_put(child);
 		if (res)
-			return res;
+			goto err_mbus_int;
 
 		dev_err(dev, "Untested external mdio bus\n");
-		return -ENODEV;
+		res = -ENODEV;
+		goto err;
 	}
 
 	mask = priv->info->serdes_mask;
@@ -2488,7 +2592,11 @@ static int yt921x_dsa_setup(struct dsa_switch *ds)
 	mutex_unlock(&priv->reg_lock);
 
 	if (res)
-		return res;
+		goto err;
+
+	res = yt921x_devlink_setup(priv);
+	if (res)
+		goto err;
 
 #if IS_ENABLED(CONFIG_NET_DSA_YT921X_LEDS)
 	res = yt921x_leds_setup(priv);
@@ -2497,6 +2605,14 @@ static int yt921x_dsa_setup(struct dsa_switch *ds)
 #endif
 
 	return 0;
+
+err:
+	if (priv->mbus_ext)
+		yt921x_mbus_ext_cleanup(priv);
+err_mbus_int:
+	if (priv->mbus_int)
+		yt921x_mbus_int_cleanup(priv);
+	return res;
 }
 
 static const struct phylink_mac_ops yt921x_phylink_mac_ops = {
@@ -2527,6 +2643,7 @@ static const struct dsa_switch_ops yt921x_dsa_switch_ops = {
 	.port_policer_add	= yt921x_dsa_port_policer_add,
 	.port_setup_tc		= yt921x_dsa_port_setup_tc,
 	/* acl */
+	.cls_flower_stats	= yt921x_dsa_cls_flower_stats,
 	.cls_flower_del		= yt921x_dsa_cls_flower_del,
 	.cls_flower_add		= yt921x_dsa_cls_flower_add,
 	/* hsr */
@@ -2578,6 +2695,7 @@ static const struct dsa_switch_ops yt921x_dsa_switch_ops = {
 	.port_add_dscp_prio	= yt921x_dsa_port_add_dscp_prio,
 #endif
 	/* chip */
+	.devlink_info_get	= yt921x_dsa_devlink_info_get,
 	.teardown		= yt921x_dsa_teardown,
 	.setup			= yt921x_dsa_setup,
 };

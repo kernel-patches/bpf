@@ -415,6 +415,12 @@ static void dsa_port_switchdev_unsync_attrs(struct dsa_port *dp,
 	/* Ageing time may be global to the switch chip, so don't change it
 	 * here because we have no good reason (or value) to change it to.
 	 */
+
+	/* Forget the ageing time cached for this port.
+	 * dsa_switch_fastest_ageing_time() skips 0, so this port no longer
+	 * counts towards the minimum.
+	 */
+	dp->ageing_time = 0;
 }
 
 static int dsa_port_bridge_create(struct dsa_port *dp,
@@ -427,7 +433,8 @@ static int dsa_port_bridge_create(struct dsa_port *dp,
 	bridge = dsa_tree_bridge_find(ds->dst, br);
 	if (bridge) {
 		refcount_inc(&bridge->refcount);
-		dp->bridge = bridge;
+		/* Read without locks, see below */
+		smp_store_release(&dp->bridge, bridge);
 		return 0;
 	}
 
@@ -447,7 +454,8 @@ static int dsa_port_bridge_create(struct dsa_port *dp,
 		return -EOPNOTSUPP;
 	}
 
-	dp->bridge = bridge;
+	/* Read without locks from the switchdev notifiers and the taggers */
+	smp_store_release(&dp->bridge, bridge);
 
 	return 0;
 }
@@ -457,7 +465,14 @@ static void dsa_port_bridge_destroy(struct dsa_port *dp,
 {
 	struct dsa_bridge *bridge = dp->bridge;
 
-	dp->bridge = NULL;
+	WRITE_ONCE(dp->bridge, NULL);
+
+	/* An FDB event from the atomic switchdev notifier that still sees the
+	 * bridge can queue work for it, and a tagger can still use it. Wait
+	 * for them, then for the work they queued.
+	 */
+	synchronize_net();
+	dsa_flush_workqueue();
 
 	if (!refcount_dec_and_test(&bridge->refcount))
 		return;
@@ -528,7 +543,12 @@ out_rollback_unoffload:
 					&dsa_user_switchdev_blocking_notifier);
 	dsa_flush_workqueue();
 out_rollback_unbridge:
+	/* Drop the FDB events still queued from the replay before the
+	 * switches are told that the port left
+	 */
+	dsa_port_bridge_destroy(dp, br);
 	dsa_broadcast(DSA_NOTIFIER_BRIDGE_LEAVE, &info);
+	return err;
 out_rollback:
 	dsa_port_bridge_destroy(dp, br);
 	return err;
@@ -876,10 +896,11 @@ int dsa_port_ageing_time(struct dsa_port *dp, clock_t ageing_clock)
 {
 	unsigned long ageing_jiffies = clock_t_to_jiffies(ageing_clock);
 	unsigned int ageing_time = jiffies_to_msecs(ageing_jiffies);
-	struct dsa_notifier_ageing_time_info info;
+	struct dsa_notifier_ageing_time_info info = {
+		.dp = dp,
+		.ageing_time = ageing_time,
+	};
 	int err;
-
-	info.ageing_time = ageing_time;
 
 	err = dsa_port_notify(dp, DSA_NOTIFIER_AGEING_TIME, &info);
 	if (err)
@@ -973,8 +994,8 @@ int dsa_port_mtu_change(struct dsa_port *dp, int new_mtu)
 	return dsa_port_notify(dp, DSA_NOTIFIER_MTU, &info);
 }
 
-int dsa_port_fdb_add(struct dsa_port *dp, const unsigned char *addr,
-		     u16 vid)
+int dsa_port_fdb_add(struct dsa_port *dp, const struct dsa_bridge *bridge,
+		     const unsigned char *addr, u16 vid)
 {
 	struct dsa_notifier_fdb_info info = {
 		.dp = dp,
@@ -982,7 +1003,7 @@ int dsa_port_fdb_add(struct dsa_port *dp, const unsigned char *addr,
 		.vid = vid,
 		.db = {
 			.type = DSA_DB_BRIDGE,
-			.bridge = *dp->bridge,
+			.bridge = *bridge,
 		},
 	};
 
@@ -996,8 +1017,8 @@ int dsa_port_fdb_add(struct dsa_port *dp, const unsigned char *addr,
 	return dsa_port_notify(dp, DSA_NOTIFIER_FDB_ADD, &info);
 }
 
-int dsa_port_fdb_del(struct dsa_port *dp, const unsigned char *addr,
-		     u16 vid)
+int dsa_port_fdb_del(struct dsa_port *dp, const struct dsa_bridge *bridge,
+		     const unsigned char *addr, u16 vid)
 {
 	struct dsa_notifier_fdb_info info = {
 		.dp = dp,
@@ -1005,7 +1026,7 @@ int dsa_port_fdb_del(struct dsa_port *dp, const unsigned char *addr,
 		.vid = vid,
 		.db = {
 			.type = DSA_DB_BRIDGE,
-			.bridge = *dp->bridge,
+			.bridge = *bridge,
 		},
 	};
 
@@ -1041,12 +1062,13 @@ int dsa_port_standalone_host_fdb_add(struct dsa_port *dp,
 }
 
 int dsa_port_bridge_host_fdb_add(struct dsa_port *dp,
+				 const struct dsa_bridge *bridge,
 				 const unsigned char *addr, u16 vid)
 {
 	struct net_device *conduit = dsa_port_to_conduit(dp);
 	struct dsa_db db = {
 		.type = DSA_DB_BRIDGE,
-		.bridge = *dp->bridge,
+		.bridge = *bridge,
 	};
 	int err;
 
@@ -1092,12 +1114,13 @@ int dsa_port_standalone_host_fdb_del(struct dsa_port *dp,
 }
 
 int dsa_port_bridge_host_fdb_del(struct dsa_port *dp,
+				 const struct dsa_bridge *bridge,
 				 const unsigned char *addr, u16 vid)
 {
 	struct net_device *conduit = dsa_port_to_conduit(dp);
 	struct dsa_db db = {
 		.type = DSA_DB_BRIDGE,
-		.bridge = *dp->bridge,
+		.bridge = *bridge,
 	};
 	int err;
 
@@ -1113,8 +1136,8 @@ int dsa_port_bridge_host_fdb_del(struct dsa_port *dp,
 	return dsa_port_host_fdb_del(dp, addr, vid, db);
 }
 
-int dsa_port_lag_fdb_add(struct dsa_port *dp, const unsigned char *addr,
-			 u16 vid)
+int dsa_port_lag_fdb_add(struct dsa_port *dp, const struct dsa_bridge *bridge,
+			 const unsigned char *addr, u16 vid)
 {
 	struct dsa_notifier_lag_fdb_info info = {
 		.lag = dp->lag,
@@ -1122,7 +1145,7 @@ int dsa_port_lag_fdb_add(struct dsa_port *dp, const unsigned char *addr,
 		.vid = vid,
 		.db = {
 			.type = DSA_DB_BRIDGE,
-			.bridge = *dp->bridge,
+			.bridge = *bridge,
 		},
 	};
 
@@ -1132,8 +1155,8 @@ int dsa_port_lag_fdb_add(struct dsa_port *dp, const unsigned char *addr,
 	return dsa_port_notify(dp, DSA_NOTIFIER_LAG_FDB_ADD, &info);
 }
 
-int dsa_port_lag_fdb_del(struct dsa_port *dp, const unsigned char *addr,
-			 u16 vid)
+int dsa_port_lag_fdb_del(struct dsa_port *dp, const struct dsa_bridge *bridge,
+			 const unsigned char *addr, u16 vid)
 {
 	struct dsa_notifier_lag_fdb_info info = {
 		.lag = dp->lag,
@@ -1141,7 +1164,7 @@ int dsa_port_lag_fdb_del(struct dsa_port *dp, const unsigned char *addr,
 		.vid = vid,
 		.db = {
 			.type = DSA_DB_BRIDGE,
-			.bridge = *dp->bridge,
+			.bridge = *bridge,
 		},
 	};
 

@@ -659,7 +659,7 @@ static void lan966x_vcap_block_init(struct lan966x *lan966x,
 
 	__lan966x_vcap_range_init(lan966x, admin, admin->first_valid_addr,
 				  admin->last_valid_addr -
-					admin->first_valid_addr);
+					admin->first_valid_addr + 1);
 }
 
 static void lan966x_vcap_port_key_deselection(struct lan966x *lan966x,

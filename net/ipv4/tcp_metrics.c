@@ -8,6 +8,7 @@
 #include <linux/init.h>
 #include <linux/tcp.h>
 #include <linux/hash.h>
+#include <linux/siphash.h>
 #include <linux/tcp_metrics.h>
 #include <linux/vmalloc.h>
 
@@ -94,6 +95,25 @@ static unsigned int		tcp_metrics_hash_log __read_mostly;
 
 static DEFINE_SPINLOCK(tcp_metrics_lock);
 static DEFINE_SEQLOCK(fastopen_seqlock);
+
+static siphash_aligned_key_t tcpm_hash_key __read_mostly;
+
+static u32 tcpm_addr_hash(const struct inetpeer_addr *a, const struct net *net)
+{
+	u32 mix = net_hash_mix(net);
+
+	net_get_random_once(&tcpm_hash_key, sizeof(tcpm_hash_key));
+
+	if (a->family == AF_INET)
+		return siphash_2u32((__force u32)a->a4.addr, mix,
+				    &tcpm_hash_key);
+
+	return siphash_3u64(((u64)(__force u32)a->a6.s6_addr32[1] << 32) |
+			    (__force u32)a->a6.s6_addr32[0],
+			    ((u64)(__force u32)a->a6.s6_addr32[3] << 32) |
+			    (__force u32)a->a6.s6_addr32[2],
+			    mix, &tcpm_hash_key);
+}
 
 static void tcpm_suck_dst(struct tcp_metrics_block *tm,
 			  const struct dst_entry *dst,
@@ -270,13 +290,11 @@ static struct tcp_metrics_block *__tcp_get_metrics_req(struct request_sock *req,
 	case AF_INET:
 		inetpeer_set_addr_v4(&saddr, inet_rsk(req)->ir_loc_addr);
 		inetpeer_set_addr_v4(&daddr, inet_rsk(req)->ir_rmt_addr);
-		hash = ipv4_addr_hash(inet_rsk(req)->ir_rmt_addr);
 		break;
 #if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		inetpeer_set_addr_v6(&saddr, &inet_rsk(req)->ir_v6_loc_addr);
 		inetpeer_set_addr_v6(&daddr, &inet_rsk(req)->ir_v6_rmt_addr);
-		hash = ipv6_addr_hash(&inet_rsk(req)->ir_v6_rmt_addr);
 		break;
 #endif
 	default:
@@ -284,7 +302,7 @@ static struct tcp_metrics_block *__tcp_get_metrics_req(struct request_sock *req,
 	}
 
 	net = sock_net(req_to_sk(req));
-	hash ^= net_hash_mix(net);
+	hash = tcpm_addr_hash(&daddr, net);
 	hash = hash_32(hash, tcp_metrics_hash_log);
 
 	for (tm = rcu_dereference(tcp_metrics_hash[hash].chain); tm;
@@ -310,18 +328,15 @@ static struct tcp_metrics_block *tcp_get_metrics(struct sock *sk,
 	if (sk->sk_family == AF_INET) {
 		inetpeer_set_addr_v4(&saddr, inet_sk(sk)->inet_saddr);
 		inetpeer_set_addr_v4(&daddr, inet_sk(sk)->inet_daddr);
-		hash = ipv4_addr_hash(inet_sk(sk)->inet_daddr);
 	}
 #if IS_ENABLED(CONFIG_IPV6)
 	else if (sk->sk_family == AF_INET6) {
 		if (ipv6_addr_v4mapped(&sk->sk_v6_daddr)) {
 			inetpeer_set_addr_v4(&saddr, inet_sk(sk)->inet_saddr);
 			inetpeer_set_addr_v4(&daddr, inet_sk(sk)->inet_daddr);
-			hash = ipv4_addr_hash(inet_sk(sk)->inet_daddr);
 		} else {
 			inetpeer_set_addr_v6(&saddr, &sk->sk_v6_rcv_saddr);
 			inetpeer_set_addr_v6(&daddr, &sk->sk_v6_daddr);
-			hash = ipv6_addr_hash(&sk->sk_v6_daddr);
 		}
 	}
 #endif
@@ -329,7 +344,7 @@ static struct tcp_metrics_block *tcp_get_metrics(struct sock *sk,
 		return NULL;
 
 	net = sock_net(sk);
-	hash ^= net_hash_mix(net);
+	hash = tcpm_addr_hash(&daddr, net);
 	hash = hash_32(hash, tcp_metrics_hash_log);
 
 	tm = __tcp_get_metrics(&saddr, &daddr, net, hash);
@@ -494,9 +509,11 @@ void tcp_init_metrics(struct sock *sk)
 		goto reset;
 	}
 
-	if (tcp_metric_locked(tm, TCP_METRIC_CWND))
-		tp->snd_cwnd_clamp = min(tcp_metric_get(tm, TCP_METRIC_CWND),
-					 TCP_MAX_SND_CWND);
+	if (tcp_metric_locked(tm, TCP_METRIC_CWND)) {
+		val = tcp_metric_get(tm, TCP_METRIC_CWND);
+		if (val)
+			tp->snd_cwnd_clamp = min(val, TCP_MAX_SND_CWND);
+	}
 
 	val = READ_ONCE(net->ipv4.sysctl_tcp_no_ssthresh_metrics_save) ?
 	      0 : tcp_metric_get(tm, TCP_METRIC_SSTHRESH);
@@ -811,15 +828,13 @@ done:
 }
 
 static int __parse_nl_addr(struct genl_info *info, struct inetpeer_addr *addr,
-			   unsigned int *hash, int optional, int v4, int v6)
+			   int optional, int v4, int v6)
 {
 	struct nlattr *a;
 
 	a = info->attrs[v4];
 	if (a) {
 		inetpeer_set_addr_v4(addr, nla_get_in_addr(a));
-		if (hash)
-			*hash = ipv4_addr_hash(inetpeer_get_addr_v4(addr));
 		return 0;
 	}
 	a = info->attrs[v6];
@@ -828,24 +843,22 @@ static int __parse_nl_addr(struct genl_info *info, struct inetpeer_addr *addr,
 
 		in6 = nla_get_in6_addr(a);
 		inetpeer_set_addr_v6(addr, &in6);
-		if (hash)
-			*hash = ipv6_addr_hash(inetpeer_get_addr_v6(addr));
 		return 0;
 	}
 	return optional ? 1 : -EAFNOSUPPORT;
 }
 
 static int parse_nl_addr(struct genl_info *info, struct inetpeer_addr *addr,
-			 unsigned int *hash, int optional)
+			 int optional)
 {
-	return __parse_nl_addr(info, addr, hash, optional,
+	return __parse_nl_addr(info, addr, optional,
 			       TCP_METRICS_ATTR_ADDR_IPV4,
 			       TCP_METRICS_ATTR_ADDR_IPV6);
 }
 
 static int parse_nl_saddr(struct genl_info *info, struct inetpeer_addr *addr)
 {
-	return __parse_nl_addr(info, addr, NULL, 0,
+	return __parse_nl_addr(info, addr, 0,
 			       TCP_METRICS_ATTR_SADDR_IPV4,
 			       TCP_METRICS_ATTR_SADDR_IPV6);
 }
@@ -861,7 +874,7 @@ static int tcp_metrics_nl_cmd_get(struct sk_buff *skb, struct genl_info *info)
 	int ret;
 	bool src = true;
 
-	ret = parse_nl_addr(info, &daddr, &hash, 0);
+	ret = parse_nl_addr(info, &daddr, 0);
 	if (ret < 0)
 		return ret;
 
@@ -878,7 +891,7 @@ static int tcp_metrics_nl_cmd_get(struct sk_buff *skb, struct genl_info *info)
 	if (!reply)
 		goto nla_put_failure;
 
-	hash ^= net_hash_mix(net);
+	hash = tcpm_addr_hash(&daddr, net);
 	hash = hash_32(hash, tcp_metrics_hash_log);
 	ret = -ESRCH;
 	rcu_read_lock();
@@ -947,7 +960,7 @@ static int tcp_metrics_nl_cmd_del(struct sk_buff *skb, struct genl_info *info)
 	int ret;
 	bool src = true, found = false;
 
-	ret = parse_nl_addr(info, &daddr, &hash, 1);
+	ret = parse_nl_addr(info, &daddr, 1);
 	if (ret < 0)
 		return ret;
 	if (ret > 0) {
@@ -958,7 +971,7 @@ static int tcp_metrics_nl_cmd_del(struct sk_buff *skb, struct genl_info *info)
 	if (ret < 0)
 		src = false;
 
-	hash ^= net_hash_mix(net);
+	hash = tcpm_addr_hash(&daddr, net);
 	hash = hash_32(hash, tcp_metrics_hash_log);
 	hb = tcp_metrics_hash + hash;
 	pp = &hb->chain;

@@ -391,7 +391,6 @@ void tcp_v4_mtu_reduced(struct sock *sk)
 		WRITE_ONCE(sk->sk_err_soft, EMSGSIZE);
 
 	if (inet->pmtudisc != IP_PMTUDISC_DONT &&
-	    ip_sk_accept_pmtu(sk) &&
 	    inet_csk(sk)->icsk_pmtu_cookie > dmtu) {
 		tcp_sync_mss(sk, dmtu);
 
@@ -505,7 +504,8 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 	int err;
 
 	sk = __inet_lookup_established(net, iph->daddr, th->dest, iph->saddr,
-				       ntohs(th->source), inet_iif(skb), 0);
+				       ntohs(th->source), inet_iif(skb),
+				       inet_sdif(skb));
 	if (!sk) {
 		__ICMP_INC_STATS(net, ICMP_MIB_INERRORS);
 		return -ENOENT;
@@ -516,13 +516,23 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 		inet_twsk_put(inet_twsk(sk));
 		return 0;
 	}
+
+	if (static_branch_unlikely(&ip4_min_ttl)) {
+		/* min_ttl can be changed concurrently from do_ip_setsockopt() */
+		if (unlikely(ip_hdr(skb)->ttl <
+			     READ_ONCE(inet_sk(sk_to_full_sk(sk))->min_ttl))) {
+			__NET_INC_STATS(net, LINUX_MIB_TCPMINTTLDROP);
+			sock_gen_put(sk);
+			return 0;
+		}
+	}
+
 	seq = ntohl(th->seq);
 	if (sk->sk_state == TCP_NEW_SYN_RECV) {
 		tcp_req_err(sk, seq, type == ICMP_PARAMETERPROB ||
 				     type == ICMP_TIME_EXCEEDED ||
 				     (type == ICMP_DEST_UNREACH &&
-				      (code == ICMP_NET_UNREACH ||
-				       code == ICMP_HOST_UNREACH)));
+				      code != ICMP_FRAG_NEEDED));
 		return 0;
 	}
 
@@ -543,14 +553,6 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 	}
 	if (sk->sk_state == TCP_CLOSE || inet_test_bit(DEFER_CONNECT, sk))
 		goto out;
-
-	if (static_branch_unlikely(&ip4_min_ttl)) {
-		/* min_ttl can be changed concurrently from do_ip_setsockopt() */
-		if (unlikely(iph->ttl < READ_ONCE(inet_sk(sk)->min_ttl))) {
-			__NET_INC_STATS(net, LINUX_MIB_TCPMINTTLDROP);
-			goto out;
-		}
-	}
 
 	tp = tcp_sk(sk);
 	/* XXX (TFO) - tp->snd_una should be ISN (tcp_create_openreq_child() */
@@ -583,6 +585,9 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 			 * they should go through unfragmented).
 			 */
 			if (sk->sk_state == TCP_LISTEN)
+				goto out;
+
+			if (!ip_sk_accept_pmtu(sk))
 				goto out;
 
 			WRITE_ONCE(tp->mtu_info, info);
@@ -1732,7 +1737,7 @@ struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 	if (!dst) {
 		dst = inet_csk_route_child_sock(sk, newsk, req);
 		if (!dst)
-			goto put_and_exit;
+			goto clear_ca_and_exit;
 	} else {
 		/* syncookie case : see end of cookie_v4_check() */
 	}
@@ -1740,6 +1745,7 @@ struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 
 	tcp_ca_openreq_child(newsk, dst);
 
+	tcp_mtup_init(newsk);
 	tcp_sync_mss(newsk, dst4_mtu(dst));
 	newtp->advmss = tcp_mss_clamp(tcp_sk(sk), tcp_dst_advmss(dst));
 
@@ -1789,6 +1795,9 @@ exit_nonewsk:
 exit:
 	tcp_listendrop(sk);
 	return NULL;
+clear_ca_and_exit:
+	/* newsk holds no reference on the inherited CA yet. */
+	inet_csk(newsk)->icsk_ca_ops = NULL;
 put_and_exit:
 	newinet->inet_opt = NULL;
 	inet_csk_prepare_forced_close(newsk);
@@ -2132,12 +2141,18 @@ lookup:
 		struct sock *nsk;
 
 		sk = req->rsk_listener;
-		if (!xfrm4_policy_check(sk, XFRM_POLICY_IN, skb))
+
+		if (static_branch_unlikely(&ip4_min_ttl) &&
+		    iph->ttl < READ_ONCE(inet_sk(sk)->min_ttl)) {
+			__NET_INC_STATS(net, LINUX_MIB_TCPMINTTLDROP);
+			drop_reason = SKB_DROP_REASON_TCP_MINTTL;
+		} else if (!xfrm4_policy_check(sk, XFRM_POLICY_IN, skb)) {
 			drop_reason = SKB_DROP_REASON_XFRM_POLICY;
-		else
+		} else {
 			drop_reason = tcp_inbound_hash(sk, req, skb,
 						       &iph->saddr, &iph->daddr,
 						       AF_INET, dif, sdif);
+		}
 		if (unlikely(drop_reason)) {
 			sk_drops_skbadd(sk, skb);
 			reqsk_put(req);

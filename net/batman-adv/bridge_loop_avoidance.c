@@ -59,84 +59,83 @@ batadv_bla_send_announce(struct batadv_priv *bat_priv,
 
 /**
  * batadv_choose_claim() - choose the right bucket for a claim.
- * @data: data to hash
+ * @data: &struct batadv_bla_claim_key to hash
  * @size: size of the hash table
  *
  * Return: the hash index of the claim
  */
 static inline u32 batadv_choose_claim(const void *data, u32 size)
 {
-	const struct batadv_bla_claim *claim = data;
+	const struct batadv_bla_claim_key *key = data;
 	u32 hash = 0;
 
-	hash = jhash(&claim->addr, sizeof(claim->addr), hash);
-	hash = jhash(&claim->vid, sizeof(claim->vid), hash);
+	hash = jhash(&key->addr, sizeof(key->addr), hash);
+	hash = jhash(&key->vid, sizeof(key->vid), hash);
 
 	return hash % size;
 }
 
 /**
  * batadv_choose_backbone_gw() - choose the right bucket for a backbone gateway.
- * @data: data to hash
+ * @data: &struct batadv_bla_backbone_gw_key to hash
  * @size: size of the hash table
  *
  * Return: the hash index of the backbone gateway
  */
 static inline u32 batadv_choose_backbone_gw(const void *data, u32 size)
 {
-	const struct batadv_bla_backbone_gw *gw;
+	const struct batadv_bla_backbone_gw_key *key = data;
 	u32 hash = 0;
 
-	gw = data;
-	hash = jhash(&gw->orig, sizeof(gw->orig), hash);
-	hash = jhash(&gw->vid, sizeof(gw->vid), hash);
+	hash = jhash(&key->orig, sizeof(key->orig), hash);
+	hash = jhash(&key->vid, sizeof(key->vid), hash);
 
 	return hash % size;
 }
 
 /**
- * batadv_compare_backbone_gw() - compare address and vid of two backbone gws
- * @node: list node of the first entry to compare
- * @data2: pointer to the second backbone gateway
+ * batadv_compare_backbone_gw() - compare key of a backbone gw with a search key
+ * @node: list node of the backbone gateway to compare
+ * @data2: &struct batadv_bla_backbone_gw_key to compare with
  *
- * Return: true if the backbones have the same data, false otherwise
+ * Return: true if the backbone gateway has the given key, false otherwise
  */
 static bool batadv_compare_backbone_gw(const struct hlist_node *node,
 				       const void *data2)
 {
-	const void *data1 = container_of(node, struct batadv_bla_backbone_gw,
-					 hash_entry);
-	const struct batadv_bla_backbone_gw *gw1 = data1;
-	const struct batadv_bla_backbone_gw *gw2 = data2;
+	const struct batadv_bla_backbone_gw_key *key = data2;
+	const struct batadv_bla_backbone_gw *gw;
 
-	if (!batadv_compare_eth(gw1->orig, gw2->orig))
+	gw = container_of(node, struct batadv_bla_backbone_gw, hash_entry);
+
+	if (!batadv_compare_eth(gw->key.orig, key->orig))
 		return false;
 
-	if (gw1->vid != gw2->vid)
+	if (gw->key.vid != key->vid)
 		return false;
 
 	return true;
 }
 
 /**
- * batadv_compare_claim() - compare address and vid of two claims
- * @node: list node of the first entry to compare
- * @data2: pointer to the second claims
+ * batadv_compare_claim() - compare key of a claim with a search key
+ * @node: list node of the claim to compare
+ * @data2: &struct batadv_bla_claim_key to compare with
  *
- * Return: true if the claims have the same data, false otherwise
+ * Return: true if the claim has the given key, false otherwise
  */
 static bool batadv_compare_claim(const struct hlist_node *node,
 				 const void *data2)
 {
-	const void *data1 = container_of(node, struct batadv_bla_claim,
-					 hash_entry);
-	const struct batadv_bla_claim *cl1 = data1;
-	const struct batadv_bla_claim *cl2 = data2;
+	const struct batadv_bla_claim_key *key = data2;
+	const struct batadv_bla_claim *claim;
 
-	if (!batadv_compare_eth(cl1->addr, cl2->addr))
+	claim = container_of(node, struct batadv_bla_claim, hash_entry);
+
+	if (!batadv_compare_eth(claim->key.addr, key->addr))
 		return false;
 
-	if (cl1->vid != cl2->vid)
+	if (claim->key.vid != key->vid)
 		return false;
 
 	return true;
@@ -188,7 +187,7 @@ static void batadv_claim_release(struct kref *ref)
 	spin_unlock_bh(&claim->backbone_lock);
 
 	spin_lock_bh(&old_backbone_gw->crc_lock);
-	old_backbone_gw->crc ^= crc16(0, claim->addr, ETH_ALEN);
+	old_backbone_gw->crc ^= crc16(0, claim->key.addr, ETH_ALEN);
 	spin_unlock_bh(&old_backbone_gw->crc_lock);
 
 	batadv_backbone_gw_put(old_backbone_gw);
@@ -211,13 +210,14 @@ static void batadv_claim_put(struct batadv_bla_claim *claim)
 /**
  * batadv_claim_hash_find() - looks for a claim in the claim hash
  * @bat_priv: the bat priv with all the mesh interface information
- * @data: search data (may be local/static data)
+ * @key: key of the searched claim
  *
  * Return: claim if found or NULL otherwise.
+ * The returned object has an increased refcounter.
  */
-static struct batadv_bla_claim *
+static struct batadv_bla_claim * __must_check
 batadv_claim_hash_find(struct batadv_priv *bat_priv,
-		       struct batadv_bla_claim *data)
+		       const struct batadv_bla_claim_key *key)
 {
 	struct batadv_hashtable *hash = bat_priv->bla.claim_hash;
 	struct batadv_bla_claim *claim_tmp = NULL;
@@ -228,12 +228,12 @@ batadv_claim_hash_find(struct batadv_priv *bat_priv,
 	if (!hash)
 		return NULL;
 
-	index = batadv_choose_claim(data, hash->size);
+	index = batadv_choose_claim(key, hash->size);
 	head = &hash->table[index];
 
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(claim, head, hash_entry) {
-		if (!batadv_compare_claim(&claim->hash_entry, data))
+		if (!batadv_compare_claim(&claim->hash_entry, key))
 			continue;
 
 		if (!kref_get_unless_zero(&claim->refcount))
@@ -253,32 +253,32 @@ batadv_claim_hash_find(struct batadv_priv *bat_priv,
  * @addr: the address of the originator
  * @vid: the VLAN ID
  *
- * Return: backbone gateway if found or NULL otherwise
+ * Return: backbone gateway if found or NULL otherwise.
+ * The returned object has an increased refcounter.
  */
-static struct batadv_bla_backbone_gw *
+static struct batadv_bla_backbone_gw * __must_check
 batadv_backbone_hash_find(struct batadv_priv *bat_priv, const u8 *addr,
 			  unsigned short vid)
 {
 	struct batadv_hashtable *hash = bat_priv->bla.backbone_hash;
 	struct batadv_bla_backbone_gw *backbone_gw_tmp = NULL;
-	struct batadv_bla_backbone_gw search_entry;
 	struct batadv_bla_backbone_gw *backbone_gw;
+	struct batadv_bla_backbone_gw_key key;
 	struct hlist_head *head;
 	int index;
 
 	if (!hash)
 		return NULL;
 
-	ether_addr_copy(search_entry.orig, addr);
-	search_entry.vid = vid;
+	ether_addr_copy(key.orig, addr);
+	key.vid = vid;
 
-	index = batadv_choose_backbone_gw(&search_entry, hash->size);
+	index = batadv_choose_backbone_gw(&key, hash->size);
 	head = &hash->table[index];
 
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(backbone_gw, head, hash_entry) {
-		if (!batadv_compare_backbone_gw(&backbone_gw->hash_entry,
-						&search_entry))
+		if (!batadv_compare_backbone_gw(&backbone_gw->hash_entry, &key))
 			continue;
 
 		if (!kref_get_unless_zero(&backbone_gw->refcount))
@@ -321,6 +321,7 @@ batadv_bla_del_backbone_claims(struct batadv_bla_backbone_gw *backbone_gw)
 				continue;
 
 			hlist_del_rcu(&claim->hash_entry);
+			atomic_inc(&hash->generation);
 			batadv_claim_put(claim);
 		}
 		spin_unlock_bh(list_lock);
@@ -462,9 +463,9 @@ static void batadv_bla_loopdetect_report(struct work_struct *work)
 
 	batadv_info(bat_priv->mesh_iface,
 		    "Possible loop on VLAN %d detected which can't be handled by BLA - please check your network setup!\n",
-		    batadv_print_vid(backbone_gw->vid));
+		    batadv_print_vid(backbone_gw->key.vid));
 	snprintf(vid_str, sizeof(vid_str), "%d",
-		 batadv_print_vid(backbone_gw->vid));
+		 batadv_print_vid(backbone_gw->key.vid));
 	vid_str[sizeof(vid_str) - 1] = 0;
 
 	batadv_throw_uevent(bat_priv, BATADV_UEV_BLA, BATADV_UEV_LOOPDETECT,
@@ -480,9 +481,10 @@ static void batadv_bla_loopdetect_report(struct work_struct *work)
  * @vid: the VLAN ID
  * @own_backbone: set if the requested backbone is local
  *
- * Return: the (possibly created) backbone gateway or NULL on error
+ * Return: the (possibly created) backbone gateway or NULL on error.
+ * The returned object has an increased refcounter.
  */
-static struct batadv_bla_backbone_gw *
+static struct batadv_bla_backbone_gw * __must_check
 batadv_bla_get_backbone_gw(struct batadv_priv *bat_priv, const u8 *orig,
 			   unsigned short vid, bool own_backbone)
 {
@@ -503,21 +505,21 @@ batadv_bla_get_backbone_gw(struct batadv_priv *bat_priv, const u8 *orig,
 	if (!entry)
 		return NULL;
 
-	entry->vid = vid;
+	entry->key.vid = vid;
 	WRITE_ONCE(entry->lasttime, jiffies);
 	entry->crc = BATADV_BLA_CRC_INIT;
 	entry->bat_priv = bat_priv;
 	spin_lock_init(&entry->crc_lock);
 	entry->state = BATADV_BLA_BACKBONE_GW_SYNCED;
 	entry->wait_periods = 0;
-	ether_addr_copy(entry->orig, orig);
+	ether_addr_copy(entry->key.orig, orig);
 	INIT_WORK(&entry->report_work, batadv_bla_loopdetect_report);
 	kref_init(&entry->refcount);
 
 	kref_get(&entry->refcount);
 	hash_added = batadv_hash_add(bat_priv->bla.backbone_hash,
 				     batadv_compare_backbone_gw,
-				     batadv_choose_backbone_gw, entry,
+				     batadv_choose_backbone_gw, &entry->key,
 				     &entry->hash_entry);
 
 	if (unlikely(hash_added != 0)) {
@@ -615,7 +617,8 @@ static void batadv_bla_answer_request(struct batadv_priv *bat_priv,
 			if (claim->backbone_gw != backbone_gw)
 				continue;
 
-			batadv_bla_send_claim(bat_priv, claim->addr, claim->vid,
+			batadv_bla_send_claim(bat_priv, claim->key.addr,
+					      claim->key.vid,
 					      BATADV_CLAIM_TYPE_CLAIM);
 		}
 		rcu_read_unlock();
@@ -640,11 +643,11 @@ static void batadv_bla_send_request(struct batadv_bla_backbone_gw *backbone_gw)
 	batadv_bla_del_backbone_claims(backbone_gw);
 
 	batadv_dbg(BATADV_DBG_BLA, backbone_gw->bat_priv,
-		   "Sending REQUEST to %pM\n", backbone_gw->orig);
+		   "Sending REQUEST to %pM\n", backbone_gw->key.orig);
 
 	/* send request */
-	batadv_bla_send_claim(backbone_gw->bat_priv, backbone_gw->orig,
-			      backbone_gw->vid, BATADV_CLAIM_TYPE_REQUEST);
+	batadv_bla_send_claim(backbone_gw->bat_priv, backbone_gw->key.orig,
+			      backbone_gw->key.vid, BATADV_CLAIM_TYPE_REQUEST);
 
 	/* no local broadcasts should be sent or received, for now. */
 	spin_lock_bh(&backbone_gw->bat_priv->bla.num_requests_lock);
@@ -672,7 +675,7 @@ static void batadv_bla_send_announce(struct batadv_priv *bat_priv,
 	spin_unlock_bh(&backbone_gw->crc_lock);
 	memcpy(&mac[4], &crc, 2);
 
-	batadv_bla_send_claim(bat_priv, mac, backbone_gw->vid,
+	batadv_bla_send_claim(bat_priv, mac, backbone_gw->key.vid,
 			      BATADV_CLAIM_TYPE_ANNOUNCE);
 }
 
@@ -688,15 +691,15 @@ static void batadv_bla_add_claim(struct batadv_priv *bat_priv,
 				 struct batadv_bla_backbone_gw *backbone_gw)
 {
 	struct batadv_bla_backbone_gw *old_backbone_gw;
-	struct batadv_bla_claim search_claim;
+	struct batadv_bla_claim_key claim_key;
 	struct batadv_bla_claim *claim;
 	int hash_added;
 	u16 claim_crc;
 	bool changed;
 
-	ether_addr_copy(search_claim.addr, mac);
-	search_claim.vid = vid;
-	claim = batadv_claim_hash_find(bat_priv, &search_claim);
+	ether_addr_copy(claim_key.addr, mac);
+	claim_key.vid = vid;
+	claim = batadv_claim_hash_find(bat_priv, &claim_key);
 	claim_crc = crc16(0, mac, ETH_ALEN);
 
 	/* create a new claim entry if it does not exist yet. */
@@ -705,9 +708,9 @@ static void batadv_bla_add_claim(struct batadv_priv *bat_priv,
 		if (!claim)
 			return;
 
-		ether_addr_copy(claim->addr, mac);
+		ether_addr_copy(claim->key.addr, mac);
+		claim->key.vid = vid;
 		spin_lock_init(&claim->backbone_lock);
-		claim->vid = vid;
 		WRITE_ONCE(claim->lasttime, jiffies);
 		kref_get(&backbone_gw->refcount);
 		claim->backbone_gw = backbone_gw;
@@ -720,7 +723,7 @@ static void batadv_bla_add_claim(struct batadv_priv *bat_priv,
 		kref_get(&claim->refcount);
 		hash_added = batadv_hash_add(bat_priv->bla.claim_hash,
 					     batadv_compare_claim,
-					     batadv_choose_claim, claim,
+					     batadv_choose_claim, &claim->key,
 					     &claim->hash_entry);
 
 		if (unlikely(hash_added != 0)) {
@@ -760,7 +763,7 @@ static void batadv_bla_add_claim(struct batadv_priv *bat_priv,
 		batadv_dbg(BATADV_DBG_BLA, bat_priv,
 			   "%s(): changing ownership for %pM, vid %d to gw %pM\n",
 			   __func__, mac, batadv_print_vid(vid),
-			   backbone_gw->orig);
+			   backbone_gw->key.orig);
 
 		/* add claim address to new backbone_gw */
 		spin_lock_bh(&backbone_gw->crc_lock);
@@ -789,7 +792,7 @@ static void batadv_bla_add_claim(struct batadv_priv *bat_priv,
  *
  * Return: valid reference to claim::backbone_gw
  */
-static struct batadv_bla_backbone_gw *
+static struct batadv_bla_backbone_gw * __must_check
 batadv_bla_claim_get_backbone_gw(struct batadv_bla_claim *claim)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
@@ -813,12 +816,12 @@ static void batadv_bla_del_claim(struct batadv_priv *bat_priv,
 {
 	struct batadv_bla_claim *claim_removed_entry;
 	struct hlist_node *claim_removed_node;
-	struct batadv_bla_claim search_claim;
+	struct batadv_bla_claim_key claim_key;
 	struct batadv_bla_claim *claim;
 
-	ether_addr_copy(search_claim.addr, mac);
-	search_claim.vid = vid;
-	claim = batadv_claim_hash_find(bat_priv, &search_claim);
+	ether_addr_copy(claim_key.addr, mac);
+	claim_key.vid = vid;
+	claim = batadv_claim_hash_find(bat_priv, &claim_key);
 	if (!claim)
 		return;
 
@@ -827,7 +830,8 @@ static void batadv_bla_del_claim(struct batadv_priv *bat_priv,
 
 	claim_removed_node = batadv_hash_remove(bat_priv->bla.claim_hash,
 						batadv_compare_claim,
-						batadv_choose_claim, claim);
+						batadv_choose_claim,
+						&claim->key);
 	if (!claim_removed_node)
 		goto free_claim;
 
@@ -850,8 +854,9 @@ free_claim:
  *
  * Return: true if handled
  */
-static bool batadv_handle_announce(struct batadv_priv *bat_priv, u8 *an_addr,
-				   u8 *backbone_addr, unsigned short vid)
+static bool batadv_handle_announce(struct batadv_priv *bat_priv,
+				   const u8 *an_addr, const u8 *backbone_addr,
+				   unsigned short vid)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
 	u16 backbone_crc;
@@ -868,11 +873,11 @@ static bool batadv_handle_announce(struct batadv_priv *bat_priv, u8 *an_addr,
 
 	/* handle as ANNOUNCE frame */
 	WRITE_ONCE(backbone_gw->lasttime, jiffies);
-	crc = ntohs(*((__force __be16 *)(&an_addr[4])));
+	crc = ntohs(*((__force const __be16 *)(&an_addr[4])));
 
 	batadv_dbg(BATADV_DBG_BLA, bat_priv,
 		   "%s(): ANNOUNCE vid %d (sent by %pM)... CRC = %#.4x\n",
-		   __func__, batadv_print_vid(vid), backbone_gw->orig, crc);
+		   __func__, batadv_print_vid(vid), backbone_gw->key.orig, crc);
 
 	spin_lock_bh(&backbone_gw->crc_lock);
 	backbone_crc = backbone_gw->crc;
@@ -881,8 +886,8 @@ static bool batadv_handle_announce(struct batadv_priv *bat_priv, u8 *an_addr,
 	if (backbone_crc != crc) {
 		batadv_dbg(BATADV_DBG_BLA, backbone_gw->bat_priv,
 			   "%s(): CRC FAILED for %pM/%d (my = %#.4x, sent = %#.4x)\n",
-			   __func__, backbone_gw->orig,
-			   batadv_print_vid(backbone_gw->vid),
+			   __func__, backbone_gw->key.orig,
+			   batadv_print_vid(backbone_gw->key.vid),
 			   backbone_crc, crc);
 
 		batadv_bla_send_request(backbone_gw);
@@ -914,8 +919,8 @@ static bool batadv_handle_announce(struct batadv_priv *bat_priv, u8 *an_addr,
  */
 static bool batadv_handle_request(struct batadv_priv *bat_priv,
 				  struct batadv_hard_iface *primary_if,
-				  u8 *backbone_addr, struct ethhdr *ethhdr,
-				  unsigned short vid)
+				  const u8 *backbone_addr,
+				  struct ethhdr *ethhdr, unsigned short vid)
 {
 	/* check for REQUEST frame */
 	if (!batadv_compare_eth(backbone_addr, ethhdr->h_dest))
@@ -981,18 +986,22 @@ static bool batadv_handle_claim(struct batadv_priv *bat_priv,
 				unsigned short vid)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
+	bool own_backbone;
+
+	own_backbone = batadv_compare_eth(backbone_addr,
+					  primary_if->net_dev->dev_addr);
 
 	/* register the gateway if not yet available, and add the claim. */
 
 	backbone_gw = batadv_bla_get_backbone_gw(bat_priv, backbone_addr, vid,
-						 false);
+						 own_backbone);
 
 	if (unlikely(!backbone_gw))
 		return true;
 
 	/* this must be a CLAIM frame */
 	batadv_bla_add_claim(bat_priv, claim_addr, vid, backbone_gw);
-	if (batadv_compare_eth(backbone_addr, primary_if->net_dev->dev_addr))
+	if (own_backbone)
 		batadv_bla_send_claim(bat_priv, claim_addr, vid,
 				      BATADV_CLAIM_TYPE_CLAIM);
 
@@ -1269,7 +1278,7 @@ static void batadv_bla_purge_backbone_gw(struct batadv_priv *bat_priv, int now)
 
 				batadv_dbg(BATADV_DBG_BLA, backbone_gw->bat_priv,
 					   "%s(): backbone gw %pM timed out\n",
-					   __func__, backbone_gw->orig);
+					   __func__, backbone_gw->key.orig);
 
 purge_now:
 				purged = true;
@@ -1285,6 +1294,7 @@ purge_now:
 				batadv_bla_del_backbone_claims(backbone_gw);
 
 				hlist_del_rcu(&backbone_gw->hash_entry);
+				atomic_inc(&hash->generation);
 				break;
 			}
 			spin_unlock_bh(list_lock);
@@ -1340,7 +1350,7 @@ static void batadv_bla_purge_claims(struct batadv_priv *bat_priv,
 			if (now)
 				goto purge_now;
 
-			if (!batadv_compare_eth(backbone_gw->orig,
+			if (!batadv_compare_eth(backbone_gw->key.orig,
 						primary_if->net_dev->dev_addr))
 				goto skip;
 
@@ -1354,11 +1364,11 @@ static void batadv_bla_purge_claims(struct batadv_priv *bat_priv,
 purge_now:
 			batadv_dbg(BATADV_DBG_BLA, bat_priv,
 				   "%s(): %pM, vid %d\n", __func__,
-				   claim->addr, claim->vid);
+				   claim->key.addr, claim->key.vid);
 
 			batadv_handle_unclaim(bat_priv, primary_if,
-					      backbone_gw->orig,
-					      claim->addr, claim->vid);
+					      backbone_gw->key.orig,
+					      claim->key.addr, claim->key.vid);
 skip:
 			batadv_backbone_gw_put(backbone_gw);
 			batadv_claim_put(claim);
@@ -1408,11 +1418,11 @@ void batadv_bla_update_orig_address(struct batadv_priv *bat_priv,
 		rcu_read_lock();
 		hlist_for_each_entry_rcu(backbone_gw, head, hash_entry) {
 			/* own orig still holds the old value. */
-			if (!batadv_compare_eth(backbone_gw->orig,
+			if (!batadv_compare_eth(backbone_gw->key.orig,
 						oldif->net_dev->dev_addr))
 				continue;
 
-			ether_addr_copy(backbone_gw->orig,
+			ether_addr_copy(backbone_gw->key.orig,
 					primary_if->net_dev->dev_addr);
 			/* send an announce frame so others will ask for our
 			 * claims and update their tables.
@@ -1438,9 +1448,10 @@ batadv_bla_send_loopdetect(struct batadv_priv *bat_priv,
 			   struct batadv_bla_backbone_gw *backbone_gw)
 {
 	batadv_dbg(BATADV_DBG_BLA, bat_priv, "Send loopdetect frame for vid %d\n",
-		   backbone_gw->vid);
+		   backbone_gw->key.vid);
 	batadv_bla_send_claim(bat_priv, bat_priv->bla.loopdetect_addr,
-			      backbone_gw->vid, BATADV_CLAIM_TYPE_LOOPDETECT);
+			      backbone_gw->key.vid,
+			      BATADV_CLAIM_TYPE_LOOPDETECT);
 }
 
 /**
@@ -1521,7 +1532,7 @@ static void batadv_bla_periodic_work(struct work_struct *work)
 
 		rcu_read_lock();
 		hlist_for_each_entry_rcu(backbone_gw, head, hash_entry) {
-			if (!batadv_compare_eth(backbone_gw->orig,
+			if (!batadv_compare_eth(backbone_gw->key.orig,
 						primary_if->net_dev->dev_addr))
 				continue;
 
@@ -1788,8 +1799,8 @@ bool batadv_bla_check_bcast_duplist(struct batadv_priv *bat_priv,
  *
  * Return: true if orig is a backbone for this vid, false otherwise.
  */
-bool batadv_bla_is_backbone_gw_orig(struct batadv_priv *bat_priv, u8 *orig,
-				    unsigned short vid)
+bool batadv_bla_is_backbone_gw_orig(struct batadv_priv *bat_priv,
+				    const u8 *orig, unsigned short vid)
 {
 	struct batadv_hashtable *hash = bat_priv->bla.backbone_hash;
 	struct batadv_bla_backbone_gw *backbone_gw;
@@ -1807,8 +1818,8 @@ bool batadv_bla_is_backbone_gw_orig(struct batadv_priv *bat_priv, u8 *orig,
 
 		rcu_read_lock();
 		hlist_for_each_entry_rcu(backbone_gw, head, hash_entry) {
-			if (batadv_compare_eth(backbone_gw->orig, orig) &&
-			    backbone_gw->vid == vid) {
+			if (batadv_compare_eth(backbone_gw->key.orig, orig) &&
+			    backbone_gw->key.vid == vid) {
 				rcu_read_unlock();
 				return true;
 			}
@@ -1950,17 +1961,17 @@ batadv_bla_loopdetect_check(struct batadv_priv *bat_priv, struct sk_buff *skb,
  *  * we have to race for a claim
  *  * if the frame is allowed on the LAN
  *
- * In these cases, the skb is further handled by this function
+ * The skb is never consumed by this function.
  *
- * Return: true if handled, otherwise it returns false and the caller shall
- * further process the skb.
+ * Return: true if the skb has to be dropped, otherwise it returns false and the
+ * caller shall further process the skb.
  */
 bool batadv_bla_rx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 		   unsigned short vid, int packet_type)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
+	struct batadv_bla_claim_key claim_key;
 	struct batadv_bla_claim *claim = NULL;
-	struct batadv_bla_claim search_claim;
 	struct batadv_hard_iface *primary_if;
 	struct ethhdr *ethhdr;
 	bool own_claim;
@@ -2006,9 +2017,9 @@ bool batadv_bla_rx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 	    batadv_bla_check_ucast_duplist(bat_priv, skb))
 		goto handled;
 
-	ether_addr_copy(search_claim.addr, ethhdr->h_source);
-	search_claim.vid = vid;
-	claim = batadv_claim_hash_find(bat_priv, &search_claim);
+	ether_addr_copy(claim_key.addr, ethhdr->h_source);
+	claim_key.vid = vid;
+	claim = batadv_claim_hash_find(bat_priv, &claim_key);
 
 	if (!claim) {
 		bool local = batadv_is_my_client(bat_priv, ethhdr->h_source, vid);
@@ -2028,7 +2039,7 @@ bool batadv_bla_rx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 
 	/* if it is our own claim ... */
 	backbone_gw = batadv_bla_claim_get_backbone_gw(claim);
-	own_claim = batadv_compare_eth(backbone_gw->orig,
+	own_claim = batadv_compare_eth(backbone_gw->key.orig,
 				       primary_if->net_dev->dev_addr);
 	batadv_backbone_gw_put(backbone_gw);
 
@@ -2064,7 +2075,6 @@ allow:
 	goto out;
 
 handled:
-	kfree_skb(skb);
 	ret = true;
 
 out:
@@ -2083,22 +2093,22 @@ out:
  *  * a claim was received which has to be processed
  *  * the frame is allowed on the mesh
  *
- * in these cases, the skb is further handled by this function.
+ * The skb is never consumed by this function.
  *
  * Warning: This function may reallocate the skb data buffer via
  * batadv_bla_process_claim()/... Any pointer into the skb data (e.g.
  * obtained from skb->data or eth_hdr()) before this call must be considered
  * invalid afterwards and has to be reacquired.
  *
- * Return: true if handled, otherwise it returns false and the caller shall
- * further process the skb.
+ * Return: true if the skb has to be dropped, otherwise it returns false and the
+ * caller shall further process the skb.
  */
 bool batadv_bla_tx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 		   unsigned short vid)
 {
 	struct batadv_bla_backbone_gw *backbone_gw;
+	struct batadv_bla_claim_key claim_key;
 	struct batadv_bla_claim *claim = NULL;
-	struct batadv_bla_claim search_claim;
 	struct batadv_hard_iface *primary_if;
 	struct ethhdr *ethhdr;
 	bool client_roamed;
@@ -2121,10 +2131,10 @@ bool batadv_bla_tx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 		if (is_multicast_ether_addr(ethhdr->h_dest))
 			goto handled;
 
-	ether_addr_copy(search_claim.addr, ethhdr->h_source);
-	search_claim.vid = vid;
+	ether_addr_copy(claim_key.addr, ethhdr->h_source);
+	claim_key.vid = vid;
 
-	claim = batadv_claim_hash_find(bat_priv, &search_claim);
+	claim = batadv_claim_hash_find(bat_priv, &claim_key);
 
 	/* if no claim exists, allow it. */
 	if (!claim)
@@ -2132,7 +2142,7 @@ bool batadv_bla_tx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 
 	/* check if we are responsible. */
 	backbone_gw = batadv_bla_claim_get_backbone_gw(claim);
-	client_roamed = batadv_compare_eth(backbone_gw->orig,
+	client_roamed = batadv_compare_eth(backbone_gw->key.orig,
 					   primary_if->net_dev->dev_addr);
 	batadv_backbone_gw_put(backbone_gw);
 
@@ -2218,7 +2228,7 @@ batadv_bla_claim_dump_entry(struct sk_buff *msg, u32 portid,
 
 	backbone_gw = batadv_bla_claim_get_backbone_gw(claim);
 
-	is_own = batadv_compare_eth(backbone_gw->orig, primary_addr);
+	is_own = batadv_compare_eth(backbone_gw->key.orig, primary_addr);
 
 	spin_lock_bh(&backbone_gw->crc_lock);
 	backbone_crc = backbone_gw->crc;
@@ -2230,10 +2240,10 @@ batadv_bla_claim_dump_entry(struct sk_buff *msg, u32 portid,
 			goto put_backbone_gw;
 		}
 
-	if (nla_put(msg, BATADV_ATTR_BLA_ADDRESS, ETH_ALEN, claim->addr) ||
-	    nla_put_u16(msg, BATADV_ATTR_BLA_VID, claim->vid) ||
+	if (nla_put(msg, BATADV_ATTR_BLA_ADDRESS, ETH_ALEN, claim->key.addr) ||
+	    nla_put_u16(msg, BATADV_ATTR_BLA_VID, claim->key.vid) ||
 	    nla_put(msg, BATADV_ATTR_BLA_BACKBONE, ETH_ALEN,
-		    backbone_gw->orig) ||
+		    backbone_gw->key.orig) ||
 	    nla_put_u16(msg, BATADV_ATTR_BLA_CRC,
 			backbone_crc)) {
 		genlmsg_cancel(msg, hdr);
@@ -2363,6 +2373,7 @@ batadv_bla_backbone_dump_entry(struct sk_buff *msg, u32 portid,
 			       struct batadv_bla_backbone_gw *backbone_gw)
 {
 	const u8 *primary_addr = primary_if->net_dev->dev_addr;
+	unsigned long lasttime;
 	int ret = -EINVAL;
 	u16 backbone_crc;
 	bool is_own;
@@ -2379,13 +2390,14 @@ batadv_bla_backbone_dump_entry(struct sk_buff *msg, u32 portid,
 
 	genl_dump_check_consistent(cb, hdr);
 
-	is_own = batadv_compare_eth(backbone_gw->orig, primary_addr);
+	is_own = batadv_compare_eth(backbone_gw->key.orig, primary_addr);
 
 	spin_lock_bh(&backbone_gw->crc_lock);
 	backbone_crc = backbone_gw->crc;
 	spin_unlock_bh(&backbone_gw->crc_lock);
 
-	msecs = jiffies_to_msecs(jiffies - READ_ONCE(backbone_gw->lasttime));
+	lasttime = READ_ONCE(backbone_gw->lasttime);
+	msecs = jiffies_delta_to_msecs(jiffies - lasttime);
 
 	if (is_own)
 		if (nla_put_flag(msg, BATADV_ATTR_BLA_OWN)) {
@@ -2394,8 +2406,8 @@ batadv_bla_backbone_dump_entry(struct sk_buff *msg, u32 portid,
 		}
 
 	if (nla_put(msg, BATADV_ATTR_BLA_BACKBONE, ETH_ALEN,
-		    backbone_gw->orig) ||
-	    nla_put_u16(msg, BATADV_ATTR_BLA_VID, backbone_gw->vid) ||
+		    backbone_gw->key.orig) ||
+	    nla_put_u16(msg, BATADV_ATTR_BLA_VID, backbone_gw->key.vid) ||
 	    nla_put_u16(msg, BATADV_ATTR_BLA_CRC,
 			backbone_crc) ||
 	    nla_put_u32(msg, BATADV_ATTR_LAST_SEEN_MSECS, msecs)) {
@@ -2520,12 +2532,12 @@ out:
  * false if the device addr is already claimed by another gateway
  */
 bool batadv_bla_check_claim(struct batadv_priv *bat_priv,
-			    u8 *addr, unsigned short vid)
+			    const u8 *addr, unsigned short vid)
 {
 	struct batadv_hard_iface *primary_if = NULL;
 	struct batadv_bla_backbone_gw *backbone_gw;
+	struct batadv_bla_claim_key claim_key;
 	struct batadv_bla_claim *claim = NULL;
-	struct batadv_bla_claim search_claim;
 	bool ret = true;
 
 	if (!READ_ONCE(bat_priv->bridge_loop_avoidance))
@@ -2536,10 +2548,10 @@ bool batadv_bla_check_claim(struct batadv_priv *bat_priv,
 		return ret;
 
 	/* First look if the mac address is claimed */
-	ether_addr_copy(search_claim.addr, addr);
-	search_claim.vid = vid;
+	ether_addr_copy(claim_key.addr, addr);
+	claim_key.vid = vid;
 
-	claim = batadv_claim_hash_find(bat_priv, &search_claim);
+	claim = batadv_claim_hash_find(bat_priv, &claim_key);
 
 	/* If there is a claim and we are not owner of the claim,
 	 * return false.
@@ -2547,7 +2559,7 @@ bool batadv_bla_check_claim(struct batadv_priv *bat_priv,
 	if (claim) {
 		backbone_gw = batadv_bla_claim_get_backbone_gw(claim);
 
-		if (!batadv_compare_eth(backbone_gw->orig,
+		if (!batadv_compare_eth(backbone_gw->key.orig,
 					primary_if->net_dev->dev_addr))
 			ret = false;
 

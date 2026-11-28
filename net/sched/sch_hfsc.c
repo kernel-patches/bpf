@@ -1491,6 +1491,10 @@ hfsc_reset_class(struct hfsc_class *cl)
 
 	cl->vt_tree = RB_ROOT;
 	cl->cf_tree = RB_ROOT;
+	/* hfsc_reset_qdisc() drops the eligible tree root; the
+	 * linkage state of el_node must match the membership.
+	 */
+	RB_CLEAR_NODE(&cl->el_node);
 	qdisc_reset(cl->qdisc);
 
 	if (cl->cl_flags & HFSC_RSC)

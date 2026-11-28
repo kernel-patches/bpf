@@ -32,16 +32,6 @@
 #define IPC_IRQ_VECTORS IPC_MSI_VECTORS
 
 /**
- * enum ipc_pcie_sleep_state - Enum type to different sleep state transitions
- * @IPC_PCIE_D0L12:	Put the sleep state in D0L12
- * @IPC_PCIE_D3L2:	Put the sleep state in D3L2
- */
-enum ipc_pcie_sleep_state {
-	IPC_PCIE_D0L12,
-	IPC_PCIE_D3L2,
-};
-
-/**
  * struct iosm_pcie - IPC_PCIE struct.
  * @pci:			Address of the device description
  * @dev:			Pointer to generic device structure
@@ -58,8 +48,6 @@ enum ipc_pcie_sleep_state {
  * @doorbell_reg_offset:	doorbell_reg_offset
  * @doorbell_write:		doorbell write register
  * @doorbell_capture:		doorbell capture resgister
- * @suspend:			S2IDLE sleep/active
- * @d3l2_support:		Read WWAN RTD3 BIOS setting for D3L2 support
  */
 struct iosm_pcie {
 	struct pci_dev *pci;
@@ -73,8 +61,6 @@ struct iosm_pcie {
 	u32 doorbell_reg_offset;
 	u32 doorbell_write;
 	u32 doorbell_capture;
-	unsigned long suspend;
-	enum ipc_pcie_sleep_state d3l2_support;
 };
 
 /**

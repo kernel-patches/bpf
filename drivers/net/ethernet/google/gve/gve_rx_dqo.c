@@ -438,6 +438,9 @@ void gve_rx_post_buffers_dqo(struct gve_rx_ring *rx)
 		 bufq->head) & bufq->mask;
 
 	if (num_bufs_avail_to_hw < GVE_RX_BUF_THRESH_DQO) {
+		u64_stats_update_begin(&rx->statss);
+		rx->rx_critical_low_bufs++;
+		u64_stats_update_end(&rx->statss);
 		mod_timer(&rx->starvation_timer,
 			  jiffies + msecs_to_jiffies(GVE_RX_NAPI_RESCHED_MS));
 	}

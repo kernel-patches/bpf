@@ -60,7 +60,10 @@ static ssize_t extts_enable_store(struct device *dev,
 	if (req.extts.index >= ops->n_ext_ts)
 		goto out;
 
+	if (mutex_lock_interruptible(&ptp->pincfg_mux))
+		return -ERESTARTSYS;
 	err = ops->enable(ops, &req, enable ? 1 : 0);
+	mutex_unlock(&ptp->pincfg_mux);
 	if (err)
 		goto out;
 
@@ -130,7 +133,10 @@ static ssize_t period_store(struct device *dev,
 		goto out;
 
 	enable = req.perout.period.sec || req.perout.period.nsec;
+	if (mutex_lock_interruptible(&ptp->pincfg_mux))
+		return -ERESTARTSYS;
 	err = ops->enable(ops, &req, enable);
+	mutex_unlock(&ptp->pincfg_mux);
 	if (err)
 		goto out;
 
@@ -157,7 +163,10 @@ static ssize_t pps_enable_store(struct device *dev,
 	if (cnt != 1)
 		goto out;
 
+	if (mutex_lock_interruptible(&ptp->pincfg_mux))
+		return -ERESTARTSYS;
 	err = ops->enable(ops, &req, enable ? 1 : 0);
+	mutex_unlock(&ptp->pincfg_mux);
 	if (err)
 		goto out;
 

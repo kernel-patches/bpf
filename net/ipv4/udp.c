@@ -1049,8 +1049,9 @@ void udp_flush_pending_frames(struct sock *sk)
 
 	if (up->pending) {
 		up->len = 0;
-		WRITE_ONCE(up->pending, 0);
 		ip_flush_pending_frames(sk);
+		udp_cork_restore_connected(sk);
+		WRITE_ONCE(up->pending, 0);
 	}
 }
 
@@ -1228,6 +1229,7 @@ int udp_push_pending_frames(struct sock *sk)
 
 out:
 	up->len = 0;
+	udp_cork_restore_connected(sk);
 	WRITE_ONCE(up->pending, 0);
 	return err;
 }
@@ -1511,8 +1513,10 @@ do_append_data:
 		udp_flush_pending_frames(sk);
 	else if (!corkreq)
 		err = udp_push_pending_frames(sk);
-	else if (unlikely(skb_queue_empty(&sk->sk_write_queue)))
+	else if (unlikely(skb_queue_empty(&sk->sk_write_queue))) {
+		udp_cork_restore_connected(sk);
 		WRITE_ONCE(up->pending, 0);
+	}
 	release_sock(sk);
 
 out:

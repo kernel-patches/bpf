@@ -51,14 +51,12 @@ properties:
       - const: hclk
 
   resets:
-    items:
-      - description: Converter register reset
-      - description: Converter reset
+    minItems: 2
+    maxItems: 2
 
   reset-names:
-    items:
-      - const: rst
-      - const: crst
+    minItems: 2
+    maxItems: 2
 
   renesas,miic-switch-portin:
     description: MII Switch PORTIN configuration. This value should use one of
@@ -109,8 +107,14 @@ allOf:
       properties:
         renesas,miic-switch-portin:
           enum: [1, 2]
-        resets: false
-        reset-names: false
+        resets:
+          items:
+            - description: Timestamp selector reset
+            - description: Converter reset
+        reset-names:
+          items:
+            - const: rst_ts
+            - const: rst_miic
       patternProperties:
         "^mii-conv@[0-5]$":
           properties:
@@ -161,9 +165,14 @@ allOf:
       properties:
         renesas,miic-switch-portin:
           const: 0
-      required:
-        - resets
-        - reset-names
+      resets:
+        items:
+          - description: Converter register reset
+          - description: Converter reset
+      reset-names:
+        items:
+          - const: rst
+          - const: crst
       patternProperties:
         "^mii-conv@[0-5]$":
           properties:
@@ -210,6 +219,8 @@ required:
   - reg
   - clocks
   - clock-names
+  - resets
+  - reset-names
   - power-domains
 
 additionalProperties: false
@@ -229,6 +240,9 @@ examples:
               <&sysctrl R9A06G032_CLK_RMII_REF>,
               <&sysctrl R9A06G032_HCLK_SWITCH_RG>;
       clock-names = "mii_ref", "rgmii_ref", "rmii_ref", "hclk";
+      resets = <&sysctrl R9A06G032_RST_TS>,
+               <&sysctrl R9A06G032_RST_MIIC>;
+      reset-names = "rst_ts", "rst_miic";
       renesas,miic-switch-portin = <MIIC_GMAC2_PORT>;
       power-domains = <&sysctrl>;
 

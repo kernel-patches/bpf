@@ -5,7 +5,6 @@
  */
 
 #include <linux/errno.h>
-#include <linux/etherdevice.h>
 #include <linux/if_arp.h>
 #include <linux/if_rmnet.h>
 #include <linux/netdevice.h>
@@ -223,15 +222,12 @@ static void ipa_modem_netdev_setup(struct net_device *netdev)
 	netdev->header_ops = NULL;
 	netdev->type = ARPHRD_RAWIP;
 	netdev->hard_header_len = 0;
-	netdev->min_header_len = ETH_HLEN;
 	netdev->min_mtu = ETH_MIN_MTU;
 	netdev->max_mtu = IPA_MTU;
 	netdev->mtu = netdev->max_mtu;
 	netdev->addr_len = 0;
 	netdev->tx_queue_len = DEFAULT_TX_QUEUE_LEN;
-	netdev->flags &= ~(IFF_BROADCAST | IFF_MULTICAST);
 	netdev->priv_flags |= IFF_TX_SKB_SHARING;
-	eth_broadcast_addr(netdev->broadcast);
 
 	/* The endpoint is configured for QMAP */
 	netdev->needed_headroom = sizeof(struct rmnet_map_header);

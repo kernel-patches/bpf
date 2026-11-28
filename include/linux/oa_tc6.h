@@ -13,6 +13,7 @@
 /* OPEN Alliance TC6 registers */
 /* Standard Capabilities Register */
 #define OA_TC6_REG_STDCAP			0x0002
+#define OA_TC6_STDCAP_INDIRECT_PHY_REG_ACCESS	BIT(9)
 #define OA_TC6_STDCAP_DIRECT_PHY_REG_ACCESS	BIT(8)
 
 /* Reset Control and Status Register */
@@ -50,6 +51,21 @@
 #define OA_TC6_INT_MASK0_ALL_INTERRUPTS                 (GENMASK(5, 0) | \
 							 GENMASK(12, 7))
 
+#define OA_TC6_REG_MDIOACC(x)	(0x20 + (x))
+#define OA_TC6_MDIOACC_TRDONE	BIT(31)
+#define OA_TC6_MDIOACC_TAERR	BIT(30)
+#define OA_TC6_MDIOACC_ST	GENMASK(29, 28)
+#define OA_TC6_MDIOACC_OP	GENMASK(27, 26)
+#define OA_TC6_MDIOACC_PRTAD	GENMASK(25, 21)
+#define OA_TC6_MDIOACC_DEVAD	GENMASK(20, 16)
+#define OA_TC6_MDIOACC_DATA	GENMASK(15, 0)
+
+#define OA_TC6_MDIOACC_ST_C45		0x0
+#define OA_TC6_MDIOACC_ST_C22		0x1
+#define OA_TC6_MDIOACC_OP_ADDR		0x0
+#define OA_TC6_MDIOACC_OP_WR		0x1
+#define OA_TC6_MDIOACC_OP_RD		0x3
+
 /* PHY Clause 22 registers base address and mask */
 #define OA_TC6_PHY_STD_REG_ADDR_BASE		0xFF00
 #define OA_TC6_PHY_STD_REG_ADDR_MASK		0x1F
@@ -64,6 +80,7 @@
 #define OA_TC6_PHY_C45_AUTO_NEG_MMS5		5	/* MMD 7 */
 #define OA_TC6_PHY_C45_POWER_UNIT_MMS6		6	/* MMD 13 */
 
+struct mii_bus;
 struct oa_tc6;
 
 enum oa_tc6_quirk_flag {
@@ -72,6 +89,10 @@ enum oa_tc6_quirk_flag {
 
 struct oa_tc6_quirks {
 	enum oa_tc6_quirk_flag quirk_flags;
+	/* Wait after deasserting the reset GPIO, 1 ms if not set */
+	u32 hwreset_settle_us;
+	/* Wait after the software reset, before polling for RESETC */
+	u32 softreset_settle_us;
 };
 
 struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,

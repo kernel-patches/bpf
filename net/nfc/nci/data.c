@@ -213,13 +213,13 @@ EXPORT_SYMBOL(nci_send_data);
 
 static void nci_add_rx_data_frag(struct nci_dev *ndev,
 				 struct sk_buff *skb,
-				 __u8 pbf, __u8 conn_id, __u8 status)
+				 __u8 pbf, __u8 conn_id, int err)
 {
 	int reassembly_len;
-	int err = 0;
 
-	if (status) {
-		err = status;
+	if (err) {
+		kfree_skb(ndev->rx_data_reassembly);
+		ndev->rx_data_reassembly = NULL;
 		goto exit;
 	}
 
@@ -258,10 +258,17 @@ static void nci_add_rx_data_frag(struct nci_dev *ndev,
 
 exit:
 	if (ndev->nfc_dev->rf_mode == NFC_RF_TARGET) {
-		/* Data received in Target mode, forward to nfc core */
-		err = nfc_tm_data_received(ndev->nfc_dev, skb);
-		if (err)
-			pr_err("unable to handle received data\n");
+		/*
+		 * Data received in Target mode, forward to nfc core.  skb is
+		 * NULL when the reassembly above could not make room for the
+		 * accumulated data; there is nothing left to forward and the
+		 * core would dereference it.
+		 */
+		if (skb) {
+			err = nfc_tm_data_received(ndev->nfc_dev, skb);
+			if (err)
+				pr_err("unable to handle received data\n");
+		}
 	} else {
 		nci_data_exchange_complete(ndev, skb, conn_id, err);
 	}

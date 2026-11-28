@@ -142,6 +142,9 @@ static void dpaa2_xsk_rx(struct dpaa2_eth_priv *priv,
 	/* Send the skb to the Linux networking stack */
 	dpaa2_eth_receive_skb(priv, ch, fd, vaddr, fq, percpu_stats, skb);
 
+	/* The packet was copied into the skb, return the frame to the pool. */
+	dpaa2_eth_recycle_buf(priv, ch, addr);
+
 	return;
 
 err_alloc_skb:

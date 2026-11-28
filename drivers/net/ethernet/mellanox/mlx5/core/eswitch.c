@@ -1371,7 +1371,8 @@ static void mlx5_eswitch_unload_pf_vf_vport(struct mlx5_eswitch *esw, u16 vport_
 
 int mlx5_eswitch_load_sf_vport(struct mlx5_eswitch *esw, u16 vport_num,
 			       enum mlx5_eswitch_vport_event enabled_events,
-			       struct mlx5_devlink_port *dl_port, u32 controller, u32 sfnum)
+			       struct mlx5_devlink_port *dl_port,
+			       u32 controller, u32 pfnum, u32 sfnum)
 {
 	struct mlx5_vport *vport;
 	int err;
@@ -1380,7 +1381,8 @@ int mlx5_eswitch_load_sf_vport(struct mlx5_eswitch *esw, u16 vport_num,
 	if (IS_ERR(vport))
 		return PTR_ERR(vport);
 
-	err = mlx5_esw_offloads_init_sf_rep(esw, vport, dl_port, controller, sfnum);
+	err = mlx5_esw_offloads_init_sf_rep(esw, vport, dl_port, controller,
+					    pfnum, sfnum);
 	if (err)
 		return err;
 
@@ -2182,21 +2184,58 @@ u16 mlx5_esw_get_hpf_pf_num(struct mlx5_core_dev *dev)
 	return PCI_FUNC(dev->pdev->devfn);
 }
 
-u16 mlx5_esw_sf_controller_to_pfnum(struct mlx5_core_dev *dev, u32 controller)
+u32 mlx5_esw_get_self_pf_ctrl_num(struct mlx5_eswitch *esw)
+{
+	struct mlx5_esw_functions *esw_funcs = &esw->esw_funcs;
+
+	return esw_funcs->phys_port_cnum;
+}
+
+u16 mlx5_esw_get_self_pf_pfnum(struct mlx5_eswitch *esw)
+{
+	struct mlx5_core_dev *dev = esw->dev;
+
+	if (mlx5_core_is_ecpf_esw_manager(dev) &&
+	    MLX5_CAP_GEN(dev, query_host_net_function_v1))
+		return esw->esw_funcs.self_pf_pfnum;
+
+	return PCI_FUNC(dev->pdev->devfn);
+}
+
+bool mlx5_esw_sf_controller_to_pfnum_valid(struct mlx5_core_dev *dev,
+					   u32 controller, u32 pfnum)
 {
 	struct mlx5_eswitch *esw = dev->priv.eswitch;
 	struct mlx5_esw_functions *esw_funcs;
+	bool known_controller = false;
 	int i;
 
-	if (!controller)
-		return PCI_FUNC(dev->pdev->devfn);
+	if (!MLX5_CAP_GEN(dev, query_host_net_function_v1))
+		return pfnum == PCI_FUNC(dev->pdev->devfn);
 
 	esw_funcs = &esw->esw_funcs;
-	for (i = 0; i < esw_funcs->num_spfs; i++)
-		if (controller == esw_funcs->spfs[i].host_number + 1)
-			return esw_funcs->spfs[i].pf_num;
+	if (!controller || controller == esw_funcs->controller_num) {
+		known_controller = true;
+		if (mlx5_esw_get_self_pf_pfnum(esw) == pfnum)
+			return true;
+	}
 
-	return mlx5_esw_get_hpf_pf_num(dev);
+	for (i = 0; i < esw_funcs->num_spfs; i++) {
+		if (controller != esw_funcs->spfs[i].host_number + 1)
+			continue;
+		known_controller = true;
+		if (esw_funcs->spfs[i].pf_num == pfnum)
+			return true;
+	}
+
+	/* controller matched self pf or a satellite PF, but pfnum matched
+	 * neither. It's invalid, do not continue on to check the external
+	 * host PF.
+	 */
+	if (known_controller)
+		return false;
+
+	return mlx5_esw_get_hpf_pf_num(dev) == pfnum;
 }
 
 bool mlx5_esw_has_spf_sfs(struct mlx5_core_dev *dev)
@@ -2261,6 +2300,61 @@ void mlx5_esw_vport_free(struct mlx5_eswitch *esw, struct mlx5_vport *vport)
 	esw->total_vports--;
 	xa_erase(&esw->vports, vport->vport);
 	kfree(vport);
+}
+
+static void mlx5_esw_self_pf_cleanup(struct mlx5_eswitch *esw)
+{
+	struct mlx5_esw_functions *esw_funcs = &esw->esw_funcs;
+
+	esw_funcs->controller_num = 0;
+	esw_funcs->phys_port_cnum = 0;
+	esw_funcs->self_pf_pfnum = 0;
+}
+
+static int mlx5_esw_self_pf_init(struct mlx5_eswitch *esw)
+{
+	struct mlx5_esw_functions *esw_funcs = &esw->esw_funcs;
+	struct mlx5_core_dev *dev = esw->dev;
+	int num_entries;
+	const u8 *entry;
+	const u32 *out;
+	int i;
+
+	esw_funcs->self_pf_pfnum = PCI_FUNC(dev->pdev->devfn);
+
+	if (!MLX5_CAP_GEN(dev, query_host_net_function_v1))
+		return 0;
+
+	out = mlx5_esw_query_functions(dev);
+	if (IS_ERR(out))
+		return PTR_ERR(out);
+
+	num_entries = MLX5_GET(query_esw_functions_out, out, net_function_num);
+	if (!num_entries)
+		goto out_free;
+
+	entry = MLX5_ADDR_OF(query_esw_functions_out, out, net_function_params);
+	for (i = 0; i < num_entries; i++) {
+		int pf_type;
+
+		pf_type = MLX5_GET(network_function_params, entry, pci_pf_type);
+		if (pf_type != MLX5_PCI_PF_TYPE_QUERY_PF) {
+			entry += MLX5_UN_SZ_BYTES(net_function_params);
+			continue;
+		}
+
+		esw_funcs->controller_num =
+			MLX5_GET(network_function_params,
+				 entry, host_number) + 1;
+		esw_funcs->self_pf_pfnum =
+			MLX5_GET(network_function_params,
+				 entry, pci_device_function);
+		break;
+	}
+
+out_free:
+	kvfree(out);
+	return 0;
 }
 
 static void mlx5_esw_spfs_cleanup(struct mlx5_eswitch *esw)
@@ -2370,6 +2464,7 @@ static void mlx5_esw_vports_cleanup(struct mlx5_eswitch *esw)
 	mlx5_esw_for_each_vport(esw, i, vport)
 		mlx5_esw_vport_free(esw, vport);
 	xa_destroy(&esw->vports);
+	mlx5_esw_self_pf_cleanup(esw);
 }
 
 static int mlx5_esw_vports_init(struct mlx5_eswitch *esw)
@@ -2379,6 +2474,10 @@ static int mlx5_esw_vports_init(struct mlx5_eswitch *esw)
 	int idx = 0;
 	int err;
 	int i;
+
+	err = mlx5_esw_self_pf_init(esw);
+	if (err)
+		return err;
 
 	xa_init(&esw->vports);
 

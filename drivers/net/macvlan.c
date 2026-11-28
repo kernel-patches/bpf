@@ -290,7 +290,8 @@ static void macvlan_broadcast(struct sk_buff *skb,
 			err = macvlan_broadcast_one(nskb, vlan, eth,
 					mode == MACVLAN_MODE_BRIDGE) ?:
 			      netif_rx(nskb);
-		macvlan_count_rx(vlan, skb->len + ETH_HLEN,
+		macvlan_count_rx(vlan, skb->len +
+				 (mode == MACVLAN_MODE_BRIDGE ? 0 : ETH_HLEN),
 				 err == NET_RX_SUCCESS, true);
 	}
 }
@@ -1229,13 +1230,14 @@ static const struct net_device_ops macvlan_netdev_ops = {
 	.ndo_hwtstamp_set	= macvlan_hwtstamp_set,
 };
 
-static void macvlan_dev_free(struct net_device *dev)
+void macvlan_dev_free(struct net_device *dev)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
 
 	/* Get rid of the macvlan's reference to lowerdev */
 	netdev_put(vlan->lowerdev, &vlan->dev_tracker);
 }
+EXPORT_SYMBOL_GPL(macvlan_dev_free);
 
 void macvlan_common_setup(struct net_device *dev)
 {

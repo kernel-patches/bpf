@@ -1267,6 +1267,17 @@ void udp_v6_early_demux(struct sk_buff *skb)
 /*
  * Throw away all pending data and cancel the corking. Socket is locked.
  */
+static void udp_v6_cork_restore_connected(struct sock *sk)
+{
+	if (sk->sk_state != TCP_ESTABLISHED)
+		return;
+
+	if (ipv6_addr_v4mapped(&sk->sk_v6_daddr))
+		udp_cork_restore_connected(sk);
+	else
+		ip6_datagram_flow_key_init(&inet_sk(sk)->cork.fl.u.ip6, sk);
+}
+
 static void udp_v6_flush_pending_frames(struct sock *sk)
 {
 	struct udp_sock *up = udp_sk(sk);
@@ -1275,8 +1286,9 @@ static void udp_v6_flush_pending_frames(struct sock *sk)
 		udp_flush_pending_frames(sk);
 	else if (up->pending) {
 		up->len = 0;
-		WRITE_ONCE(up->pending, 0);
 		ip6_flush_pending_frames(sk);
+		udp_v6_cork_restore_connected(sk);
+		WRITE_ONCE(up->pending, 0);
 	}
 }
 
@@ -1463,6 +1475,7 @@ static int udp_v6_push_pending_frames(struct sock *sk)
 			      &inet_sk(sk)->cork.base);
 out:
 	up->len = 0;
+	udp_v6_cork_restore_connected(sk);
 	WRITE_ONCE(up->pending, 0);
 	return err;
 }
@@ -1749,8 +1762,10 @@ do_append_data:
 		udp_v6_flush_pending_frames(sk);
 	else if (!corkreq)
 		err = udp_v6_push_pending_frames(sk);
-	else if (unlikely(skb_queue_empty(&sk->sk_write_queue)))
+	else if (unlikely(skb_queue_empty(&sk->sk_write_queue))) {
+		udp_v6_cork_restore_connected(sk);
 		WRITE_ONCE(up->pending, 0);
+	}
 
 	if (err > 0)
 		err = inet6_test_bit(RECVERR6, sk) ? net_xmit_errno(err) : 0;

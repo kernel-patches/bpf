@@ -194,6 +194,10 @@
 /* Screener Type 2 match registers */
 #define GEM_SCRT2		0x540
 
+/* Tx queue segment allocation */
+#define GEM_TXQSEGALLOC_LOWER	0x05A0
+#define GEM_TXQSEGALLOC_UPPER	0x05A4
+
 /* EtherType registers */
 #define GEM_ETHT		0x06E0
 
@@ -545,6 +549,8 @@
 #define GEM_PBUF_CUTTHRU_SIZE			1
 #define GEM_DAW64_OFFSET			23
 #define GEM_DAW64_SIZE				1
+#define GEM_SEGMENTS_BIT_SIZE_OFFSET		16
+#define GEM_SEGMENTS_BIT_SIZE_SIZE		4
 
 /* Bitfields in DCFG8. */
 #define GEM_T1SCR_OFFSET			24
@@ -656,6 +662,13 @@
 #define GEM_CMPC_SIZE				5
 #define GEM_CMPCEN_OFFSET			30 /* Compare C Enable */
 #define GEM_CMPCEN_SIZE				1
+
+/* Bitfields in TXQSEGALLOC (Q0 at 2:0, Q1 at 6:4, etc.) */
+#define GEM_TXQSEGALLOC_MASK(q_) \
+	({ \
+		typeof(q_) q__ = (q_); \
+		GENMASK(4 * (q__) + 2, 4 * (q__)); \
+	})
 
 /* Bitfields in ETHT */
 #define GEM_ETHTCMP_OFFSET			0 /* EtherType compare value */
@@ -785,6 +798,7 @@
 #define MACB_CAPS_USRIO_HAS_MII			BIT(26)
 #define MACB_CAPS_USRIO_HAS_REFCLK_SOURCE	BIT(27)
 #define MACB_CAPS_USRIO_HAS_TSUCLK_SOURCE	BIT(28)
+#define MACB_CAPS_TXQSEGALLOC			BIT(29)
 
 /* LSO settings */
 #define MACB_LSO_UFO_ENABLE			0x01
@@ -1221,6 +1235,7 @@ struct macb_ptp_info {
 struct macb_pm_data {
 	u32 scrt2;
 	u32 usrio;
+	bool irq_wake_enabled;
 };
 
 struct macb_usrio_config {
@@ -1292,7 +1307,6 @@ struct macb_info {
 	struct platform_device	*pdev;
 	struct net_device	*netdev;
 	struct macb_or_gem_ops	macbgem_ops;
-	unsigned int		num_queues;
 	u32			caps;
 	int			rx_bd_rd_prefetch;
 	int			tx_bd_rd_prefetch;
@@ -1323,8 +1337,38 @@ struct macb_context {
 	unsigned int		rx_buffer_size;
 	unsigned int		rx_ring_size;
 	unsigned int		tx_ring_size;
+	unsigned int		num_queues;
 	struct macb_rxq		rxq[MACB_MAX_QUEUES];
 	struct macb_txq		txq[MACB_MAX_QUEUES];
+};
+
+/**
+ * struct macb_queue_enst_config - Configuration for Enhanced Scheduled Traffic
+ * @start_time_mask:  Bitmask representing the start time for the queue
+ * @on_time_bytes:    "on" time nsec expressed in bytes
+ * @off_time_bytes:   "off" time nsec expressed in bytes
+ *
+ * This structure holds the configuration parameters for an ENST queue,
+ * used to control time-based transmission scheduling in the MACB driver.
+ */
+struct macb_queue_enst_config {
+	u32 start_time_mask;
+	u32 on_time_bytes;
+	u32 off_time_bytes;
+};
+
+/**
+ * struct macb_enst - Cached Enhanced Scheduled Traffic configuration
+ * @queues:     per-queue timing (zeroed for queues without schedule)
+ * @speed_mbps: link speed the timings were computed for, 0 if no schedule
+ * @queue_mask: queues enabled by the current schedule, 0 if no schedule
+ *
+ * The timings are expressed in bytes, so they depend on the link speed.
+ */
+struct macb_enst {
+	struct macb_queue_enst_config	queues[MACB_MAX_QUEUES];
+	u32				speed_mbps;
+	u32				queue_mask;
 };
 
 struct macb {
@@ -1351,6 +1395,9 @@ struct macb {
 	unsigned int		configured_rx_ring_size;
 	unsigned int		configured_tx_ring_size;
 	struct macb_context	*ctx;
+
+	unsigned int		configured_num_queues;
+	unsigned int		max_num_queues;
 
 	struct macb_dma_desc	*rx_ring_tieoff;
 	dma_addr_t		rx_ring_tieoff_dma;
@@ -1427,11 +1474,14 @@ struct macb {
 
 	/* Redundant to netif_carrier_ok(), but set under bp->mac_cfg_lock. */
 	bool			link_up;
+	u32			speed_mbps;
 
 	u32	rx_intr_mask;
 
 	struct macb_pm_data pm_data;
 	const struct macb_usrio_config *usrio;
+
+	struct macb_enst enst;
 };
 
 #ifdef CONFIG_MACB_USE_HWSTAMP
@@ -1530,21 +1580,6 @@ static inline void macb_queue_isr_clear(struct macb *bp,
 struct macb_platform_data {
 	struct clk	*pclk;
 	struct clk	*hclk;
-};
-
-/**
- * struct macb_queue_enst_config - Configuration for Enhanced Scheduled Traffic
- * @start_time_mask:  Bitmask representing the start time for the queue
- * @on_time_bytes:    "on" time nsec expressed in bytes
- * @off_time_bytes:   "off" time nsec expressed in bytes
- *
- * This structure holds the configuration parameters for an ENST queue,
- * used to control time-based transmission scheduling in the MACB driver.
- */
-struct macb_queue_enst_config {
-	u32 start_time_mask;
-	u32 on_time_bytes;
-	u32 off_time_bytes;
 };
 
 #endif /* _MACB_H */

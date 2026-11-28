@@ -219,6 +219,12 @@ void tipc_disc_rcv(struct net *net, struct sk_buff *skb,
 	}
 	hdr = buf_msg(skb);
 
+	if (msg_hdr_sz(hdr) < MAX_H_SIZE ||
+	    ((caps & TIPC_NODE_ID128) && msg_data_sz(hdr) < NODE_ID_LEN)) {
+		kfree_skb(skb);
+		return;
+	}
+
 	if (caps & TIPC_NODE_ID128)
 		memcpy(peer_id, msg_node_id(hdr), NODE_ID_LEN);
 	else

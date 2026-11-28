@@ -51,6 +51,7 @@
  * Return: the orig_node corresponding to the specified address. If such an
  * object does not exist, it is allocated here. In case of allocation failure
  * returns NULL.
+ * The returned object has an increased refcounter.
  */
 struct batadv_orig_node *batadv_v_ogm_orig_get(struct batadv_priv *bat_priv,
 					       const u8 *addr)
@@ -68,7 +69,7 @@ struct batadv_orig_node *batadv_v_ogm_orig_get(struct batadv_priv *bat_priv,
 
 	kref_get(&orig_node->refcount);
 	hash_added = batadv_hash_add(bat_priv->orig_hash, batadv_compare_orig,
-				     batadv_choose_orig, orig_node,
+				     batadv_choose_orig, orig_node->orig,
 				     &orig_node->hash_entry);
 	if (hash_added != 0) {
 		/* remove refcnt for newly created orig_node and hash entry */
@@ -162,6 +163,7 @@ static unsigned int batadv_v_ogm_len(struct sk_buff *skb)
  */
 static bool batadv_v_ogm_queue_left(struct sk_buff *skb,
 				    struct batadv_hard_iface *hard_iface)
+	__must_hold(&hard_iface->bat_v.aggr_list.lock)
 {
 	unsigned int max = min_t(unsigned int, hard_iface->net_dev->mtu,
 				 BATADV_MAX_AGGREGATION_BYTES);
@@ -181,6 +183,7 @@ static bool batadv_v_ogm_queue_left(struct sk_buff *skb,
  * Caller needs to hold the hard_iface->bat_v.aggr_list.lock.
  */
 static void batadv_v_ogm_aggr_list_free(struct batadv_hard_iface *hard_iface)
+	__must_hold(&hard_iface->bat_v.aggr_list.lock)
 {
 	lockdep_assert_held(&hard_iface->bat_v.aggr_list.lock);
 
@@ -200,6 +203,7 @@ static void batadv_v_ogm_aggr_list_free(struct batadv_hard_iface *hard_iface)
  * Caller needs to hold the hard_iface->bat_v.aggr_list.lock.
  */
 static void batadv_v_ogm_aggr_send(struct batadv_hard_iface *hard_iface)
+	__must_hold(&hard_iface->bat_v.aggr_list.lock)
 {
 	unsigned int aggr_len = hard_iface->bat_v.aggr_len;
 	struct sk_buff *skb_aggr;
@@ -268,6 +272,7 @@ unlock:
  * @bat_priv: the bat priv with all the mesh interface information
  */
 static void batadv_v_ogm_send_meshif(struct batadv_priv *bat_priv)
+	__must_hold(&bat_priv->bat_v.ogm_buff_mutex)
 {
 	struct batadv_ogm2_packet *ogm_packet;
 	struct batadv_hard_iface *hard_iface;
@@ -626,6 +631,7 @@ static int batadv_v_ogm_metric_update(struct batadv_priv *bat_priv,
 	struct batadv_neigh_ifinfo *neigh_ifinfo = NULL;
 	struct batadv_orig_ifinfo *orig_ifinfo;
 	bool protection_started = false;
+	unsigned long last_seen;
 	u32 path_throughput;
 	int ret = -EINVAL;
 	s32 seq_diff;
@@ -656,9 +662,9 @@ static int batadv_v_ogm_metric_update(struct batadv_priv *bat_priv,
 	if (seq_diff < 0 && !protection_started)
 		goto out;
 
-	neigh_node->last_seen = jiffies;
-
-	orig_node->last_seen = jiffies;
+	last_seen = jiffies;
+	WRITE_ONCE(neigh_node->last_seen, last_seen);
+	WRITE_ONCE(orig_node->last_seen, last_seen);
 
 	orig_ifinfo->last_real_seqno = ntohl(ogm2->seqno);
 	orig_ifinfo->last_ttl = ogm2->ttl;

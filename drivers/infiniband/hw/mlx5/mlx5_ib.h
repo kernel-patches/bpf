@@ -1612,6 +1612,9 @@ static inline void mlx5r_deref_wait_odp_mkey(struct mlx5_ib_mkey *mmkey)
 
 static inline bool mlx5_ib_lag_should_assign_affinity(struct mlx5_ib_dev *dev)
 {
+	if (dev->lag_active && mlx5_virt_lag_is_supported(dev->mdev))
+		return 0;
+
 	/*
 	 * If the driver is in hash mode and the port_select_flow_table_bypass cap
 	 * is supported, it means that the driver no longer needs to assign the port

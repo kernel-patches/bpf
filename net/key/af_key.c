@@ -2571,7 +2571,7 @@ static int pfkey_migrate(struct sock *sk, struct sk_buff *skb,
 	struct sadb_x_policy *pol;
 	struct sadb_x_ipsecrequest *rq;
 	struct xfrm_selector sel;
-	struct xfrm_migrate m[XFRM_MAX_DEPTH];
+	struct xfrm_migrate m[XFRM_MAX_DEPTH] = {};
 	struct xfrm_kmaddress k;
 	struct net *net = sock_net(sk);
 

@@ -733,10 +733,6 @@ static int sja1105_per_out_enable(struct sja1105_private *priv,
 
 	mutex_lock(&ptp_data->lock);
 
-	rc = sja1105_change_ptp_clk_pin_func(priv, PTP_PF_PEROUT);
-	if (rc)
-		goto out;
-
 	if (on) {
 		struct timespec64 pin_duration_ts = {
 			.tv_sec = perout->period.sec,
@@ -750,6 +746,10 @@ static int sja1105_per_out_enable(struct sja1105_private *priv,
 		u64 pin_start = timespec64_to_ns(&pin_start_ts);
 		u32 pin_duration32;
 		u64 now;
+
+		rc = sja1105_change_ptp_clk_pin_func(priv, PTP_PF_PEROUT);
+		if (rc)
+			goto out;
 
 		/* ptppindur: 32 bit register which holds the interval between
 		 * 2 edges on PTP_CLK. So check for truncation which happens
@@ -816,9 +816,11 @@ static int sja1105_extts_enable(struct sja1105_private *priv,
 	    (extts->flags & PTP_EXTTS_EDGES) != PTP_EXTTS_EDGES)
 		return -EOPNOTSUPP;
 
-	rc = sja1105_change_ptp_clk_pin_func(priv, PTP_PF_EXTTS);
-	if (rc)
-		return rc;
+	if (on) {
+		rc = sja1105_change_ptp_clk_pin_func(priv, PTP_PF_EXTTS);
+		if (rc)
+			return rc;
+	}
 
 	priv->ptp_data.extts_enabled = on;
 

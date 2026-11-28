@@ -402,6 +402,25 @@ tps23881_pi_get_chan_current(struct tps23881_priv *priv, u8 chan)
 	return (int)tmp_64;
 }
 
+static int tps23881_class_table[] = {
+	0,
+	1,
+	2,
+	3,
+	4,
+	0,
+	0,
+	0,
+	5,
+	6,
+	7,
+	8,
+	4,
+	5,
+	0,
+	0,
+};
+
 static int tps23881_pi_get_pw_class(struct pse_controller_dev *pcdev,
 				    int id)
 {
@@ -416,7 +435,8 @@ static int tps23881_pi_get_pw_class(struct pse_controller_dev *pcdev,
 	if (ret < 0)
 		return ret;
 
-	return tps23881_calc_val(ret, chan, 4, 0x0f);
+	ret = tps23881_calc_val(ret, chan, 4, 0x0f);
+	return tps23881_class_table[ret];
 }
 
 static int
@@ -1316,12 +1336,15 @@ static int tps23881_irq_event_handler(struct tps23881_priv *priv, u16 reg,
 		ret = i2c_smbus_read_word_data(client, TPS23881_REG_FAULT);
 		if (ret < 0)
 			return ret;
-		ret = tps23881_irq_event_over_current(priv, ret, notifs,
+
+		val = ret;
+		ret = tps23881_irq_event_over_current(priv, val, notifs,
 						      notifs_mask);
 		if (ret)
 			return ret;
 
-		tps23881_irq_event_disconnection(priv, ret, notifs, notifs_mask);
+		tps23881_irq_event_disconnection(priv, val, notifs,
+						 notifs_mask);
 	}
 
 	if (reg & (TPS23881_REG_IT_DETC | TPS23881_REG_IT_DETC << 8 |

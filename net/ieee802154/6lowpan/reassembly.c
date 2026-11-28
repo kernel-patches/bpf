@@ -76,7 +76,7 @@ fq_find(struct net *net, const struct lowpan_802154_cb *cb,
 	key.src = *src;
 	key.dst = *dst;
 
-	q = inet_frag_find(ieee802154_lowpan->fqdir, &key);
+	q = inet_frag_find(ieee802154_lowpan->fqdir, &key, NULL);
 	if (!q)
 		return NULL;
 
@@ -102,6 +102,9 @@ static int lowpan_frag_queue(struct lowpan_frag_queue *fq,
 
 	offset = lowpan_802154_cb(skb)->d_offset << 3;
 	end = lowpan_802154_cb(skb)->d_size;
+
+	if (!skb->len || offset > end || skb->len > end - offset)
+		goto err;
 
 	/* Is this the final fragment? */
 	if (offset + skb->len == end) {

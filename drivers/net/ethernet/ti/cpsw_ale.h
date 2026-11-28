@@ -96,6 +96,8 @@ struct cpsw_ale {
 	u32			vlan_field_bits;
 	unsigned long		*p0_untag_vid_mask;
 	const struct ale_entry_fld *vlan_entry_tbl;
+	/* serializes access to the ALE table registers */
+	spinlock_t		lock;
 };
 
 enum cpsw_ale_control {

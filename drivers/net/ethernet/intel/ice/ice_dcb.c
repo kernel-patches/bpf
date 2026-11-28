@@ -407,6 +407,15 @@ ice_parse_cee_pgcfg_tlv(struct ice_cee_feat_tlv *tlv,
 			dcbcfg->etscfg.tsatable[i] = ICE_IEEE_TSA_STRICT;
 		else
 			dcbcfg->etscfg.tsatable[i] = ICE_IEEE_TSA_ETS;
+
+		/* The CEE PGID is a four-bit wire field, so a peer can name a
+		 * priority group this driver has no traffic class for.  Several
+		 * consumers use the value to index ICE_MAX_TRAFFIC_CLASS-sized
+		 * objects, so clamp it here, after the strict-priority sentinel
+		 * above has been consumed.
+		 */
+		if (etscfg->prio_table[i] >= ICE_MAX_TRAFFIC_CLASS)
+			etscfg->prio_table[i] = 0;
 	}
 
 	/* Number of TCs supported (1 octet) */
@@ -805,6 +814,10 @@ ice_cee_to_dcb_cfg(struct ice_aqc_get_cee_dcb_cfg_resp *cee_cfg,
 			/* Map it to next empty TC */
 			dcbcfg->etscfg.prio_table[i] = cee_cfg->oper_num_tc - 1;
 			dcbcfg->etscfg.tsatable[i] = ICE_IEEE_TSA_STRICT;
+		} else if (dcbcfg->etscfg.prio_table[i] >=
+			   ICE_MAX_TRAFFIC_CLASS) {
+			dcbcfg->etscfg.prio_table[i] = 0;
+			dcbcfg->etscfg.tsatable[i] = ICE_IEEE_TSA_ETS;
 		} else {
 			dcbcfg->etscfg.tsatable[i] = ICE_IEEE_TSA_ETS;
 		}

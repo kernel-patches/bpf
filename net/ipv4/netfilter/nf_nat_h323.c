@@ -35,9 +35,16 @@ static int set_addr(struct sk_buff *skb, unsigned int protoff,
 
 	buf.ip = ip;
 	buf.port = port;
-	addroff += dataoff;
 
 	if (ip_hdr(skb)->protocol == IPPROTO_TCP) {
+		/* nf_nat_mangle_tcp_packet() counts match_offset from the
+		 * TCP header, so move the offset past the TPKT header.
+		 * nf_nat_mangle_udp_packet() already counts from the UDP
+		 * payload, where the decoded data starts; adding dataoff
+		 * there writes past the address and can underflow the
+		 * memmove() length in mangle_contents().
+		 */
+		addroff += dataoff;
 		if (!nf_nat_mangle_tcp_packet(skb, ct, ctinfo,
 					      protoff, addroff, sizeof(buf),
 					      (char *) &buf, sizeof(buf))) {

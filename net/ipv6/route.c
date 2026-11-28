@@ -249,24 +249,36 @@ static struct neighbour *ip6_dst_neigh_lookup(const struct dst_entry *dst,
 					      const void *daddr)
 {
 	const struct rt6_info *rt = dst_rt6_info(dst);
+	struct net_device *dev;
+	struct neighbour *n;
 
-	return __ip6_dst_neigh_lookup(rt6_nexthop(rt, &in6addr_any),
-				      dst_dev(dst), skb, daddr);
+	rcu_read_lock();
+	dev = dst_dev_rcu(dst);
+	n = __ip6_dst_neigh_lookup(rt6_nexthop(rt, &in6addr_any),
+				   dev, skb, daddr);
+	rcu_read_unlock();
+
+	return n;
 }
 
 static void ip6_confirm_neigh(const struct dst_entry *dst, const void *daddr)
 {
 	const struct rt6_info *rt = dst_rt6_info(dst);
-	struct net_device *dev = dst_dev(dst);
+	struct net_device *dev;
+
+	rcu_read_lock();
+	dev = dst_dev_rcu(dst);
 
 	daddr = choose_neigh_daddr(rt6_nexthop(rt, &in6addr_any), NULL, daddr);
 	if (!daddr)
-		return;
+		goto out;
 	if (dev->flags & (IFF_NOARP | IFF_LOOPBACK))
-		return;
+		goto out;
 	if (ipv6_addr_is_multicast((const struct in6_addr *)daddr))
-		return;
+		goto out;
 	__ipv6_confirm_neigh(dev, daddr);
+out:
+	rcu_read_unlock();
 }
 
 static struct dst_ops ip6_dst_ops_template = {
@@ -1466,7 +1478,11 @@ static struct rt6_info *ip6_rt_pcpu_alloc(const struct fib6_result *res)
 
 static bool rt6_is_valid(const struct rt6_info *rt6)
 {
-	return rt6->sernum == rt_genid_ipv6(dev_net(rt6->dst.dev));
+	/* Reject the initial sernum, which every netns shares and which a
+	 * route can record before its insertion bumps the sernum.
+	 */
+	return rt6->sernum != 1 &&
+	       rt6->sernum == rt_genid_ipv6(dev_net(rt6->dst.dev));
 }
 
 /* It should be called with rcu_read_lock() acquired */
@@ -4911,8 +4927,8 @@ static int fib6_ifup(struct fib6_info *rt, void *p_arg)
 	if (rt != net->ipv6.fib6_null_entry && !rt->nh &&
 	    rt->fib6_nh->fib_nh_dev == arg->dev) {
 		rt->fib6_nh->fib_nh_flags &= ~arg->nh_flags;
-		fib6_update_sernum_upto_root(net, rt);
 		rt6_multipath_rebalance(rt);
+		fib6_update_sernum_upto_root(net, rt);
 	}
 
 	return 0;
@@ -5015,8 +5031,8 @@ static int fib6_ifdown(struct fib6_info *rt, void *p_arg)
 			}
 			rt6_multipath_nh_flags_set(rt, dev, RTNH_F_DEAD |
 						   RTNH_F_LINKDOWN);
-			fib6_update_sernum(net, rt);
 			rt6_multipath_rebalance(rt);
+			fib6_update_sernum(net, rt);
 		}
 		return -2;
 	case NETDEV_CHANGE:
@@ -5024,8 +5040,8 @@ static int fib6_ifdown(struct fib6_info *rt, void *p_arg)
 		    rt->fib6_flags & (RTF_LOCAL | RTF_ANYCAST))
 			break;
 		rt->fib6_nh->fib_nh_flags |= RTNH_F_LINKDOWN;
-		fib6_update_sernum(net, rt);
 		rt6_multipath_rebalance(rt);
+		fib6_update_sernum(net, rt);
 		break;
 	}
 
@@ -5868,7 +5884,10 @@ static int rt6_fill_node(struct net *net, struct sk_buff *skb,
 #endif
 	if (iif) {
 #ifdef CONFIG_IPV6_MROUTE
-		if (ipv6_addr_is_multicast(&rt6_dst->addr)) {
+		if (dest && ipv6_addr_is_multicast(&rt6_dst->addr) &&
+		    !(ipv6_addr_type(dest) &
+		      (IPV6_ADDR_LOOPBACK | IPV6_ADDR_LINKLOCAL)) &&
+		    atomic_read(&net->ipv6.devconf_all->mc_forwarding)) {
 			int err = ip6mr_get_route(net, skb, rtm, portid);
 
 			if (err == 0)
@@ -6610,6 +6629,8 @@ static int ipv6_sysctl_rtcache_flush(const struct ctl_table *ctl, int write,
 	return 0;
 }
 
+static unsigned int ip6_rt_gc_elasticity_max = 31;
+
 static const struct ctl_table ipv6_route_table_template[] = {
 	{
 		.procname	=	"max_size",
@@ -6656,9 +6677,10 @@ static const struct ctl_table ipv6_route_table_template[] = {
 	{
 		.procname	=	"gc_elasticity",
 		.data		=	&init_net.ipv6.sysctl.ip6_rt_gc_elasticity,
-		.maxlen		=	sizeof(int),
+		.maxlen		=	sizeof(u8),
 		.mode		=	0644,
-		.proc_handler	=	proc_dointvec,
+		.proc_handler	=	proc_dou8vec_minmax,
+		.extra2		=	&ip6_rt_gc_elasticity_max,
 	},
 	{
 		.procname	=	"mtu_expires",

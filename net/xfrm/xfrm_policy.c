@@ -3186,8 +3186,10 @@ struct dst_entry *xfrm_lookup_with_ifid(struct net *net,
 	struct xfrm_policy *pols[XFRM_POLICY_TYPE_MAX];
 	struct xfrm_dst *xdst;
 	struct dst_entry *dst, *route;
+	struct net_device *dev;
 	u16 family = dst_orig->ops->family;
 	u8 dir = XFRM_POLICY_OUT;
+	bool is_loopback;
 	int i, err, num_pols, num_xfrms = 0, drop_pols = 0;
 
 	dst = NULL;
@@ -3312,7 +3314,12 @@ ok:
 	return dst;
 
 nopol:
-	if ((!dst_orig->dev || !(dst_orig->dev->flags & IFF_LOOPBACK)) &&
+	rcu_read_lock();
+	dev = dst_dev_rcu(dst_orig);
+	is_loopback = dev && (dev->flags & IFF_LOOPBACK);
+	rcu_read_unlock();
+
+	if (!is_loopback &&
 	    READ_ONCE(net->xfrm.policy_default[dir]) == XFRM_USERPOLICY_BLOCK) {
 		err = -EPERM;
 		goto error;

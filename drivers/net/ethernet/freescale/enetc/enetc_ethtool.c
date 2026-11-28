@@ -1149,6 +1149,7 @@ static int enetc_get_phc_index_by_pdev(struct enetc_si *si)
 		devfn = PCI_DEVFN(24, 0);
 		break;
 	case ENETC_REV_4_3:
+	case ENETC_REV_4_6:
 		devfn = PCI_DEVFN(0, 1);
 		break;
 	default:
@@ -1168,7 +1169,8 @@ static int enetc_get_phc_index_by_pdev(struct enetc_si *si)
 
 static int enetc_get_phc_index(struct enetc_si *si)
 {
-	struct device_node *np = si->pdev->dev.of_node;
+	struct pci_dev *pdev = pci_physfn(si->pdev);
+	struct device_node *np = pdev->dev.of_node;
 	struct device_node *timer_np;
 	int phc_index;
 

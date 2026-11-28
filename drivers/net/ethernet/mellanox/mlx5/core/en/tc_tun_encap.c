@@ -177,7 +177,7 @@ void mlx5e_tc_encap_flows_add(struct mlx5e_priv *priv,
 		return;
 	}
 	e->flags |= MLX5_ENCAP_ENTRY_VALID;
-	mlx5e_rep_queue_neigh_stats_work(priv);
+	mlx5e_rep_queue_neigh_stats_work(netdev_priv(e->out_dev));
 
 	list_for_each_entry(flow, flow_list, tmp_list) {
 		if (!mlx5e_is_offloaded_flow(flow) || !flow_flag_test(flow, SLOW))
@@ -275,6 +275,11 @@ static void mlx5e_take_tmp_flow(struct mlx5e_tc_flow *flow,
 				struct list_head *flow_list,
 				int index)
 {
+	/* Detaching the flow also takes encap_tbl_lock. */
+	wait_for_completion(&flow->init_done);
+	if (flow_flag_test(flow, PARSE_FAILED))
+		return;
+
 	if (IS_ERR(mlx5e_flow_get(flow))) {
 		/* Flow is being deleted concurrently. Wait for it to be
 		 * unoffloaded from hardware, otherwise deleting encap will
@@ -283,7 +288,6 @@ static void mlx5e_take_tmp_flow(struct mlx5e_tc_flow *flow,
 		wait_for_completion(&flow->del_hw_done);
 		return;
 	}
-	wait_for_completion(&flow->init_done);
 
 	flow->tmp_entry_index = index;
 	list_add(&flow->tmp_list, flow_list);
@@ -348,7 +352,7 @@ retry:
 
 	/* release starting encap */
 	if (e)
-		mlx5e_encap_put(netdev_priv(e->out_dev), e);
+		mlx5e_encap_put(e->priv, e);
 	if (!next)
 		return next;
 
@@ -401,7 +405,7 @@ void mlx5e_tc_update_neigh_used_value(struct mlx5e_neigh_hash_entry *nhe)
 	 * next one.
 	 */
 	while ((e = mlx5e_get_next_valid_encap(nhe, e)) != NULL) {
-		struct mlx5e_priv *priv = netdev_priv(e->out_dev);
+		struct mlx5e_priv *priv = e->priv;
 		struct encap_flow_item *efi, *tmp;
 		struct mlx5_eswitch *esw;
 		LIST_HEAD(flow_list);
@@ -871,6 +875,7 @@ int mlx5e_attach_encap(struct mlx5e_priv *priv,
 	init_completion(&e->res_ready);
 	entry_created = true;
 	INIT_LIST_HEAD(&e->route_list);
+	e->priv = netdev_priv(mlx5_eswitch_uplink_get_proto_dev(esw, REP_ETH));
 
 	tun_info = mlx5e_dup_tun_info(tun_info);
 	if (!tun_info) {

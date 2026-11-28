@@ -161,7 +161,8 @@ static int parse_build_id(struct freader *r, unsigned char *build_id, __u32 *siz
 {
 	const char note_name[] = "GNU";
 	const size_t note_name_sz = sizeof(note_name);
-	u32 build_id_off, new_off, note_end, name_sz, desc_sz;
+	u32 build_id_off, new_off, note_end;
+	u64 name_sz, desc_sz;
 	const Elf32_Nhdr *nhdr;
 	const char *data;
 

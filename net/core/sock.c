@@ -635,18 +635,14 @@ EXPORT_SYMBOL(sk_dst_check);
 
 static int sock_bindtoindex_locked(struct sock *sk, int ifindex)
 {
-	int ret = -ENOPROTOOPT;
-#ifdef CONFIG_NETDEVICES
 	struct net *net = sock_net(sk);
 
 	/* Sorry... */
-	ret = -EPERM;
 	if (sk->sk_bound_dev_if && !ns_capable(net->user_ns, CAP_NET_RAW))
-		goto out;
+		return -EPERM;
 
-	ret = -EINVAL;
 	if (ifindex < 0)
-		goto out;
+		return -EINVAL;
 
 	/* Paired with all READ_ONCE() done locklessly. */
 	WRITE_ONCE(sk->sk_bound_dev_if, ifindex);
@@ -655,12 +651,7 @@ static int sock_bindtoindex_locked(struct sock *sk, int ifindex)
 		sk->sk_prot->rehash(sk);
 	sk_dst_reset(sk);
 
-	ret = 0;
-
-out:
-#endif
-
-	return ret;
+	return 0;
 }
 
 int sock_bindtoindex(struct sock *sk, int ifindex, bool lock_sk)
@@ -679,48 +670,40 @@ EXPORT_SYMBOL(sock_bindtoindex);
 
 static int sock_setbindtodevice(struct sock *sk, sockptr_t optval, int optlen)
 {
-	int ret = -ENOPROTOOPT;
-#ifdef CONFIG_NETDEVICES
 	struct net *net = sock_net(sk);
+	struct net_device *dev;
 	char devname[IFNAMSIZ];
-	int index;
+	int ret, index;
 
-	ret = -EINVAL;
 	if (optlen < 0)
-		goto out;
+		return -EINVAL;
 
 	/* Bind this socket to a particular device like "eth0",
 	 * as specified in the passed interface name. If the
 	 * name is "" or the option length is zero the socket
-	 * is not bound.
+	 * is unbound.
 	 */
 	if (optlen > IFNAMSIZ - 1)
 		optlen = IFNAMSIZ - 1;
 	memset(devname, 0, sizeof(devname));
 
-	ret = -EFAULT;
 	if (copy_from_sockptr(devname, optval, optlen))
-		goto out;
+		return -EFAULT;
 
 	index = 0;
 	if (devname[0] != '\0') {
-		struct net_device *dev;
-
 		rcu_read_lock();
 		dev = dev_get_by_name_rcu(net, devname);
 		if (dev)
 			index = dev->ifindex;
 		rcu_read_unlock();
-		ret = -ENODEV;
 		if (!dev)
-			goto out;
+			return -ENODEV;
 	}
 
 	sockopt_lock_sock(sk);
 	ret = sock_bindtoindex_locked(sk, index);
 	sockopt_release_sock(sk);
-out:
-#endif
 
 	return ret;
 }
@@ -728,42 +711,32 @@ out:
 static int sock_getbindtodevice(struct sock *sk, sockptr_t optval,
 				sockptr_t optlen, int len)
 {
-	int ret = -ENOPROTOOPT;
-#ifdef CONFIG_NETDEVICES
-	int bound_dev_if = READ_ONCE(sk->sk_bound_dev_if);
+	int ret, bound_dev_if = READ_ONCE(sk->sk_bound_dev_if);
 	struct net *net = sock_net(sk);
 	char devname[IFNAMSIZ];
 
 	if (bound_dev_if == 0) {
 		len = 0;
-		goto zero;
+		goto copy_len;
 	}
 
-	ret = -EINVAL;
 	if (len < IFNAMSIZ)
-		goto out;
+		return -EINVAL;
 
 	ret = netdev_get_name(net, devname, bound_dev_if);
 	if (ret)
-		goto out;
+		return ret;
 
 	len = strlen(devname) + 1;
 
-	ret = -EFAULT;
 	if (copy_to_sockptr(optval, devname, len))
-		goto out;
+		return -EFAULT;
 
-zero:
-	ret = -EFAULT;
+copy_len:
 	if (copy_to_sockptr(optlen, &len, sizeof(int)))
-		goto out;
+		return -EFAULT;
 
-	ret = 0;
-
-out:
-#endif
-
-	return ret;
+	return 0;
 }
 
 bool sk_mc_loop(const struct sock *sk)
@@ -1586,6 +1559,13 @@ set_sndbuf:
 			ret = -EOPNOTSUPP;
 		break;
 
+	case SO_PASSCRED_THREAD:
+		if (sk_is_unix(sk))
+			sk->sk_scm_credentials_thread = valbool;
+		else
+			ret = -EOPNOTSUPP;
+		break;
+
 	case SO_PASSRIGHTS:
 		if (sk_is_unix(sk))
 			sk->sk_scm_rights = valbool;
@@ -1952,6 +1932,13 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 			return -EOPNOTSUPP;
 
 		v.val = sk->sk_scm_pidfd_thread;
+		break;
+
+	case SO_PASSCRED_THREAD:
+		if (!sk_is_unix(sk))
+			return -EOPNOTSUPP;
+
+		v.val = sk->sk_scm_credentials_thread;
 		break;
 
 	case SO_PASSRIGHTS:
@@ -2422,7 +2409,7 @@ static void __sk_destruct(struct rcu_head *head)
 	sk_prot_free(sk->sk_prot_creator, sk);
 }
 
-void sk_net_refcnt_upgrade(struct sock *sk)
+void __sk_net_refcnt_upgrade(struct sock *sk, gfp_t gfp)
 {
 	struct net *net = sock_net(sk);
 
@@ -2430,8 +2417,13 @@ void sk_net_refcnt_upgrade(struct sock *sk)
 	__netns_tracker_free(net, &sk->ns_tracker, false);
 	net_passive_dec(net);
 	sk->sk_net_refcnt = 1;
-	get_net_track(net, &sk->ns_tracker, GFP_KERNEL);
+	get_net_track(net, &sk->ns_tracker, gfp);
 	sock_inuse_add(net, 1);
+}
+
+void sk_net_refcnt_upgrade(struct sock *sk)
+{
+	__sk_net_refcnt_upgrade(sk, GFP_KERNEL);
 }
 EXPORT_SYMBOL_GPL(sk_net_refcnt_upgrade);
 
@@ -3398,13 +3390,17 @@ int sk_wait_data(struct sock *sk, long *timeo, const struct sk_buff *skb)
 EXPORT_SYMBOL(sk_wait_data);
 
 /**
- *	__sk_mem_raise_allocated - increase memory_allocated
+ *	__sk_mem_raise_allocated_reason - increase memory_allocated
  *	@sk: socket
  *	@size: memory size to allocate
  *	@amt: pages to allocate
  *	@kind: allocation type
  *
- *	Similar to __sk_mem_schedule(), but does not update sk_forward_alloc.
+ *	Similar to __sk_mem_schedule_reason(), but does not update
+ *	sk_forward_alloc.
+ *
+ *	Return: SKB_NOT_DROPPED_YET on success, SKB_DROP_REASON_MEMCG if the
+ *	memcg charge failed, SKB_DROP_REASON_PROTO_MEM otherwise.
  *
  *	Unlike the globally shared limits among the sockets under same protocol,
  *	consuming the budget of a memcg won't have direct effect on other ones.
@@ -3412,8 +3408,10 @@ EXPORT_SYMBOL(sk_wait_data);
  *	whether or not to raise allocated through sk_under_memory_pressure() or
  *	its variants.
  */
-int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
+enum skb_drop_reason __sk_mem_raise_allocated_reason(struct sock *sk, int size,
+						     int amt, int kind)
 {
+	enum skb_drop_reason reason = SKB_DROP_REASON_PROTO_MEM;
 	bool memcg_enabled = false, charged = false;
 	struct proto *prot = sk->sk_prot;
 	long allocated = 0;
@@ -3426,17 +3424,19 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 	if (mem_cgroup_sk_enabled(sk)) {
 		memcg_enabled = true;
 		charged = mem_cgroup_sk_charge(sk, amt, gfp_memcg_charge());
-		if (!charged)
+		if (!charged) {
+			reason = SKB_DROP_REASON_MEMCG;
 			goto suppress_allocation;
+		}
 	}
 
 	if (sk->sk_bypass_prot_mem)
-		return 1;
+		return SKB_NOT_DROPPED_YET;
 
 	/* Under limit. */
 	if (allocated <= sk_prot_mem_limits(sk, 0)) {
 		sk_leave_memory_pressure(sk);
-		return 1;
+		return SKB_NOT_DROPPED_YET;
 	}
 
 	/* Under pressure. */
@@ -3457,16 +3457,16 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 	 */
 	if (kind == SK_MEM_RECV) {
 		if (atomic_read(&sk->sk_rmem_alloc) < sk_get_rmem0(sk, prot))
-			return 1;
+			return SKB_NOT_DROPPED_YET;
 
 	} else { /* SK_MEM_SEND */
 		int wmem0 = sk_get_wmem0(sk, prot);
 
 		if (sk->sk_type == SOCK_STREAM) {
 			if (sk->sk_wmem_queued < wmem0)
-				return 1;
+				return SKB_NOT_DROPPED_YET;
 		} else if (refcount_read(&sk->sk_wmem_alloc) < wmem0) {
-				return 1;
+			return SKB_NOT_DROPPED_YET;
 		}
 	}
 
@@ -3478,7 +3478,7 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 		 * sense for global memory pressure.
 		 */
 		if (!sk_under_global_memory_pressure(sk))
-			return 1;
+			return SKB_NOT_DROPPED_YET;
 
 		/* Try to be fair among all the sockets under global
 		 * pressure by allowing the ones that below average
@@ -3489,7 +3489,7 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 		    sk_mem_pages(sk->sk_wmem_queued +
 				 atomic_read(&sk->sk_rmem_alloc) +
 				 sk->sk_forward_alloc))
-			return 1;
+			return SKB_NOT_DROPPED_YET;
 	}
 
 suppress_allocation:
@@ -3505,7 +3505,7 @@ suppress_allocation:
 			if (memcg_enabled && !charged)
 				mem_cgroup_sk_charge(sk, amt,
 						     gfp_memcg_charge() | __GFP_NOFAIL);
-			return 1;
+			return SKB_NOT_DROPPED_YET;
 		}
 	}
 
@@ -3517,11 +3517,11 @@ suppress_allocation:
 	if (charged)
 		mem_cgroup_sk_uncharge(sk, amt);
 
-	return 0;
+	return reason;
 }
 
 /**
- *	__sk_mem_schedule - increase sk_forward_alloc and memory_allocated
+ *	__sk_mem_schedule_reason - increase sk_forward_alloc and memory_allocated
  *	@sk: socket
  *	@size: memory size to allocate
  *	@kind: allocation type
@@ -3529,16 +3529,26 @@ suppress_allocation:
  *	If kind is SK_MEM_SEND, it means wmem allocation. Otherwise it means
  *	rmem allocation. This function assumes that protocols which have
  *	memory_pressure use sk_wmem_queued as write buffer accounting.
+ *
+ *	Return: SKB_NOT_DROPPED_YET on success, or the drop reason.
  */
-int __sk_mem_schedule(struct sock *sk, int size, int kind)
+enum skb_drop_reason __sk_mem_schedule_reason(struct sock *sk, int size,
+					      int kind)
 {
-	int ret, amt = sk_mem_pages(size);
+	int amt = sk_mem_pages(size);
+	enum skb_drop_reason reason;
 
 	sk_forward_alloc_add(sk, amt << PAGE_SHIFT);
-	ret = __sk_mem_raise_allocated(sk, size, amt, kind);
-	if (!ret)
+	reason = __sk_mem_raise_allocated_reason(sk, size, amt, kind);
+	if (reason)
 		sk_forward_alloc_add(sk, -(amt << PAGE_SHIFT));
-	return ret;
+	return reason;
+}
+EXPORT_SYMBOL(__sk_mem_schedule_reason);
+
+int __sk_mem_schedule(struct sock *sk, int size, int kind)
+{
+	return __sk_mem_schedule_reason(sk, size, kind) == SKB_NOT_DROPPED_YET;
 }
 EXPORT_SYMBOL(__sk_mem_schedule);
 
@@ -3834,7 +3844,11 @@ void sock_init_data_uid(struct socket *sock, struct sock *sk, kuid_t uid)
 	sk->sk_sndbuf		=	READ_ONCE(sysctl_wmem_default);
 	sk->sk_state		=	TCP_CLOSE;
 	sk->sk_use_task_frag	=	true;
-	sk_set_socket(sk, sock);
+	/* tun and tap pass a socket that is not part of a socket_alloc, so
+	 * SOCK_INODE() must not be used here. sock_init_data() sets sk_ino.
+	 */
+	sk->sk_socket = sock;
+	sk->sk_ino = 0;
 
 	sock_set_flag(sk, SOCK_ZAPPED);
 
@@ -3900,6 +3914,8 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 		make_kuid(sock_net(sk)->user_ns, 0);
 
 	sock_init_data_uid(sock, sk, uid);
+	if (sock)
+		sk->sk_ino = SOCK_INODE(sock)->i_ino;
 }
 EXPORT_SYMBOL(sock_init_data);
 

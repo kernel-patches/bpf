@@ -381,6 +381,9 @@ static int enic_set_ringparam(struct net_device *netdev,
 	unsigned int tx_pending;
 	int err = 0;
 
+	if (!netif_device_present(netdev))
+		return -ENODEV;
+
 	if (ring->rx_mini_max_pending || ring->rx_mini_pending) {
 		netdev_info(netdev,
 			    "modifying mini ring params is not supported");
@@ -409,6 +412,8 @@ static int enic_set_ringparam(struct net_device *netdev,
 	}
 	if (running)
 		dev_close(netdev);
+	if (!netif_device_present(netdev))
+		return -ENODEV;
 	c->rq_desc_count =
 		ring->rx_pending & 0xffffffe0; /* must be aligned to groups of 32 */
 	c->wq_desc_count =

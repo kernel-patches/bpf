@@ -629,6 +629,8 @@ int hw_atl2_utils_get_filter_caps(struct aq_hw_s *self)
 	if (priv->l2_filters_base_index >= HW_ATL2_MAC_MAX)
 		priv->l2_filters_base_index = HW_ATL2_MAC_UC;
 	priv->l2_filter_count = filter_caps.l2_filter_count;
+	if (priv->l2_filter_count < 1 || priv->l2_filter_count > HW_ATL2_MAC_MAX)
+		priv->l2_filter_count = HW_ATL2_MAC_MAX - priv->l2_filters_base_index;
 	priv->etype_filter_base_index = filter_caps.ethertype_filter_base_index;
 	priv->etype_filter_count = filter_caps.ethertype_filter_count;
 	priv->etype_filter_tag_top =

@@ -162,10 +162,8 @@ int ipc_task_queue_send_task(struct iosm_imem *imem,
 			copy, size, is_copy);
 		if (is_copy)
 			kfree(copy);
-		goto out;
 	}
 
-	ret = 0;
 out:
 	return ret;
 }

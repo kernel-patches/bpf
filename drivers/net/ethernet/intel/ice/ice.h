@@ -321,6 +321,7 @@ enum ice_vsi_state {
 	ICE_VSI_MMAC_FLTR_CHANGED,
 	ICE_VSI_PROMISC_CHANGED,
 	ICE_VSI_REBUILD_PENDING,
+	ICE_VSI_ESWITCH_UPLINK,		/* eswitch owns the promisc config */
 	ICE_VSI_STATE_NBITS		/* must be last */
 };
 

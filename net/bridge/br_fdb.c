@@ -1005,6 +1005,7 @@ static void __fdb_update(struct net_bridge *br,
 	struct net_bridge_port *old_port;
 	struct net_bridge_dst old_dst;
 	bool fdb_modified = false;
+	bool roamed = false;
 	unsigned long now;
 
 	/* attempt to update an entry for a local interface */
@@ -1030,8 +1031,10 @@ static void __fdb_update(struct net_bridge *br,
 		      !test_bit(BR_FDB_STICKY, &fdb->flags)))) {
 		if (source != old_port) {
 			br_switchdev_fdb_notify(br, fdb, RTM_DELNEIGH);
+			clear_bit(BR_FDB_OFFLOADED, &fdb->flags);
 			br_fdb_dst_write(fdb, dst);
 			fdb_modified = true;
+			roamed = true;
 			/* take over HW learned entry */
 			if (unlikely(test_bit(BR_FDB_ADDED_BY_EXT_LEARN,
 					      &fdb->flags)))
@@ -1049,6 +1052,12 @@ static void __fdb_update(struct net_bridge *br,
 	}
 
 	if (unlikely(test_bit(BR_FDB_ADDED_BY_USER, &flags))) {
+		if (!test_bit(BR_FDB_STATIC, &fdb->flags) &&
+		    !test_bit(BR_FDB_ADDED_BY_EXT_LEARN, &fdb->flags)) {
+			if (!roamed)
+				br_switchdev_fdb_notify(br, fdb, RTM_DELNEIGH);
+			clear_bit(BR_FDB_OFFLOADED, &fdb->flags);
+		}
 		set_bit(BR_FDB_ADDED_BY_USER, &fdb->flags);
 		if (test_and_clear_bit(BR_FDB_DYNAMIC_LEARNED, &fdb->flags))
 			atomic_dec(&br->fdb_n_learned);
@@ -1261,6 +1270,12 @@ static int fdb_add_entry(struct net_bridge *br, struct net_bridge_dst dst,
 
 		if (flags & NLM_F_EXCL)
 			return -EEXIST;
+
+		if (!(state & (NUD_PERMANENT | NUD_NOARP)) &&
+		    !test_bit(BR_FDB_ADDED_BY_EXT_LEARN, &fdb->flags)) {
+			br_switchdev_fdb_notify(br, fdb, RTM_DELNEIGH);
+			clear_bit(BR_FDB_OFFLOADED, &fdb->flags);
+		}
 
 		old_dst = br_fdb_dst_read(fdb);
 		modified = fdb_update_dst(fdb, old_dst, dst);
@@ -1706,8 +1721,8 @@ void br_fdb_offloaded_set(struct net_bridge *br, struct net_bridge_port *p,
 	spin_lock_bh(&br->hash_lock);
 
 	fdb = br_fdb_find(br, addr, vid);
-	if (fdb && offloaded != test_bit(BR_FDB_OFFLOADED, &fdb->flags))
-		change_bit(BR_FDB_OFFLOADED, &fdb->flags);
+	if (fdb)
+		assign_bit(BR_FDB_OFFLOADED, &fdb->flags, offloaded);
 
 	spin_unlock_bh(&br->hash_lock);
 }

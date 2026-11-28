@@ -3646,6 +3646,7 @@ static void dsa_user_switchdev_event_work(struct work_struct *work)
 	const unsigned char *addr = switchdev_work->addr;
 	struct net_device *dev = switchdev_work->dev;
 	u16 vid = switchdev_work->vid;
+	const struct dsa_bridge *bridge;
 	struct dsa_switch *ds;
 	struct dsa_port *dp;
 	int err;
@@ -3653,14 +3654,22 @@ static void dsa_user_switchdev_event_work(struct work_struct *work)
 	dp = dsa_user_to_port(dev);
 	ds = dp->ds;
 
+	/* Gone if the port left the bridge after the event was queued:
+	 * dsa_port_bridge_destroy() clears it before it flushes the workqueue
+	 */
+	bridge = READ_ONCE(dp->bridge);
+	if (!bridge)
+		goto out;
+
 	switch (switchdev_work->event) {
 	case SWITCHDEV_FDB_ADD_TO_DEVICE:
 		if (switchdev_work->host_addr)
-			err = dsa_port_bridge_host_fdb_add(dp, addr, vid);
+			err = dsa_port_bridge_host_fdb_add(dp, bridge, addr,
+							   vid);
 		else if (dp->lag)
-			err = dsa_port_lag_fdb_add(dp, addr, vid);
+			err = dsa_port_lag_fdb_add(dp, bridge, addr, vid);
 		else
-			err = dsa_port_fdb_add(dp, addr, vid);
+			err = dsa_port_fdb_add(dp, bridge, addr, vid);
 		if (err) {
 			dev_err(ds->dev,
 				"port %d failed to add %pM vid %d to fdb: %d\n",
@@ -3672,11 +3681,12 @@ static void dsa_user_switchdev_event_work(struct work_struct *work)
 
 	case SWITCHDEV_FDB_DEL_TO_DEVICE:
 		if (switchdev_work->host_addr)
-			err = dsa_port_bridge_host_fdb_del(dp, addr, vid);
+			err = dsa_port_bridge_host_fdb_del(dp, bridge, addr,
+							   vid);
 		else if (dp->lag)
-			err = dsa_port_lag_fdb_del(dp, addr, vid);
+			err = dsa_port_lag_fdb_del(dp, bridge, addr, vid);
 		else
-			err = dsa_port_fdb_del(dp, addr, vid);
+			err = dsa_port_fdb_del(dp, bridge, addr, vid);
 		if (err) {
 			dev_err(ds->dev,
 				"port %d failed to delete %pM vid %d from fdb: %d\n",
@@ -3686,6 +3696,7 @@ static void dsa_user_switchdev_event_work(struct work_struct *work)
 		break;
 	}
 
+out:
 	kfree(switchdev_work);
 }
 
@@ -3718,7 +3729,7 @@ static int dsa_user_fdb_event(struct net_device *dev,
 	if (ctx && ctx != dp)
 		return 0;
 
-	if (!dp->bridge)
+	if (!READ_ONCE(dp->bridge))
 		return 0;
 
 	if (switchdev_fdb_is_dynamically_learned(fdb_info)) {

@@ -1899,6 +1899,7 @@ int prestera_switchdev_init(struct prestera_switch *sw)
 	return 0;
 
 err_fdb_init:
+	prestera_switchdev_handler_fini(swdev);
 err_swdev_init:
 	destroy_workqueue(swdev_wq);
 err_alloc_wq:

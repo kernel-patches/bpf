@@ -2545,8 +2545,9 @@ static int tg3_phy_reset_chanpat(struct tg3 *tp)
 
 static int tg3_phy_reset_5703_4_5(struct tg3 *tp)
 {
-	u32 reg32, phy9_orig;
 	int retries, do_phy_reset, err;
+	bool phy9_orig_set = false;
+	u32 reg32, phy9_orig = 0;
 
 	retries = 10;
 	do_phy_reset = 1;
@@ -2572,6 +2573,7 @@ static int tg3_phy_reset_5703_4_5(struct tg3 *tp)
 		/* Set to master mode.  */
 		if (tg3_readphy(tp, MII_CTRL1000, &phy9_orig))
 			continue;
+		phy9_orig_set = true;
 
 		tg3_writephy(tp, MII_CTRL1000,
 			     CTL1000_AS_MASTER | CTL1000_ENABLE_MASTER);
@@ -2599,7 +2601,8 @@ static int tg3_phy_reset_5703_4_5(struct tg3 *tp)
 
 	tg3_phy_toggle_auxctl_smdsp(tp, false);
 
-	tg3_writephy(tp, MII_CTRL1000, phy9_orig);
+	if (phy9_orig_set)
+		tg3_writephy(tp, MII_CTRL1000, phy9_orig);
 
 	err = tg3_readphy(tp, MII_TG3_EXT_CTRL, &reg32);
 	if (err)
@@ -2841,6 +2844,9 @@ static void tg3_pwrsrc_die_with_vmain(struct tg3 *tp)
 	    tg3_asic_rev(tp) == ASIC_REV_5701)
 		return;
 
+	if (tg3_flag(tp, CITADEL))
+		return;
+
 	grc_local_ctrl = tp->grc_local_ctrl | GRC_LCLCTRL_GPIO_OE1;
 
 	tw32_wait_f(GRC_LOCAL_CTRL,
@@ -2914,6 +2920,9 @@ static void tg3_pwrsrc_switch_to_vaux(struct tg3 *tp)
 			grc_local_ctrl &= ~(GRC_LCLCTRL_GPIO_OE2 |
 					    GRC_LCLCTRL_GPIO_OUTPUT2);
 		}
+		if (tg3_flag(tp, CITADEL))
+			grc_local_ctrl &= ~(GRC_LCLCTRL_GPIO_OE1 |
+					    GRC_LCLCTRL_GPIO_OUTPUT1);
 		tw32_wait_f(GRC_LOCAL_CTRL,
 			    tp->grc_local_ctrl | grc_local_ctrl,
 			    TG3_GRC_LCLCTL_PWRSW_DELAY);
@@ -10548,8 +10557,11 @@ static int tg3_reset_hw(struct tg3 *tp, bool reset_phy)
 		tp->grc_local_ctrl &= ~gpio_mask;
 		tp->grc_local_ctrl |= tr32(GRC_LOCAL_CTRL) & gpio_mask;
 
+		if (tg3_flag(tp, CITADEL))
+			tp->grc_local_ctrl &= ~(GRC_LCLCTRL_GPIO_OE1 |
+						GRC_LCLCTRL_GPIO_OUTPUT1);
 		/* GPIO1 must be driven high for eeprom write protect */
-		if (tg3_flag(tp, EEPROM_WRITE_PROT))
+		else if (tg3_flag(tp, EEPROM_WRITE_PROT))
 			tp->grc_local_ctrl |= (GRC_LCLCTRL_GPIO_OE1 |
 					       GRC_LCLCTRL_GPIO_OUTPUT1);
 	}
@@ -15232,6 +15244,38 @@ static struct subsys_tbl_ent *tg3_lookup_by_subsys(struct tg3 *tp)
 	return NULL;
 }
 
+static bool tg3_is_citadel(struct tg3 *tp)
+{
+	if (tp->pdev->subsystem_vendor == TG3PCI_SUBVENDOR_ID_BROADCOM) {
+		switch (tp->pdev->subsystem_device) {
+		case TG3PCI_SUBDEVICE_ID_CITADEL_BEVERLYWOOD:
+		case TG3PCI_SUBDEVICE_ID_CITADEL_BEL_AIR:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2908:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2909:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2906:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_E14A:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_E34A:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2904:
+		case TG3PCI_SUBDEVICE_ID_CHANNEL_2905:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	if (tp->pdev->subsystem_vendor == TG3PCI_SUBVENDOR_ID_DELL) {
+		switch (tp->pdev->subsystem_device) {
+		case TG3PCI_SUBDEVICE_ID_DELL_5720_L21T00:
+		case TG3PCI_SUBDEVICE_ID_DELL_5720_XE9880L:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	return false;
+}
+
 static void tg3_get_eeprom_hw_cfg(struct tg3 *tp)
 {
 	u32 val;
@@ -15242,6 +15286,11 @@ static void tg3_get_eeprom_hw_cfg(struct tg3 *tp)
 	/* Assume an onboard device and WOL capable by default.  */
 	tg3_flag_set(tp, EEPROM_WRITE_PROT);
 	tg3_flag_set(tp, WOL_CAP);
+
+	if (tg3_is_citadel(tp)) {
+		tg3_flag_set(tp, CITADEL);
+		tg3_flag_clear(tp, WOL_CAP);
+	}
 
 	if (tg3_asic_rev(tp) == ASIC_REV_5906) {
 		if (!(tr32(PCIE_TRANSACTION_CFG) & PCIE_TRANS_CFG_LOM)) {
@@ -15442,6 +15491,9 @@ static void tg3_get_eeprom_hw_cfg(struct tg3 *tp)
 			tp->phy_flags |= TG3_PHYFLG_DISABLE_1G_HD_ADV;
 	}
 done:
+	if (tg3_flag(tp, CITADEL))
+		tg3_flag_clear(tp, EEPROM_WRITE_PROT);
+
 	if (tg3_flag(tp, WOL_CAP))
 		device_set_wakeup_enable(&tp->pdev->dev,
 					 tg3_flag(tp, WOL_ENABLE));

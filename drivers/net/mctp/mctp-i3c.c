@@ -81,9 +81,9 @@ struct mctp_i3c_device {
 	bool have_mdb;
 	/* I3C dynamic address */
 	u8 addr;
-	/* Maximum read length */
+	/* Maximum read length, limited by the device MRL and the controller */
 	u16 mrl;
-	/* Maximum write length */
+	/* Maximum write length, limited by the device MWL and the controller */
 	u16 mwl;
 	/* Provisioned ID */
 	u64 pid;
@@ -213,8 +213,8 @@ static int mctp_i3c_setup(struct mctp_i3c_device *mi)
 	i3c_device_get_info(mi->i3c, &info);
 	mi->have_mdb = info.bcr & BIT(2);
 	mi->addr = info.dyn_addr;
-	mi->mwl = info.max_write_len;
-	mi->mrl = info.max_read_len;
+	mi->mwl = i3c_device_get_max_write_xfer_bytes(mi->i3c);
+	mi->mrl = i3c_device_get_max_read_xfer_bytes(mi->i3c);
 	mi->pid = info.pid;
 
 	rc = i3c_device_request_ibi(mi->i3c, &ibi);
@@ -492,7 +492,8 @@ __must_hold(&busdevs_lock)
 	}
 
 	kfree_skb(mbus->tx_skb);
-	list_del(&mbus->list);
+	mbus->tx_skb = NULL;
+	list_del_init(&mbus->list);
 }
 
 static void mctp_i3c_ndo_uninit(struct net_device *ndev)
@@ -624,7 +625,7 @@ __must_hold(&busdevs_lock)
 	rc = mctp_register_netdev(ndev, NULL, MCTP_PHYS_BINDING_I3C);
 	if (rc < 0) {
 		dev_warn(&ndev->dev, "netdev register failed: %d\n", rc);
-		goto err_free_netdev;
+		goto err_free_uninit;
 	}
 	return mbus;
 
@@ -634,7 +635,6 @@ err_free_uninit:
 	 */
 	mctp_i3c_bus_free(mbus);
 
-err_free_netdev:
 	free_netdev(ndev);
 
 err:

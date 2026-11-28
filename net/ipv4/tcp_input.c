@@ -3721,6 +3721,8 @@ static int tcp_clean_rtx_queue(struct sock *sk, const struct sk_buff *ack_skb,
 		} else {
 			flag |= FLAG_SYN_ACKED;
 			tp->retrans_stamp = 0;
+			/* tcp_snd_una_update() counted our SYN. */
+			tp->bytes_acked_syn = 1;
 		}
 
 		if (!fully_acked)
@@ -4342,8 +4344,12 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	if (before(ack, prior_snd_una)) {
 		u32 max_window;
 
-		/* do not accept ACK for bytes we never sent. */
-		max_window = min_t(u64, tp->max_window, tp->bytes_acked);
+		/* Do not accept ACK for bytes we never sent.
+		 * Our SYN, if counted in bytes_acked, is not one of them:
+		 * no valid ACK ever carried ISS.
+		 */
+		max_window = min_t(u64, tp->max_window,
+				   tp->bytes_acked - tp->bytes_acked_syn);
 		/* RFC 5961 5.2 [Blind Data Injection Attack].[Mitigation] */
 		if (before(ack, prior_snd_una - max_window)) {
 			if (!(flag & FLAG_NO_CHALLENGE_ACK))
@@ -5409,21 +5415,29 @@ static bool tcp_can_ingest(const struct sock *sk, const struct sk_buff *skb)
 	return rmem <= sk->sk_rcvbuf;
 }
 
-static int tcp_try_rmem_schedule(struct sock *sk, const struct sk_buff *skb,
-				 unsigned int size)
+/* Return SKB_NOT_DROPPED_YET if @skb can be queued, or the drop reason. */
+static enum skb_drop_reason
+tcp_try_rmem_schedule(struct sock *sk, const struct sk_buff *skb,
+		      unsigned int size)
 {
-	if (!tcp_can_ingest(sk, skb) ||
-	    !sk_rmem_schedule(sk, skb, size)) {
+	enum skb_drop_reason reason;
 
-		if (tcp_prune_queue(sk, skb) < 0)
-			return -1;
-
-		while (!sk_rmem_schedule(sk, skb, size)) {
-			if (!tcp_prune_ofo_queue(sk, skb))
-				return -1;
-		}
+	if (!tcp_can_ingest(sk, skb)) {
+		reason = SKB_DROP_REASON_SOCKET_RCVBUFF;
+	} else {
+		reason = sk_rmem_schedule_reason(sk, skb, size);
+		if (!reason)
+			return SKB_NOT_DROPPED_YET;
 	}
-	return 0;
+
+	if (tcp_prune_queue(sk, skb) < 0)
+		return reason;
+
+	while ((reason = sk_rmem_schedule_reason(sk, skb, size))) {
+		if (!tcp_prune_ofo_queue(sk, skb))
+			return reason;
+	}
+	return SKB_NOT_DROPPED_YET;
 }
 
 /* Credit the memory added to the receive queues since @rmem was sampled
@@ -5443,6 +5457,7 @@ static void tcp_collapse_credit_add(struct sock *sk, int rmem)
 static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
+	enum skb_drop_reason reason;
 	struct rb_node **p, *parent;
 	struct sk_buff *skb1;
 	u32 seq, end_seq;
@@ -5452,10 +5467,11 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 	tcp_save_lrcv_flowlabel(sk, skb);
 	tcp_data_ecn_check(sk, skb);
 
-	if (unlikely(tcp_try_rmem_schedule(sk, skb, skb->truesize))) {
+	reason = tcp_try_rmem_schedule(sk, skb, skb->truesize);
+	if (unlikely(reason)) {
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPOFODROP);
 		READ_ONCE(sk->sk_data_ready)(sk);
-		tcp_drop_reason(sk, skb, SKB_DROP_REASON_PROTO_MEM);
+		tcp_drop_reason(sk, skb, reason);
 		return;
 	}
 	/* Sampled after tcp_try_rmem_schedule(), which can prune. */
@@ -5725,7 +5741,8 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 
 		/* Ok. In sequence. In window. */
 queue_and_out:
-		if (tcp_try_rmem_schedule(sk, skb, skb->truesize)) {
+		reason = tcp_try_rmem_schedule(sk, skb, skb->truesize);
+		if (reason) {
 			/* TODO: maybe ratelimit these WIN 0 ACK ? */
 			inet_csk(sk)->icsk_ack.pending |=
 					(ICSK_ACK_NOMEM | ICSK_ACK_NOW);
@@ -5733,7 +5750,6 @@ queue_and_out:
 			READ_ONCE(sk->sk_data_ready)(sk);
 
 			if (skb_queue_len(&sk->sk_receive_queue) && skb->len) {
-				reason = SKB_DROP_REASON_PROTO_MEM;
 				NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPRCVQDROP);
 				goto drop;
 			}
@@ -5817,6 +5833,42 @@ static struct sk_buff *tcp_skb_next(struct sk_buff *skb, struct sk_buff_head *li
 	return skb_rb_next(skb);
 }
 
+#define TCP_COLLAPSE_MAX_SIZE	SKB_MAX_ORDER(0, 0)
+#define TCP_COLLAPSE_SCALING_RATIO				\
+	((TCP_COLLAPSE_MAX_SIZE << TCP_RMEM_TO_WIN_SCALE) /	\
+	 (SKB_TRUESIZE(TCP_COLLAPSE_MAX_SIZE)))
+/* Cap pool preallocation per sub-range to about 15 pages in seq
+ * space.  A single first skb exceeding this is still collapsed,
+ * whereas an exceeding overlapping ofo range is skipped.
+ */
+#define TCP_COLLAPSE_MAX_TOTAL_SIZE (TCP_COLLAPSE_MAX_SIZE * 16)
+
+static bool tcp_collapse_skb_bloated(const struct sk_buff *skb,
+				     u32 start, u8 scaling_ratio)
+{
+	int unread = TCP_SKB_CB(skb)->end_seq - start;
+
+	return __tcp_win_from_space(scaling_ratio, skb->truesize) > unread;
+}
+
+static int tcp_collapse_uncharge(struct sk_buff *skb)
+{
+	DEBUG_NET_WARN_ON_ONCE(skb->destructor != sock_rfree);
+
+	skb->sk = NULL;
+	skb->destructor = NULL;
+
+	return skb->truesize;
+}
+
+static int tcp_collapse_charge(struct sk_buff *skb, struct sock *sk)
+{
+	skb->sk = sk;
+	skb->destructor = sock_rfree;
+
+	return -skb->truesize;
+}
+
 static struct sk_buff *tcp_collapse_one(struct sock *sk, struct sk_buff *skb,
 					struct sk_buff_head *list,
 					struct rb_root *root)
@@ -5834,8 +5886,59 @@ static struct sk_buff *tcp_collapse_one(struct sock *sk, struct sk_buff *skb,
 	return next;
 }
 
-/* Collapse contiguous sequence of skbs head..tail with
- * sequence numbers start..end.
+/* Allocate an skb with @linear bytes in its head, and @size bytes
+ * in order-0 page frags. All frags are full pages, but possibly the last one.
+ */
+static struct sk_buff *tcp_collapse_alloc_skb(int linear, int size)
+{
+	struct sk_buff *nskb = alloc_skb(linear, GFP_ATOMIC);
+
+	if (!nskb)
+		return NULL;
+
+	__skb_put(nskb, linear);
+
+	while (size > 0) {
+		int len = min_t(int, size, PAGE_SIZE);
+		struct page *page;
+
+		/* No __GFP_HIGHMEM: the page is directly mapped. */
+		page = alloc_page(GFP_ATOMIC | __GFP_NOMEMALLOC | __GFP_NOWARN);
+		if (!page) {
+			__kfree_skb(nskb);
+			return NULL;
+		}
+		skb_add_rx_frag(nskb, skb_shinfo(nskb)->nr_frags, page, 0, len,
+				PAGE_SIZE);
+		size -= len;
+	}
+
+	return nskb;
+}
+
+/* Return the address of the byte at @offset in nskb, and the room
+ * left in the linear part or in the page frag containing this byte.
+ */
+static void *tcp_collapse_dst(const struct sk_buff *nskb, int offset, int *room)
+{
+	int hlen = skb_headlen(nskb);
+	const skb_frag_t *frag;
+
+	if (offset < hlen) {
+		*room = hlen - offset;
+		return nskb->data + offset;
+	}
+
+	offset -= hlen;
+	frag = &skb_shinfo(nskb)->frags[offset >> PAGE_SHIFT];
+	offset &= ~PAGE_MASK;
+	*room = skb_frag_size(frag) - offset;
+
+	return skb_frag_address(frag) + offset;
+}
+
+/* Collapse bloated sub-ranges in contiguous sequence of skbs
+ * head..tail starting from sequence number start.
  *
  * If tail is NULL, this means until the end of the queue.
  *
@@ -5844,68 +5947,134 @@ static struct sk_buff *tcp_collapse_one(struct sock *sk, struct sk_buff *skb,
  */
 static void
 tcp_collapse(struct sock *sk, struct sk_buff_head *list, struct rb_root *root,
-	     struct sk_buff *head, struct sk_buff *tail, u32 start, u32 end)
+	     struct sk_buff *head, struct sk_buff *tail, u32 start)
 {
+	unsigned int old_truesize, new_truesize;
 	struct sk_buff *skb = head, *n;
-	struct sk_buff_head tmp;
-	bool end_of_skbs;
+	struct sk_buff_head tmp, pool;
+	int size, linear, npages;
+	struct sk_buff *nskb;
+	u8 scaling_ratio;
+	int released = 0;
+	u32 sub_end;
+
+	scaling_ratio = min(tcp_sk(sk)->scaling_ratio,
+			    TCP_COLLAPSE_SCALING_RATIO);
+
+	__skb_queue_head_init(&tmp);
+	__skb_queue_head_init(&pool);
 
 	/* First, check that queue is collapsible and find
 	 * the point where collapsing can be useful.
 	 */
 restart:
-	for (end_of_skbs = true; skb != NULL && skb != tail; skb = n) {
+	for (; skb && skb != tail; skb = n) {
 		n = tcp_skb_next(skb, list);
-
-		if (!skb_frags_readable(skb))
-			goto skip_this;
 
 		/* No new bits? It is possible on ofo queue. */
 		if (!before(start, TCP_SKB_CB(skb)->end_seq)) {
+			released += tcp_collapse_uncharge(skb);
 			skb = tcp_collapse_one(sk, skb, list, root);
-			if (!skb)
-				break;
 			goto restart;
 		}
 
 		/* The first skb to collapse is:
 		 * - not SYN/FIN and
-		 * - bloated or contains data before "start" or
-		 *   overlaps to the next one and mptcp allow collapsing.
+		 * - the unread portion starting from "start" is bloated.
 		 */
-		if (!(TCP_SKB_CB(skb)->tcp_flags & (TCPHDR_SYN | TCPHDR_FIN)) &&
-		    (tcp_win_from_space(sk, skb->truesize) > skb->len ||
-		     before(TCP_SKB_CB(skb)->seq, start))) {
-			end_of_skbs = false;
+		if (skb_frags_readable(skb) &&
+		    !(TCP_SKB_CB(skb)->tcp_flags & (TCPHDR_SYN | TCPHDR_FIN)) &&
+		    tcp_collapse_skb_bloated(skb, start, scaling_ratio))
 			break;
-		}
 
-		if (n && n != tail && skb_frags_readable(n) &&
-		    tcp_skb_can_collapse_rx(skb, n) &&
-		    TCP_SKB_CB(skb)->end_seq != TCP_SKB_CB(n)->seq) {
-			end_of_skbs = false;
-			break;
-		}
-
-skip_this:
 		/* Decided to skip this, advance start seq. */
 		start = TCP_SKB_CB(skb)->end_seq;
 	}
-	if (end_of_skbs ||
-	    (TCP_SKB_CB(skb)->tcp_flags & (TCPHDR_SYN | TCPHDR_FIN)) ||
-	    !skb_frags_readable(skb))
-		return;
 
-	__skb_queue_head_init(&tmp);
+	if (!skb || skb == tail)
+		goto end;
 
-	while (before(start, end)) {
-		int copy = min_t(int, SKB_MAX_ORDER(0, 0), end - start);
-		struct sk_buff *nskb;
+	/* Second, find consecutive collapsible skb. */
+	sub_end = TCP_SKB_CB(skb)->end_seq;
+	old_truesize = skb->truesize;
+	n = tcp_skb_next(skb, list);
 
-		nskb = alloc_skb(copy, GFP_ATOMIC);
-		if (!nskb)
+	while (n && n != tail) {
+		bool overlap;
+
+		if (!after(TCP_SKB_CB(n)->end_seq, sub_end)) {
+			released += tcp_collapse_uncharge(n);
+			n = tcp_collapse_one(sk, n, list, root);
+			continue;
+		}
+
+		/* seq and end_seq must increase monotonically for rbtree. */
+		overlap = !list && before(TCP_SKB_CB(n)->seq, sub_end);
+
+		if (!skb_frags_readable(n) ||
+		    TCP_SKB_CB(n)->tcp_flags & (TCPHDR_SYN | TCPHDR_FIN) ||
+		    !tcp_skb_can_collapse_rx(skb, n)) {
+			if (overlap)
+				goto skip;
+			break;
+		}
+
+		if (!overlap &&
+		    (TCP_SKB_CB(n)->end_seq - start >= TCP_COLLAPSE_MAX_TOTAL_SIZE ||
+		     !tcp_collapse_skb_bloated(n, sub_end,
+					       TCP_COLLAPSE_SCALING_RATIO)))
 			break;
 
+		sub_end = TCP_SKB_CB(n)->end_seq;
+		old_truesize += n->truesize;
+		n = tcp_skb_next(n, list);
+	}
+
+	if (sub_end != TCP_SKB_CB(skb)->end_seq &&
+	    sub_end - start >= TCP_COLLAPSE_MAX_TOTAL_SIZE)
+		goto skip;
+
+	/* Third, check if the new skbs have high density.
+	 *
+	 * Payload is stored in order-0 page frags: one sk_buff can hold
+	 * up to MAX_SKB_FRAGS pages, and truesize stays close to the
+	 * payload size.
+	 *
+	 * What does not fill a page is stored in the linear part of
+	 * the first new skb, unless a page is cheaper.
+	 */
+	size = sub_end - start;
+	linear = size & ~PAGE_MASK;
+	if (linear > TCP_COLLAPSE_MAX_SIZE)
+		linear = 0;
+
+	npages = DIV_ROUND_UP(size - linear, PAGE_SIZE);
+	new_truesize = skb_head_truesize(linear, GFP_ATOMIC) +
+		       npages * PAGE_SIZE;
+	if (npages > MAX_SKB_FRAGS)
+		new_truesize += (DIV_ROUND_UP(npages, MAX_SKB_FRAGS) - 1) *
+				skb_head_truesize(0, GFP_ATOMIC);
+
+	if (old_truesize <= new_truesize)
+		goto skip;
+
+	while (size > 0) {
+		int len = min_t(int, size - linear, MAX_SKB_FRAGS * PAGE_SIZE);
+
+		nskb = tcp_collapse_alloc_skb(linear, len);
+		if (!nskb)
+			goto end;
+
+		__skb_queue_tail(&pool, nskb);
+		size -= linear + len;
+		linear = 0;
+	}
+
+	while (before(start, sub_end)) {
+		int copy;
+
+		nskb = __skb_dequeue(&pool);
+		copy = nskb->len;
 		memcpy(nskb->cb, skb->cb, sizeof(skb->cb));
 		TCP_SKB_CB(nskb)->has_rxtstamp = false;
 		skb_copy_decrypted(nskb, skb);
@@ -5914,22 +6083,24 @@ skip_this:
 			__skb_queue_before(list, skb, nskb);
 		else
 			__skb_queue_tail(&tmp, nskb); /* defer rbtree insertion */
-		/* nskb is charged before the skbs it replaces are freed.
-		 * Make sure sk->sk_forward_alloc can not become negative.
-		 */
-		sk_forced_mem_schedule(sk, nskb->truesize);
-		skb_set_owner_r(nskb, sk);
+
+		released += tcp_collapse_charge(nskb, sk);
 		mptcp_skb_ext_move(nskb, skb);
 
 		/* Copy data, releasing collapsed skbs. */
 		while (copy > 0) {
 			int offset = start - TCP_SKB_CB(skb)->seq;
-			int size = TCP_SKB_CB(skb)->end_seq - start;
+			int room;
+			void *dst;
+
+			size = TCP_SKB_CB(skb)->end_seq - start;
 
 			BUG_ON(offset < 0);
 			if (size > 0) {
-				size = min(copy, size);
-				if (skb_copy_bits(skb, offset, skb_put(nskb, size), size))
+				dst = tcp_collapse_dst(nskb, nskb->len - copy,
+						       &room);
+				size = min3(copy, size, room);
+				if (skb_copy_bits(skb, offset, dst, size))
 					BUG();
 				TCP_SKB_CB(nskb)->end_seq += size;
 				if (TCP_SKB_CB(skb)->has_rxtstamp) {
@@ -5942,19 +6113,28 @@ skip_this:
 				start += size;
 			}
 			if (!before(start, TCP_SKB_CB(skb)->end_seq)) {
+				released += tcp_collapse_uncharge(skb);
 				skb = tcp_collapse_one(sk, skb, list, root);
-				if (!skb ||
-				    skb == tail ||
-				    !tcp_skb_can_collapse_rx(nskb, skb) ||
-				    (TCP_SKB_CB(skb)->tcp_flags & (TCPHDR_SYN | TCPHDR_FIN)) ||
-				    !skb_frags_readable(skb))
-					goto end;
 			}
 		}
 	}
+
+	goto restart;
+skip:
+	start = sub_end;
+	skb = n;
+	goto restart;
 end:
 	skb_queue_walk_safe(&tmp, skb, n)
 		tcp_rbtree_insert(root, skb);
+
+	__skb_queue_purge_reason(&pool, SKB_CONSUMED);
+
+	if (released) {
+		DEBUG_NET_WARN_ON_ONCE(released < 0);
+		atomic_sub(released, &sk->sk_rmem_alloc);
+		sk_mem_uncharge(sk, released);
+	}
 }
 
 /* Collapse ofo queue. Algorithm: select contiguous sequence of skbs
@@ -5990,7 +6170,7 @@ new_range:
 			if (range_truesize != head->truesize ||
 			    end - start >= SKB_WITH_OVERHEAD(PAGE_SIZE)) {
 				tcp_collapse(sk, NULL, &tp->out_of_order_queue,
-					     head, skb, start, end);
+					     head, skb, start);
 			} else {
 				sum_tiny += range_truesize;
 				if (sum_tiny > sk->sk_rcvbuf >> 3)
@@ -6104,11 +6284,12 @@ static int tcp_prune_queue(struct sock *sk, const struct sk_buff *in_skb)
 		if (!skb_queue_empty(&sk->sk_receive_queue))
 			tcp_collapse(sk, &sk->sk_receive_queue, NULL,
 				     skb_peek(&sk->sk_receive_queue),
-				     NULL,
-				     tp->copied_seq, tp->rcv_nxt);
+				     NULL, tp->copied_seq);
 
 		if (tcp_can_ingest(sk, in_skb))
 			return 0;
+	} else {
+		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPRCVCOLLAPSESKIPPED);
 	}
 
 	/* Collapsing did not help (or was not allowed),
@@ -6390,8 +6571,10 @@ static void tcp_urg(struct sock *sk, struct sk_buff *skb, const struct tcphdr *t
 		/* Is the urgent pointer pointing into this packet? */
 		if (ptr < skb->len) {
 			u8 tmp;
-			if (skb_copy_bits(skb, ptr, &tmp, 1))
-				BUG();
+			if (skb_copy_bits(skb, ptr, &tmp, 1)) {
+				WRITE_ONCE(tp->urg_data, TCP_URG_READ);
+				return;
+			}
 			WRITE_ONCE(tp->urg_data, TCP_URG_VALID | tmp);
 			if (!sock_flag(sk, SOCK_DEAD))
 				READ_ONCE(sk->sk_data_ready)(sk);
@@ -6809,7 +6992,6 @@ void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
-	tcp_mtup_init(sk);
 	icsk->icsk_af_ops->rebuild_header(sk);
 	tcp_init_metrics(sk);
 
@@ -7066,6 +7248,7 @@ consume:
 			tp->tcp_header_len = sizeof(struct tcphdr);
 		}
 
+		tcp_mtup_init(sk);
 		tcp_sync_mss(sk, icsk->icsk_pmtu_cookie);
 		tcp_initialize_rcv_mss(sk);
 

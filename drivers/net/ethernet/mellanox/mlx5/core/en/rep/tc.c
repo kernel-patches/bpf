@@ -117,7 +117,8 @@ void mlx5e_rep_update_flows(struct mlx5e_priv *priv,
 		/* Update the encap source mac, in case that we delete
 		 * the flows when encap source mac changed.
 		 */
-		route_dev = __dev_get_by_index(dev_net(priv->netdev), e->route_dev_ifindex);
+		route_dev = __dev_get_by_index(dev_net(e->out_dev),
+					       e->route_dev_ifindex);
 		if (route_dev)
 			ether_addr_copy(eth->h_source, route_dev->dev_addr);
 

@@ -377,14 +377,32 @@ int mesh_add_vendor_ies(struct ieee80211_sub_if_data *sdata,
 int mesh_add_rsn_ie(struct ieee80211_sub_if_data *sdata, struct sk_buff *skb)
 {
 	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
+	size_t prefix;
 	u8 len = 0;
 	const u8 *data;
 
 	if (!ifmsh->ie || !ifmsh->ie_len)
 		return 0;
 
+	/* Only the part before the first vendor element: mesh_add_vendor_ies()
+	 * emits everything from there to the end verbatim, so searching the
+	 * whole blob here makes an RSN element behind a vendor element be
+	 * copied by both, and ieee80211_mesh_build_beacon() reserved room for
+	 * one copy.
+	 *
+	 * CLAMPED, because ieee80211_ie_split_vendor() walks one whole element
+	 * at a time and returns a value past ifmsh->ie_len when the length
+	 * ends inside an element - which ifmsh->ie_len being a u8 truncated
+	 * from the size_t the netlink attribute carries makes reachable.  With
+	 * the clamp the bound is never wider than it was before this search
+	 * was narrowed, and cfg80211_find_ie() only returns an element lying
+	 * wholly inside its bound, so the copy below still fits the budget.
+	 */
+	prefix = ieee80211_ie_split_vendor(ifmsh->ie, ifmsh->ie_len, 0);
+	prefix = min_t(size_t, prefix, ifmsh->ie_len);
+
 	/* find RSN IE */
-	data = cfg80211_find_ie(WLAN_EID_RSN, ifmsh->ie, ifmsh->ie_len);
+	data = cfg80211_find_ie(WLAN_EID_RSN, ifmsh->ie, prefix);
 	if (!data)
 		return 0;
 
@@ -733,6 +751,7 @@ ieee80211_mesh_update_bss_params(struct ieee80211_sub_if_data *sdata,
 
 bool ieee80211_mesh_xmit_fast(struct ieee80211_sub_if_data *sdata,
 			      struct sk_buff *skb, u32 ctrl_flags)
+	__must_hold_shared(RCU)
 {
 	struct ieee80211_if_mesh *ifmsh = &sdata->u.mesh;
 	struct ieee80211_mesh_fast_tx_key key = {
@@ -1226,7 +1245,7 @@ void ieee80211_stop_mesh(struct ieee80211_sub_if_data *sdata)
 
 	/* flush STAs and mpaths on this iface */
 	sta_info_flush(sdata, -1);
-	ieee80211_free_keys(sdata, true);
+	ieee80211_free_keys(sdata);
 	mesh_path_flush_by_iface(sdata);
 
 	/* stop the beacon */

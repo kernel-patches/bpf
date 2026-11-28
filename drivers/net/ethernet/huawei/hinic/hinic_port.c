@@ -452,7 +452,7 @@ int hinic_set_vlan_fliter(struct hinic_dev *nic_dev, u32 en)
 	struct hinic_hwdev *hwdev = nic_dev->hwdev;
 	struct hinic_hwif *hwif = hwdev->hwif;
 	struct pci_dev *pdev = hwif->pdev;
-	struct hinic_vlan_filter vlan_filter;
+	struct hinic_vlan_filter vlan_filter = {0};
 	u16 out_size = sizeof(vlan_filter);
 	int err;
 
@@ -462,19 +462,25 @@ int hinic_set_vlan_fliter(struct hinic_dev *nic_dev, u32 en)
 	err = hinic_port_msg_cmd(hwdev, HINIC_PORT_CMD_SET_VLAN_FILTER,
 				 &vlan_filter, sizeof(vlan_filter),
 				 &vlan_filter, &out_size);
-	if (vlan_filter.status == HINIC_MGMT_CMD_UNSUPPORTED) {
-		err = HINIC_MGMT_CMD_UNSUPPORTED;
-	} else if ((err == HINIC_MBOX_VF_CMD_ERROR) &&
-			   HINIC_IS_VF(hwif)) {
-		err = HINIC_MGMT_CMD_UNSUPPORTED;
-	} else if (err || !out_size || vlan_filter.status) {
-		dev_err(&pdev->dev,
-			"Failed to set vlan filter, err: %d, status: 0x%x, out size: 0x%x\n",
-			err, vlan_filter.status, out_size);
-		err = -EINVAL;
+	if (err == HINIC_MBOX_VF_CMD_ERROR && HINIC_IS_VF(hwif))
+		return HINIC_MGMT_CMD_UNSUPPORTED;
+
+	if (err || !out_size) {
+		dev_err(&pdev->dev, "Failed to set vlan filter, err: %d, out size: 0x%x\n",
+			err, out_size);
+		return -EINVAL;
 	}
 
-	return err;
+	if (vlan_filter.status == HINIC_MGMT_CMD_UNSUPPORTED)
+		return HINIC_MGMT_CMD_UNSUPPORTED;
+
+	if (vlan_filter.status) {
+		dev_err(&pdev->dev, "Failed to set vlan filter, status: 0x%x\n",
+			vlan_filter.status);
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 int hinic_set_max_qnum(struct hinic_dev *nic_dev, u8 num_rqs)

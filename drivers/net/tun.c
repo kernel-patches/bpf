@@ -136,6 +136,7 @@ struct tun_file {
 	struct fasync_struct *fasync;
 	/* only used for fasnyc */
 	unsigned int flags;
+	bool nofilter;			/* attached with IFF_NOFILTER */
 	union {
 		u16 queue_index;
 		unsigned int ifindex;
@@ -177,8 +178,8 @@ struct tun_prog {
 };
 
 /* Since the socket were moved to tun_file, to preserve the behavior of persist
- * device, socket filter, sndbuf and vnet header size were restore when the
- * file were attached to a persist device.
+ * device, sndbuf and vnet header size were restore when the file were attached
+ * to a persist device.
  */
 struct tun_struct {
 	struct tun_file __rcu	*tfiles[MAX_TAP_QUEUES];
@@ -197,9 +198,7 @@ struct tun_struct {
 	int			vnet_hdr_sz;
 	int			sndbuf;
 	struct tap_filter	txflt;
-	struct sock_fprog	fprog;
-	/* protected by rtnl lock */
-	bool			filter_attached;
+	struct sock_fprog	fprog;		/* header, for TUNGETFILTER */
 	u32			msg_enable;
 	spinlock_t lock;
 	struct hlist_head flows[TUN_NUM_FLOW_ENTRIES];
@@ -214,6 +213,7 @@ struct tun_struct {
 	struct bpf_prog __rcu *xdp_prog;
 	struct tun_prog __rcu *steering_prog;
 	struct tun_prog __rcu *filter_prog;
+	struct tun_prog __rcu *cbpf_prog;	/* from TUNATTACHFILTER */
 	struct ethtool_link_ksettings link_ksettings;
 	/* init args */
 	struct file *file;
@@ -483,13 +483,15 @@ static u16 tun_automq_select_queue(struct tun_struct *tun, struct sk_buff *skb)
 	txq = __skb_get_hash_symmetric(skb);
 	e = tun_flow_find(&tun->flows[tun_hashfn(txq)], txq);
 	if (e) {
+		u32 queue_index = READ_ONCE(e->queue_index);
+
 		tun_flow_save_rps_rxhash(e, txq);
-		txq = e->queue_index;
-	} else {
-		txq = reciprocal_scale(txq, numqueues);
+		/* A racing update can leave the old index of a moved queue */
+		if (likely(queue_index < numqueues))
+			return queue_index;
 	}
 
-	return txq;
+	return reciprocal_scale(txq, numqueues);
 }
 
 static u16 tun_ebpf_select_queue(struct tun_struct *tun, struct sk_buff *skb)
@@ -743,7 +745,7 @@ static void tun_force_wake_queue(struct tun_struct *tun,
 }
 
 static int tun_attach(struct tun_struct *tun, struct file *file,
-		      bool skip_filter, bool napi, bool napi_frags,
+		      bool nofilter, bool napi, bool napi_frags,
 		      bool publish_tun)
 {
 	struct tun_file *tfile = file->private_data;
@@ -768,15 +770,6 @@ static int tun_attach(struct tun_struct *tun, struct file *file,
 		goto out;
 
 	err = 0;
-
-	/* Re-attach the filter to persist device */
-	if (!skip_filter && (tun->filter_attached == true)) {
-		lock_sock(tfile->socket.sk);
-		err = sk_attach_filter(&tun->fprog, tfile->socket.sk);
-		release_sock(tfile->socket.sk);
-		if (!err)
-			goto out;
-	}
 
 	if (!tfile->detached &&
 	    ptr_ring_resize(&tfile->tx_ring, dev->tx_queue_len,
@@ -831,6 +824,7 @@ static int tun_attach(struct tun_struct *tun, struct file *file,
 	 * initialized tfile; otherwise we risk using half-initialized
 	 * object.
 	 */
+	WRITE_ONCE(tfile->nofilter, nofilter);
 	if (publish_tun)
 		rcu_assign_pointer(tfile->tun, tun);
 	rcu_assign_pointer(tun->tfiles[tun->numqueues], tfile);
@@ -1083,6 +1077,7 @@ static netdev_tx_t tun_net_xmit(struct sk_buff *skb, struct net_device *dev)
 	int txq = skb->queue_mapping;
 	struct netdev_queue *queue;
 	struct tun_file *tfile;
+	struct tun_prog *prog;
 	int len = skb->len;
 	int ret;
 
@@ -1108,10 +1103,20 @@ static netdev_tx_t tun_net_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto drop;
 	}
 
-	if (tfile->socket.sk->sk_filter) {
-		drop_reason = sk_filter_reason(tfile->socket.sk, skb);
-		if (drop_reason)
+	/* Classic filter set with TUNATTACHFILTER.  A queue attached with
+	 * IFF_NOFILTER does not run it.
+	 */
+	prog = rcu_dereference(tun->cbpf_prog);
+	if (prog && !READ_ONCE(tfile->nofilter)) {
+		/* A filter returning 0 drops the packet, any other value is
+		 * the length to keep.  pskb_trim() does nothing when that
+		 * length is larger than the skb.
+		 */
+		len = bpf_prog_run_clear_cb(prog->prog, skb);
+		if (!len || pskb_trim(skb, len)) {
+			drop_reason = SKB_DROP_REASON_SOCKET_FILTER;
 			goto drop;
+		}
 	}
 
 	len = run_ebpf_filter(tun, skb, len);
@@ -1623,10 +1628,10 @@ static void tun_rx_batched(struct tun_struct *tun, struct tun_file *tfile,
 	}
 }
 
-static bool tun_can_build_skb(struct tun_struct *tun, struct tun_file *tfile,
+static bool tun_can_build_skb(unsigned int flags, struct tun_file *tfile,
 			      int len, int noblock, bool zerocopy)
 {
-	if ((tun->flags & TUN_TYPE_MASK) != IFF_TAP)
+	if ((flags & TUN_TYPE_MASK) != IFF_TAP)
 		return false;
 
 	if (tfile->socket.sk->sk_sndbuf != INT_MAX)
@@ -1719,14 +1724,13 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 	size_t copied;
 	int pad = TUN_RX_PAD;
 	int metasize = 0;
+	bool has_xdp;
 	int err = 0;
 
-	rcu_read_lock();
-	xdp_prog = rcu_dereference(tun->xdp_prog);
-	if (xdp_prog)
+	has_xdp = rcu_access_pointer(tun->xdp_prog);
+	if (has_xdp)
 		pad += XDP_PACKET_HEADROOM;
 	buflen += SKB_DATA_ALIGN(len + pad);
-	rcu_read_unlock();
 
 	alloc_frag->offset = ALIGN((u64)alloc_frag->offset, SMP_CACHE_BYTES);
 	if (unlikely(!skb_page_frag_refill(buflen, alloc_frag, GFP_KERNEL)))
@@ -1743,7 +1747,7 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 	 * of xdp_prog above, this should be rare and for simplicity
 	 * we do XDP on skb in case the headroom is not enough.
 	 */
-	if (hdr->gso_type || !xdp_prog) {
+	if (hdr->gso_type || !has_xdp) {
 		*skb_xdp = 1;
 		return __tun_build_skb(tfile, alloc_frag, buf, buflen, len,
 				       pad, metasize);
@@ -1822,6 +1826,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	bool frags = tun_napi_frags_enabled(tfile);
 	enum skb_drop_reason drop_reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	netdev_features_t features = 0;
+	unsigned int flags;
+
+	flags = READ_ONCE(tun->flags);
 
 	/*
 	 * Keep it easy and always zero the whole buffer, even if the
@@ -1831,7 +1838,7 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	memset(&hdr, 0, sizeof(hdr));
 	gso = (struct virtio_net_hdr *)&hdr;
 
-	if (!(tun->flags & IFF_NO_PI)) {
+	if (!(flags & IFF_NO_PI)) {
 		if (len < sizeof(pi))
 			return -EINVAL;
 		len -= sizeof(pi);
@@ -1840,11 +1847,11 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 			return -EFAULT;
 	}
 
-	if (tun->flags & IFF_VNET_HDR) {
+	if (flags & IFF_VNET_HDR) {
 		int vnet_hdr_sz = READ_ONCE(tun->vnet_hdr_sz);
 
 		features = tun_vnet_hdr_guest_features(vnet_hdr_sz);
-		hdr_len = __tun_vnet_hdr_get(vnet_hdr_sz, tun->flags,
+		hdr_len = __tun_vnet_hdr_get(vnet_hdr_sz, flags,
 					     features, from, gso);
 		if (hdr_len < 0)
 			return hdr_len;
@@ -1852,7 +1859,7 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		len -= vnet_hdr_sz;
 	}
 
-	if ((tun->flags & TUN_TYPE_MASK) == IFF_TAP) {
+	if ((flags & TUN_TYPE_MASK) == IFF_TAP) {
 		align += NET_IP_ALIGN;
 		if (unlikely(len < ETH_HLEN || (hdr_len && hdr_len < ETH_HLEN)))
 			return -EINVAL;
@@ -1868,13 +1875,14 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		 * The rest of the buffer is mapped from userspace.
 		 */
 		copylen = min(hdr_len ? hdr_len : GOODCOPY_LEN, good_linear);
+		copylen = min_t(size_t, copylen, len);
 		linear = copylen;
 		iov_iter_advance(&i, copylen);
 		if (iov_iter_npages(&i, INT_MAX) <= MAX_SKB_FRAGS)
 			zerocopy = true;
 	}
 
-	if (!frags && tun_can_build_skb(tun, tfile, len, noblock, zerocopy)) {
+	if (!frags && tun_can_build_skb(flags, tfile, len, noblock, zerocopy)) {
 		/* For the packet that is not easy to be processed
 		 * (e.g gso or jumbo packet), we will do it at after
 		 * skb was created with generic XDP routine.
@@ -1885,11 +1893,8 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 			goto drop;
 		if (!skb) {
 			/* consumed by XDP, after copying */
-			if (msg_control) {
-				struct ubuf_info *uarg = msg_control;
-
-				uarg->ops->complete(NULL, uarg, false);
-			}
+			if (msg_control)
+				net_zcopy_complete(NULL, msg_control, false);
 			return total_len;
 		}
 	} else {
@@ -1931,9 +1936,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	}
 
 	skb->dev = tun->dev;
-	switch (tun->flags & TUN_TYPE_MASK) {
+	switch (flags & TUN_TYPE_MASK) {
 	case IFF_TUN:
-		if (tun->flags & IFF_NO_PI) {
+		if (flags & IFF_NO_PI) {
 			u8 ip_version;
 
 			drop_reason = pskb_may_pull_reason(skb, 1);
@@ -1969,29 +1974,37 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		break;
 	}
 
-	if (tun_vnet_hdr_tnl_to_skb(tun->flags, features, skb, &hdr,
-				    (tun->flags & TUN_TYPE_MASK) == IFF_TAP)) {
-		atomic_long_inc(&tun->rx_frame_errors);
-		err = -EINVAL;
-		goto free_skb;
+	if (flags & IFF_VNET_HDR) {
+		bool has_eth = (flags & TUN_TYPE_MASK) == IFF_TAP;
+
+		if (tun_vnet_hdr_tnl_to_skb(flags, features, skb, &hdr,
+					    has_eth)) {
+			atomic_long_inc(&tun->rx_frame_errors);
+			err = -EINVAL;
+			goto free_skb;
+		}
+	} else {
+		/* a zero hdr would only reset the MAC header */
+		skb_reset_mac_header(skb);
 	}
 
-	if ((tun->flags & TUN_TYPE_MASK) == IFF_TAP)
+	if ((flags & TUN_TYPE_MASK) == IFF_TAP)
 		skb->protocol = eth_type_trans(skb, tun->dev);
 
 	/* copy skb_ubuf_info for callback when skb has no error */
-	if (zerocopy) {
+	if (zerocopy)
 		skb_zcopy_init(skb, msg_control);
-	} else if (msg_control) {
-		struct ubuf_info *uarg = msg_control;
-		uarg->ops->complete(NULL, uarg, false);
-	}
+	else if (msg_control)
+		net_zcopy_complete(NULL, msg_control, false);
 
 	skb_reset_network_header(skb);
 	skb_probe_transport_header(skb);
 	skb_record_rx_queue(skb, tfile->queue_index);
 
-	if (skb_xdp) {
+	/* Don't disable BHs and enter an RCU section for every packet only
+	 * to find that no program is attached, the common case.
+	 */
+	if (skb_xdp && rcu_access_pointer(tun->xdp_prog)) {
 		struct bpf_prog *xdp_prog;
 		int ret;
 
@@ -2449,6 +2462,7 @@ static void tun_free_netdev(struct net_device *dev)
 	security_tun_dev_free_security(tun->security);
 	__tun_set_ebpf(tun, &tun->steering_prog, NULL);
 	__tun_set_ebpf(tun, &tun->filter_prog, NULL);
+	__tun_set_ebpf(tun, &tun->cbpf_prog, NULL);
 }
 
 static void tun_setup(struct net_device *dev)
@@ -3018,7 +3032,6 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 		tun->vnet_hdr_sz = sizeof(struct virtio_net_hdr);
 
 		tun->align = NET_SKB_PAD;
-		tun->filter_attached = false;
 		tun->sndbuf = tfile->socket.sk->sk_sndbuf;
 		tun->rx_batched = 0;
 		RCU_INIT_POINTER(tun->steering_prog, NULL);
@@ -3122,39 +3135,34 @@ static int set_offload(struct tun_struct *tun, unsigned long arg)
 	return 0;
 }
 
-static void tun_detach_filter(struct tun_struct *tun, int n)
+static int tun_attach_filter(struct tun_struct *tun, void __user *data)
 {
-	int i;
+	struct sock_fprog fprog;
 	struct tun_file *tfile;
+	struct bpf_prog *prog;
+	int i, ret;
 
-	for (i = 0; i < n; i++) {
-		tfile = rtnl_dereference(tun->tfiles[i]);
-		lock_sock(tfile->socket.sk);
-		sk_detach_filter(tfile->socket.sk);
-		release_sock(tfile->socket.sk);
+	if (copy_from_user(&fprog, data, sizeof(fprog)))
+		return -EFAULT;
+
+	ret = bpf_prog_create_from_user(&prog, &fprog, NULL, false);
+	if (ret)
+		return ret;
+
+	ret = __tun_set_ebpf(tun, &tun->cbpf_prog, prog);
+	if (ret) {
+		bpf_prog_destroy(prog);
+		return ret;
 	}
-
-	tun->filter_attached = false;
-}
-
-static int tun_attach_filter(struct tun_struct *tun)
-{
-	int i, ret = 0;
-	struct tun_file *tfile;
 
 	for (i = 0; i < tun->numqueues; i++) {
 		tfile = rtnl_dereference(tun->tfiles[i]);
-		lock_sock(tfile->socket.sk);
-		ret = sk_attach_filter(&tun->fprog, tfile->socket.sk);
-		release_sock(tfile->socket.sk);
-		if (ret) {
-			tun_detach_filter(tun, i);
-			return ret;
-		}
+		WRITE_ONCE(tfile->nofilter, false);
 	}
 
-	tun->filter_attached = true;
-	return ret;
+	/* Only TUNGETFILTER reads it */
+	tun->fprog = fprog;
+	return 0;
 }
 
 static void tun_set_sndbuf(struct tun_struct *tun)
@@ -3350,7 +3358,7 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 
 		if (tfile->detached)
 			ifr.ifr_flags |= IFF_DETACH_QUEUE;
-		if (!tfile->socket.sk->sk_filter)
+		if (tfile->nofilter || !rcu_access_pointer(tun->cbpf_prog))
 			ifr.ifr_flags |= IFF_NOFILTER;
 
 		if (copy_to_user(argp, &ifr, ifreq_len))
@@ -3505,11 +3513,7 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 		ret = -EINVAL;
 		if ((tun->flags & TUN_TYPE_MASK) != IFF_TAP)
 			break;
-		ret = -EFAULT;
-		if (copy_from_user(&tun->fprog, argp, sizeof(tun->fprog)))
-			break;
-
-		ret = tun_attach_filter(tun);
+		ret = tun_attach_filter(tun, argp);
 		break;
 
 	case TUNDETACHFILTER:
@@ -3517,8 +3521,7 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 		ret = -EINVAL;
 		if ((tun->flags & TUN_TYPE_MASK) != IFF_TAP)
 			break;
-		ret = 0;
-		tun_detach_filter(tun, tun->numqueues);
+		ret = __tun_set_ebpf(tun, &tun->cbpf_prog, NULL);
 		break;
 
 	case TUNGETFILTER:

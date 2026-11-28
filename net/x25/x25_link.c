@@ -82,7 +82,7 @@ void x25_link_control(struct sk_buff *skb, struct x25_neigh *nb,
 			break;
 		case X25_LINK_STATE_3:
 			/* clear existing virtual calls */
-			x25_kill_by_neigh(nb);
+			x25_kill_by_neigh(nb, true);
 
 			x25_transmit_restart_confirmation(nb);
 			break;
@@ -97,7 +97,7 @@ void x25_link_control(struct sk_buff *skb, struct x25_neigh *nb,
 			break;
 		case X25_LINK_STATE_3:
 			/* clear existing virtual calls */
-			x25_kill_by_neigh(nb);
+			x25_kill_by_neigh(nb, true);
 
 			x25_transmit_restart_request(nb);
 			nb->state = X25_LINK_STATE_2;
@@ -247,14 +247,14 @@ void x25_link_established(struct x25_neigh *nb)
  *	request has failed.
  */
 
-void x25_link_terminated(struct x25_neigh *nb)
+void x25_link_terminated(struct x25_neigh *nb, bool bh)
 {
 	nb->state = X25_LINK_STATE_0;
 	skb_queue_purge(&nb->queue);
 	x25_stop_t20timer(nb);
 
 	/* Out of order: clear existing virtual calls (X.25 03/93 4.6.3) */
-	x25_kill_by_neigh(nb);
+	x25_kill_by_neigh(nb, bh);
 }
 
 /*
@@ -294,11 +294,14 @@ void x25_link_device_up(struct net_device *dev)
  *	@nb: - neigh to remove
  *
  *	Remove neighbour from x25_neigh_list. If it was there.
+ *	Shut down the T20 timer before dropping the list reference so its
+ *	callback cannot rearm the timer after the neighbour is freed.
  *	Caller must hold x25_neigh_list_lock.
  */
 static void __x25_remove_neigh(struct x25_neigh *nb)
 {
 	if (nb->node.next) {
+		timer_shutdown_sync(&nb->t20timer);
 		list_del(&nb->node);
 		x25_neigh_put(nb);
 	}

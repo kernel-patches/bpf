@@ -4,10 +4,11 @@
 """Test USO
 
 Sends large UDP datagrams with UDP_SEGMENT and verifies that the peer
-receives the expected total payload and that the NIC transmitted at least
-the expected number of segments.
+receives one datagram per segment, with the expected sizes and total payload,
+and that the NIC transmitted at least the expected number of segments.
 """
 import random
+import re
 import socket
 import string
 
@@ -57,9 +58,12 @@ def _test_uso(cfg, ipver, mss, total_payload):
         defer(ethtool, f"-K {cfg.ifname} tx-udp-segmentation off")
 
     expected_segs = (total_payload + mss - 1) // mss
+    expected_sizes = [mss] * (total_payload // mss)
+    if total_payload % mss:
+        expected_sizes.append(total_payload % mss)
 
     port = rand_port(stype=socket.SOCK_DGRAM)
-    rx_cmd = f"socat -{ipver} -T 2 -u UDP-LISTEN:{port},reuseport STDOUT"
+    rx_cmd = f"socat -v -{ipver} -T 2 -u UDP-LISTEN:{port},reuseport STDOUT"
 
     tx_before = _get_tx_packets(cfg)
 
@@ -69,6 +73,11 @@ def _test_uso(cfg, ipver, mss, total_payload):
 
     ksft_eq(len(rx.stdout), total_payload,
             comment=f"Received {len(rx.stdout)}B, expected {total_payload}B")
+
+    rx_sizes = [int(n) for n in re.findall(r"length=(\d+) from=", rx.stderr)]
+    ksft_eq(sorted(rx_sizes), sorted(expected_sizes),
+            comment=f"Received {len(rx_sizes)} datagrams, "
+                    f"expected {expected_segs}")
 
     cfg.wait_hw_stats_settle()
 
@@ -83,6 +92,8 @@ def _uso_variants():
     for ipver in ["4", "6"]:
         yield KsftNamedVariant(f"v{ipver}_partial", ipver, 1400, 1400 * 10 + 500)
         yield KsftNamedVariant(f"v{ipver}_exact", ipver, 1400, 1400 * 5)
+        yield KsftNamedVariant(f"v{ipver}_small_partial", ipver, 8, 8 * 10 + 4)
+        yield KsftNamedVariant(f"v{ipver}_small_exact", ipver, 32, 32 * 3)
 
 
 @ksft_variants(_uso_variants())

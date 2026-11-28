@@ -82,6 +82,7 @@
 #define L2TP_SL_SEQ_MASK   0x00ffffff
 
 #define L2TP_HDR_SIZE_MAX		14
+#define L2TP_REORDER_MAX_QUEUE	64
 
 /* Default trace flags */
 #define L2TP_DEFAULT_DEBUG_FLAGS	0
@@ -166,9 +167,13 @@ static void l2tp_tunnel_free(struct l2tp_tunnel *tunnel)
 	kfree_rcu(tunnel, rcu);
 }
 
+static void l2tp_session_queue_purge(struct l2tp_session *session);
+
 static void l2tp_session_free(struct l2tp_session *session)
 {
 	trace_free_session(session);
+	/* Catch a post-purge enqueue from an in-flight receive path. */
+	l2tp_session_queue_purge(session);
 	if (session->tunnel)
 		l2tp_tunnel_put(session->tunnel);
 	kfree_rcu(session, rcu);
@@ -636,28 +641,102 @@ EXPORT_SYMBOL_GPL(l2tp_session_register);
  * Receive data handling
  *****************************************************************************/
 
+/* True if sequence number a precedes b in the 16-bit (L2TPv2) or
+ * 24-bit (L2TPv3) sequence space.
+ */
+static bool l2tp_seq_before(const struct l2tp_session *session, u32 a, u32 b)
+{
+	u32 dist = (b - a) & session->nr_max;
+
+	return dist && dist <= session->nr_max / 2;
+}
+
 /* Queue a skb in order. We come here only if the skb has an L2TP sequence
- * number.
+ * number. Walk from the tail so an in-order packet after a gap is not
+ * inserted by scanning the whole queue from the head.
  */
 static void l2tp_recv_queue_skb(struct l2tp_session *session, struct sk_buff *skb)
 {
 	struct sk_buff *skbp;
-	struct sk_buff *tmp;
 	u32 ns = L2TP_SKB_CB(skb)->ns;
+	bool saw_seq = false;
 
 	spin_lock_bh(&session->reorder_q.lock);
-	skb_queue_walk_safe(&session->reorder_q, skbp, tmp) {
-		if (L2TP_SKB_CB(skbp)->ns > ns) {
-			__skb_queue_before(&session->reorder_q, skbp, skb);
-			atomic_long_inc(&session->stats.rx_oos_packets);
-			goto out;
-		}
+	if (test_bit(0, &session->dead)) {
+		kfree_skb(skb);
+		goto out;
+	}
+	if (skb_queue_len(&session->reorder_q) >= L2TP_REORDER_MAX_QUEUE &&
+	    ns != session->nr) {
+		atomic_long_inc(&session->stats.rx_seq_discards);
+		atomic_long_inc(&session->stats.rx_errors);
+		kfree_skb(skb);
+		goto out;
 	}
 
-	__skb_queue_tail(&session->reorder_q, skb);
+	skb_queue_reverse_walk(&session->reorder_q, skbp) {
+		if (!L2TP_SKB_CB(skbp)->has_seq)
+			continue;
+		if (unlikely(L2TP_SKB_CB(skbp)->ns == ns)) {
+			atomic_long_inc(&session->stats.rx_seq_discards);
+			atomic_long_inc(&session->stats.rx_errors);
+			kfree_skb(skb);
+			goto out;
+		}
+		if (l2tp_seq_before(session, L2TP_SKB_CB(skbp)->ns, ns)) {
+			__skb_queue_after(&session->reorder_q, skbp, skb);
+			if (saw_seq)
+				atomic_long_inc(&session->stats.rx_oos_packets);
+			goto out;
+		}
+		saw_seq = true;
+	}
+
+	if (saw_seq)
+		atomic_long_inc(&session->stats.rx_oos_packets);
+	__skb_queue_head(&session->reorder_q, skb);
 
 out:
 	spin_unlock_bh(&session->reorder_q.lock);
+}
+
+static bool l2tp_recv_queue_tail_skb(struct l2tp_session *session,
+				     struct sk_buff *skb)
+{
+	struct l2tp_skb_cb *cb = L2TP_SKB_CB(skb);
+	struct l2tp_skb_cb *hcb;
+	struct sk_buff *head;
+	unsigned int qlen;
+
+	spin_lock_bh(&session->reorder_q.lock);
+	if (test_bit(0, &session->dead))
+		goto reject;
+	/* Admit one expected or recovery packet when the queue is at
+	 * the cap, but only if the head can be dequeued. Further
+	 * packets are rejected until dequeue makes progress.
+	 */
+	qlen = skb_queue_len(&session->reorder_q);
+	if (qlen >= L2TP_REORDER_MAX_QUEUE) {
+		if (qlen > L2TP_REORDER_MAX_QUEUE)
+			goto reject;
+		if (!(cb->has_seq &&
+		      (cb->ns == session->nr || session->reorder_skip)))
+			goto reject;
+
+		head = skb_peek(&session->reorder_q);
+		hcb = L2TP_SKB_CB(head);
+		if (!time_after(jiffies, hcb->expires) &&
+		    hcb->has_seq && !session->reorder_skip &&
+		    hcb->ns != session->nr)
+			goto reject;
+	}
+	__skb_queue_tail(&session->reorder_q, skb);
+	spin_unlock_bh(&session->reorder_q.lock);
+	return true;
+
+reject:
+	spin_unlock_bh(&session->reorder_q.lock);
+	return false;
 }
 
 /* Dequeue a single skb.
@@ -677,13 +756,6 @@ static void l2tp_recv_dequeue_skb(struct l2tp_session *session, struct sk_buff *
 	atomic_long_inc(&session->stats.rx_packets);
 	atomic_long_add(length, &session->stats.rx_bytes);
 
-	if (L2TP_SKB_CB(skb)->has_seq) {
-		/* Bump our Nr */
-		session->nr++;
-		session->nr &= session->nr_max;
-		trace_session_seqnum_update(session);
-	}
-
 	/* call private receive handler */
 	if (session->recv_skb)
 		(*session->recv_skb)(session, skb, L2TP_SKB_CB(skb)->length);
@@ -696,6 +768,7 @@ static void l2tp_recv_dequeue_skb(struct l2tp_session *session, struct sk_buff *
  */
 static void l2tp_recv_dequeue(struct l2tp_session *session)
 {
+	bool dequeued = false;
 	struct sk_buff *skb;
 	struct sk_buff *tmp;
 
@@ -715,6 +788,7 @@ start:
 			trace_session_pkt_expired(session, cb->ns);
 			session->reorder_skip = 1;
 			__skb_unlink(skb, &session->reorder_q);
+			dequeued = true;
 			kfree_skb(skb);
 			continue;
 		}
@@ -729,6 +803,16 @@ start:
 				goto out;
 		}
 		__skb_unlink(skb, &session->reorder_q);
+		dequeued = true;
+
+		/* Advance Nr under the queue lock so the enqueue cap
+		 * checks observe a consistent expected sequence number.
+		 */
+		if (cb->has_seq) {
+			session->nr++;
+			session->nr &= session->nr_max;
+			trace_session_seqnum_update(session);
+		}
 
 		/* Process the skb. We release the queue lock while we
 		 * do so to let other contexts process the queue.
@@ -739,7 +823,20 @@ start:
 	}
 
 out:
+	if (skb_queue_empty(&session->reorder_q))
+		timer_delete(&session->reorder_timer);
+	else if (dequeued || !timer_pending(&session->reorder_timer))
+		timer_reduce(&session->reorder_timer,
+			     L2TP_SKB_CB(skb_peek(&session->reorder_q))->expires);
 	spin_unlock_bh(&session->reorder_q.lock);
+}
+
+static void l2tp_recv_dequeue_timer(struct timer_list *timer)
+{
+	struct l2tp_session *session = timer_container_of(session, timer,
+							 reorder_timer);
+
+	l2tp_recv_dequeue(session);
 }
 
 static int l2tp_seq_check_rx_window(struct l2tp_session *session, u32 nr)
@@ -783,7 +880,8 @@ static int l2tp_recv_data_seq(struct l2tp_session *session, struct sk_buff *skb)
 	 * sequence number to re-enable packet reception.
 	 */
 	if (cb->ns == session->nr) {
-		skb_queue_tail(&session->reorder_q, skb);
+		if (!l2tp_recv_queue_tail_skb(session, skb))
+			goto discard;
 	} else {
 		u32 nr_oos = cb->ns;
 		u32 nr_next = (session->nr_oos + 1) & session->nr_max;
@@ -802,7 +900,8 @@ static int l2tp_recv_data_seq(struct l2tp_session *session, struct sk_buff *skb)
 			trace_session_pkt_oos(session, cb->ns);
 			goto discard;
 		}
-		skb_queue_tail(&session->reorder_q, skb);
+		if (!l2tp_recv_queue_tail_skb(session, skb))
+			goto discard;
 	}
 
 out:
@@ -991,7 +1090,8 @@ void l2tp_recv_common(struct l2tp_session *session, struct sk_buff *skb,
 		 * reorder queue. This ensures that it will be
 		 * delivered after all previous sequenced skbs.
 		 */
-		skb_queue_tail(&session->reorder_q, skb);
+		if (!l2tp_recv_queue_tail_skb(session, skb))
+			goto discard;
 	}
 
 	/* Try to dequeue as many skbs from reorder_q as we can. */
@@ -1018,7 +1118,7 @@ static void l2tp_session_queue_purge(struct l2tp_session *session)
 }
 
 /* UDP encapsulation receive handler. See net/ipv4/udp.c for details. */
-int l2tp_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
+static int l2tp_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 {
 	struct l2tp_session *session = NULL;
 	struct l2tp_tunnel *tunnel = NULL;
@@ -1092,16 +1192,12 @@ int l2tp_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	tunnel = session->tunnel;
 
 	/* Check protocol version */
-	if (version != tunnel->version) {
-		l2tp_session_put(session);
+	if (version != tunnel->version)
 		goto invalid;
-	}
 
 	if (version == L2TP_HDR_VER_3 &&
-	    l2tp_v3_ensure_opt_in_linear(session, skb, &ptr, &optr)) {
-		l2tp_session_put(session);
+	    l2tp_v3_ensure_opt_in_linear(session, skb, &ptr, &optr))
 		goto invalid;
-	}
 
 	l2tp_recv_common(session, skb, ptr, optr, hdrflags, length);
 	l2tp_session_put(session);
@@ -1109,7 +1205,11 @@ int l2tp_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	return 0;
 
 invalid:
+	/* The session reference is the only thing keeping the tunnel alive
+	 * here, so account the invalid packet before dropping it.
+	 */
 	atomic_long_inc(&tunnel->stats.rx_invalid);
+	l2tp_session_put(session);
 
 pass:
 	/* Put UDP header back */
@@ -1117,7 +1217,6 @@ pass:
 
 	return 1;
 }
-EXPORT_SYMBOL_GPL(l2tp_udp_encap_recv);
 
 /* UDP encapsulation receive error handler. See net/ipv4/udp.c for details. */
 static void l2tp_udp_encap_err_recv(struct sock *sk, struct sk_buff *skb, int err,
@@ -1760,6 +1859,7 @@ static void l2tp_session_del_work(struct work_struct *work)
 						    del_work);
 
 	l2tp_session_unhash(session);
+	timer_shutdown_sync(&session->reorder_timer);
 	l2tp_session_queue_purge(session);
 	if (session->session_close)
 		(*session->session_close)(session);
@@ -1810,6 +1910,7 @@ struct l2tp_session *l2tp_session_create(int priv_size, struct l2tp_tunnel *tunn
 			tunnel->tunnel_id, session->session_id);
 
 		skb_queue_head_init(&session->reorder_q);
+		timer_setup(&session->reorder_timer, l2tp_recv_dequeue_timer, 0);
 
 		session->hlist_key = l2tp_v3_session_hashkey(tunnel->sock, session->session_id);
 		INIT_HLIST_NODE(&session->hlist);

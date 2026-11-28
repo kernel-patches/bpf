@@ -154,6 +154,14 @@ static const struct regmap_config regmap_config = {
 	.unlock = mt7530_mdio_regmap_unlock,
 };
 
+static void
+mt7530_disable_regulator(void *data)
+{
+	struct regulator *regulator = data;
+
+	regulator_disable(regulator);
+}
+
 static int
 mt7530_probe(struct mdio_device *mdiodev)
 {
@@ -209,6 +217,32 @@ mt7530_probe(struct mdio_device *mdiodev)
 		priv->io_pwr = devm_regulator_get(&mdiodev->dev, "io");
 		if (IS_ERR(priv->io_pwr))
 			return PTR_ERR(priv->io_pwr);
+
+		regulator_set_voltage(priv->core_pwr, 1000000, 1000000);
+		ret = regulator_enable(priv->core_pwr);
+		if (ret < 0) {
+			dev_err(&mdiodev->dev,
+				"Failed to enable core power: %d\n", ret);
+			return ret;
+		}
+		ret = devm_add_action_or_reset(&mdiodev->dev,
+					       mt7530_disable_regulator,
+					       priv->core_pwr);
+		if (ret)
+			return ret;
+
+		regulator_set_voltage(priv->io_pwr, 3300000, 3300000);
+		ret = regulator_enable(priv->io_pwr);
+		if (ret < 0) {
+			dev_err(&mdiodev->dev,
+				"Failed to enable io pwr: %d\n", ret);
+			return ret;
+		}
+		ret = devm_add_action_or_reset(&mdiodev->dev,
+					       mt7530_disable_regulator,
+					       priv->io_pwr);
+		if (ret)
+			return ret;
 	}
 
 	rc.lock_arg = &priv->bus->mdio_lock;
@@ -227,22 +261,10 @@ static void
 mt7530_remove(struct mdio_device *mdiodev)
 {
 	struct mt7530_priv *priv = dev_get_drvdata(&mdiodev->dev);
-	int ret = 0, i;
+	int i;
 
 	if (!priv)
 		return;
-
-	if (priv->id == ID_MT7530) {
-		ret = regulator_disable(priv->core_pwr);
-		if (ret < 0)
-			dev_err(priv->dev,
-				"Failed to disable core power: %d\n", ret);
-
-		ret = regulator_disable(priv->io_pwr);
-		if (ret < 0)
-			dev_err(priv->dev, "Failed to disable io pwr: %d\n",
-				ret);
-	}
 
 	mt7530_remove_common(priv);
 

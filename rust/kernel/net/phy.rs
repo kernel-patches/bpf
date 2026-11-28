@@ -57,50 +57,71 @@ pub enum DuplexMode {
 /// A [`Device`] instance is created when a callback in [`Driver`] is executed. A PHY driver
 /// executes [`Driver`]'s methods during the callback.
 ///
+/// A `&mut Device` has exclusive access to the state of the `phy_device` that `phy_device->lock`
+/// protects, such as `state`, `link`, `autoneg`, `autoneg_complete`, `speed` and `duplex`, and the
+/// methods that use that state take `&mut self`. A `&Device` makes no such claim.
+///
+/// PHYLIB calls the callbacks that get a `&mut Device` with `phy_device->lock` held, except:
+///
+/// - [`Driver::probe`] and [`Driver::get_features`], which `phy_probe()` calls without the lock
+///   before the device is attached.
+/// - [`Driver::soft_reset`], which `phy_init_hw()` calls without the lock while the state machine
+///   is not running, or from a MAC driver that then ensures exclusive access. `phy_mii_ioctl()`,
+///   which PHYLIB documents as "use at own risk", is outside this guarantee.
+/// - [`Driver::read_status`], when a MAC driver calls `phy_read_status()` directly. The MAC
+///   driver is then responsible for exclusive access.
+///
 /// # Invariants
 ///
-/// - Referencing a `phy_device` using this struct asserts that you are in
-///   a context where all methods defined on this struct are safe to call.
-/// - This struct always has a valid `self.0.mdio.dev`.
+/// - `self.0` is a valid `phy_device`, and `self.0.mdio.dev` is a valid `struct device`.
+/// - For the lifetime of a `&mut Device`, no other thread accesses the state of the `phy_device`
+///   that `phy_device->lock` protects.
 ///
 /// [`struct phy_device`]: srctree/include/linux/phy.h
-// During the calls to most functions in [`Driver`], the C side (`PHYLIB`) holds a lock that is
-// unique for every instance of [`Device`]. `PHYLIB` uses a different serialization technique for
-// [`Driver::resume`] and [`Driver::suspend`]: `PHYLIB` updates `phy_device`'s state with
-// the lock held, thus guaranteeing that [`Driver::resume`] has exclusive access to the instance.
-// [`Driver::resume`] and [`Driver::suspend`] also are called where only one thread can access
-// to the instance.
 #[repr(transparent)]
 pub struct Device(Opaque<bindings::phy_device>);
 
 impl Device {
-    /// Creates a new [`Device`] instance from a raw pointer.
+    /// Creates a new shared [`Device`] reference from a raw pointer.
     ///
     /// # Safety
     ///
     /// For the duration of `'a`,
-    /// - the pointer must point at a valid `phy_device`, and the caller
-    ///   must be in a context where all methods defined on this struct
-    ///   are safe to call.
-    /// - `(*ptr).mdio.dev` must be a valid.
-    unsafe fn from_raw<'a>(ptr: *mut bindings::phy_device) -> &'a mut Self {
+    /// - the pointer must point at a valid `phy_device`.
+    /// - `(*ptr).mdio.dev` must be valid.
+    unsafe fn from_raw<'a>(ptr: *mut bindings::phy_device) -> &'a Self {
         // CAST: `Self` is a `repr(transparent)` wrapper around `bindings::phy_device`.
         let ptr = ptr.cast::<Self>();
-        // SAFETY: by the function requirements the pointer is valid and we have unique access for
-        // the duration of `'a`.
+        // SAFETY: By the function requirements the pointer is valid for `'a`.
+        unsafe { &*ptr }
+    }
+
+    /// Creates a new mutable [`Device`] reference from a raw pointer.
+    ///
+    /// # Safety
+    ///
+    /// For the duration of `'a`,
+    /// - the pointer must point at a valid `phy_device`.
+    /// - `(*ptr).mdio.dev` must be valid.
+    /// - the caller must have the exclusive access that [`Device`] describes.
+    unsafe fn from_raw_mut<'a>(ptr: *mut bindings::phy_device) -> &'a mut Self {
+        // CAST: `Self` is a `repr(transparent)` wrapper around `bindings::phy_device`.
+        let ptr = ptr.cast::<Self>();
+        // SAFETY: By the function requirements the pointer is valid for `'a`. `Opaque` permits
+        // other references to the same `phy_device`, e.g. in a concurrent `&Device` callback.
         unsafe { &mut *ptr }
     }
 
     /// Gets the id of the PHY.
     pub fn phy_id(&self) -> u32 {
         let phydev = self.0.get();
-        // SAFETY: The struct invariant ensures that we may access
-        // this field without additional synchronization.
+        // SAFETY: `phydev` is valid by the type invariant of `Self`. `phy_id` is set by
+        // `phy_device_create()` and never written afterwards.
         unsafe { (*phydev).phy_id }
     }
 
     /// Gets the state of PHY state machine states.
-    pub fn state(&self) -> DeviceState {
+    pub fn state(&mut self) -> DeviceState {
         let phydev = self.0.get();
         // SAFETY: The struct invariant ensures that we may access
         // this field without additional synchronization.
@@ -124,7 +145,7 @@ impl Device {
     ///
     /// It returns true if the link is up.
     #[inline]
-    pub fn is_link_up(&self) -> bool {
+    pub fn is_link_up(&mut self) -> bool {
         let phydev = self.0.get().cast_const();
         // SAFETY: By the type invariant of `Device`, `phydev` points to a valid
         // `struct phy_device`, and there is no concurrent write to this field.
@@ -136,7 +157,7 @@ impl Device {
     ///
     /// It returns true if auto-negotiation is enabled.
     #[inline]
-    pub fn is_autoneg_enabled(&self) -> bool {
+    pub fn is_autoneg_enabled(&mut self) -> bool {
         let phydev = self.0.get().cast_const();
         // SAFETY: By the type invariant of `Device`, `phydev` points to a valid
         // `struct phy_device`, and there is no concurrent write to this field.
@@ -148,7 +169,7 @@ impl Device {
     ///
     /// It returns true if auto-negotiation is completed.
     #[inline]
-    pub fn is_autoneg_completed(&self) -> bool {
+    pub fn is_autoneg_completed(&mut self) -> bool {
         let phydev = self.0.get().cast_const();
         // SAFETY: By the type invariant of `Device`, `phydev` points to a valid
         // `struct phy_device`, and there is no concurrent write to this field.
@@ -178,13 +199,13 @@ impl Device {
     }
 
     /// Reads a PHY register.
-    // This function reads a hardware register and updates the stats so takes `&mut self`.
-    pub fn read<R: reg::Register>(&mut self, reg: R) -> Result<u16> {
+    // The MDIO bus lock serializes the access, so this takes `&self`.
+    pub fn read<R: reg::Register>(&self, reg: R) -> Result<u16> {
         reg.read(self)
     }
 
     /// Writes a PHY register.
-    pub fn write<R: reg::Register>(&mut self, reg: R, val: u16) -> Result {
+    pub fn write<R: reg::Register>(&self, reg: R, val: u16) -> Result {
         reg.write(self, val)
     }
 
@@ -192,7 +213,8 @@ impl Device {
     pub fn read_paged(&mut self, page: u16, regnum: u16) -> Result<u16> {
         let phydev = self.0.get();
         // SAFETY: `phydev` is pointing to a valid object by the type invariant of `Self`.
-        // So it's just an FFI call.
+        // `phy_read_paged()` needs `phydev->drv`, which is set in every callback that gets a
+        // `&mut Device`.
         let ret = unsafe { bindings::phy_read_paged(phydev, page.into(), regnum.into()) };
 
         to_result(ret).map(|()| ret as u16)
@@ -239,10 +261,10 @@ impl Device {
     }
 
     /// Suspends the PHY via `BMCR_PDOWN` bit.
-    pub fn genphy_suspend(&mut self) -> Result {
+    pub fn genphy_suspend(&self) -> Result {
         let phydev = self.0.get();
-        // SAFETY: `phydev` is pointing to a valid object by the type invariant of `Self`.
-        // So it's just an FFI call.
+        // SAFETY: `phydev` is pointing to a valid object by the type invariant of `Self`. The C
+        // function only sets `BMCR_PDOWN`, serialized by the MDIO bus lock.
         to_result(unsafe { bindings::genphy_suspend(phydev) })
     }
 
@@ -309,10 +331,10 @@ impl<T: Driver> Adapter<T> {
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn soft_reset_callback(phydev: *mut bindings::phy_device) -> c_int {
         from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
-            let dev = unsafe { Device::from_raw(phydev) };
+            // SAFETY: `phy_init_hw()` calls this with `phy_device->lock` held, or without it while
+            // the state machine is not running or a MAC driver ensures exclusive access. The
+            // `phy_mii_ioctl()` path is outside this guarantee, see `Device`.
+            let dev = unsafe { Device::from_raw_mut(phydev) };
             T::soft_reset(dev)?;
             Ok(0)
         })
@@ -323,11 +345,9 @@ impl<T: Driver> Adapter<T> {
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn probe_callback(phydev: *mut bindings::phy_device) -> c_int {
         from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we can exclusively access `phy_device` because
-            // it's not published yet, so the accessors on `Device` are okay
-            // to call.
-            let dev = unsafe { Device::from_raw(phydev) };
+            // SAFETY: `phy_probe()` calls this before the device is attached, when no other PHYLIB
+            // path accesses it.
+            let dev = unsafe { Device::from_raw_mut(phydev) };
             T::probe(dev)?;
             Ok(0)
         })
@@ -338,10 +358,9 @@ impl<T: Driver> Adapter<T> {
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn get_features_callback(phydev: *mut bindings::phy_device) -> c_int {
         from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
-            let dev = unsafe { Device::from_raw(phydev) };
+            // SAFETY: `phy_probe()` calls this without `phy_device->lock`, under the same
+            // assumption as `probe`.
+            let dev = unsafe { Device::from_raw_mut(phydev) };
             T::get_features(dev)?;
             Ok(0)
         })
@@ -352,9 +371,9 @@ impl<T: Driver> Adapter<T> {
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn suspend_callback(phydev: *mut bindings::phy_device) -> c_int {
         from_result(|| {
-            // SAFETY: The C core code ensures that the accessors on
-            // `Device` are okay to call even though `phy_device->lock`
-            // might not be held.
+            // SAFETY: `phydev` is valid for the duration of the callback. `phy_suspend()` does not
+            // take `phy_device->lock`, and `phy_state_machine()` calls it right after dropping the
+            // lock, so this gets a `&Device`.
             let dev = unsafe { Device::from_raw(phydev) };
             T::suspend(dev)?;
             Ok(0)
@@ -366,10 +385,8 @@ impl<T: Driver> Adapter<T> {
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn resume_callback(phydev: *mut bindings::phy_device) -> c_int {
         from_result(|| {
-            // SAFETY: The C core code ensures that the accessors on
-            // `Device` are okay to call even though `phy_device->lock`
-            // might not be held.
-            let dev = unsafe { Device::from_raw(phydev) };
+            // SAFETY: `__phy_resume()` asserts that `phy_device->lock` is held.
+            let dev = unsafe { Device::from_raw_mut(phydev) };
             T::resume(dev)?;
             Ok(0)
         })
@@ -380,10 +397,8 @@ impl<T: Driver> Adapter<T> {
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn config_aneg_callback(phydev: *mut bindings::phy_device) -> c_int {
         from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
-            let dev = unsafe { Device::from_raw(phydev) };
+            // SAFETY: PHYLIB holds `phy_device->lock` when it calls this.
+            let dev = unsafe { Device::from_raw_mut(phydev) };
             T::config_aneg(dev)?;
             Ok(0)
         })
@@ -394,10 +409,9 @@ impl<T: Driver> Adapter<T> {
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn read_status_callback(phydev: *mut bindings::phy_device) -> c_int {
         from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
-            let dev = unsafe { Device::from_raw(phydev) };
+            // SAFETY: PHYLIB holds `phy_device->lock` when it calls this, or a MAC driver that
+            // calls `phy_read_status()` directly ensures exclusive access.
+            let dev = unsafe { Device::from_raw_mut(phydev) };
             T::read_status(dev)?;
             Ok(0)
         })
@@ -410,9 +424,8 @@ impl<T: Driver> Adapter<T> {
         phydev: *mut bindings::phy_device,
         _phydrv: *const bindings::phy_driver,
     ) -> c_int {
-        // SAFETY: This callback is called only in contexts
-        // where we hold `phy_device->lock`, so the accessors on
-        // `Device` are okay to call.
+        // SAFETY: `phy_bus_match()` calls this without any PHY lock, possibly on a device
+        // that is bound to another driver. A `&Device` makes no claim about the lock.
         let dev = unsafe { Device::from_raw(phydev) };
         T::match_phy_device(dev).into()
     }
@@ -426,9 +439,9 @@ impl<T: Driver> Adapter<T> {
         regnum: u16,
     ) -> i32 {
         from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
+            // SAFETY: `phydev` is valid for the duration of the callback. PHYLIB calls this with
+            // the MDIO bus lock held but not necessarily `phy_device->lock`, so this gets a
+            // `&Device`.
             let dev = unsafe { Device::from_raw(phydev) };
             // CAST: the C side verifies devnum < 32.
             let ret = T::read_mmd(dev, devnum as u8, regnum)?;
@@ -446,9 +459,9 @@ impl<T: Driver> Adapter<T> {
         val: u16,
     ) -> i32 {
         from_result(|| {
-            // SAFETY: This callback is called only in contexts
-            // where we hold `phy_device->lock`, so the accessors on
-            // `Device` are okay to call.
+            // SAFETY: `phydev` is valid for the duration of the callback. PHYLIB calls this with
+            // the MDIO bus lock held but not necessarily `phy_device->lock`, so this gets a
+            // `&Device`.
             let dev = unsafe { Device::from_raw(phydev) };
             T::write_mmd(dev, devnum as u8, regnum, val)?;
             Ok(0)
@@ -459,10 +472,8 @@ impl<T: Driver> Adapter<T> {
     ///
     /// `phydev` must be passed by the corresponding callback in `phy_driver`.
     unsafe extern "C" fn link_change_notify_callback(phydev: *mut bindings::phy_device) {
-        // SAFETY: This callback is called only in contexts
-        // where we hold `phy_device->lock`, so the accessors on
-        // `Device` are okay to call.
-        let dev = unsafe { Device::from_raw(phydev) };
+        // SAFETY: PHYLIB holds `phy_device->lock` when it calls this.
+        let dev = unsafe { Device::from_raw_mut(phydev) };
         T::link_change_notify(dev);
     }
 }
@@ -606,7 +617,7 @@ pub trait Driver {
     }
 
     /// Suspends the hardware, saving state if needed.
-    fn suspend(_dev: &mut Device) -> Result {
+    fn suspend(_dev: &Device) -> Result {
         build_error!(VTABLE_DEFAULT_ERROR)
     }
 
@@ -616,12 +627,18 @@ pub trait Driver {
     }
 
     /// Overrides the default MMD read function for reading a MMD register.
-    fn read_mmd(_dev: &mut Device, _devnum: u8, _regnum: u16) -> Result<u16> {
+    ///
+    /// PHYLIB calls this with the MDIO bus lock held, so calling [`Device::read`] or
+    /// [`Device::write`] here deadlocks.
+    fn read_mmd(_dev: &Device, _devnum: u8, _regnum: u16) -> Result<u16> {
         build_error!(VTABLE_DEFAULT_ERROR)
     }
 
     /// Overrides the default MMD write function for writing a MMD register.
-    fn write_mmd(_dev: &mut Device, _devnum: u8, _regnum: u16, _val: u16) -> Result {
+    ///
+    /// PHYLIB calls this with the MDIO bus lock held, so calling [`Device::read`] or
+    /// [`Device::write`] here deadlocks.
+    fn write_mmd(_dev: &Device, _devnum: u8, _regnum: u16, _val: u16) -> Result {
         build_error!(VTABLE_DEFAULT_ERROR)
     }
 

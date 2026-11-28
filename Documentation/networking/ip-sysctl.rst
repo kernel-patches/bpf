@@ -412,6 +412,8 @@ tcp_base_mss - INTEGER
 	Path MTU discovery (MTU probing).  If MTU probing is enabled,
 	this is the initial MSS used by the connection.
 
+	Default: 1024
+
 tcp_mtu_probe_floor - INTEGER
 	If MTU probing is enabled this caps the minimum MSS used for search_low
 	for the connection.
@@ -619,6 +621,30 @@ tcp_l3mdev_accept - BOOLEAN
 
 	Default: 0 (disabled)
 
+tcp_l3mdev_exempt_ports - list of comma separated ranges
+	TCP ports for which tcp_l3mdev_accept does not apply to listener
+	lookup. When tcp_l3mdev_accept is enabled, a listen socket that is
+	not bound to a device also matches connections that arrive in an L3
+	domain (e.g., a VRF). For a port in this list, such a socket does
+	not match these connections; only a listen socket bound to the L3
+	master device or to the receiving device can accept them.
+	Connections that do not arrive in an L3 domain are not affected.
+	This applies to both IPv4 and IPv6.
+
+	Only the choice of listen socket changes. Lookup of established
+	sockets and bind() port conflict checks still follow
+	tcp_l3mdev_accept.
+
+	This is useful when the same port has both an unbound listener and
+	a listener bound to a VRF, and VRF connections must reach the
+	VRF-bound one (for example, when only it has TCP-MD5 or TCP-AO
+	keys configured).
+
+	The format is the same as ip_local_reserved_ports, e.g.
+	"179,5000-5010". Writing to the file replaces the current list.
+
+	Default: empty
+
 tcp_low_latency - BOOLEAN
 	This is a legacy option, it has no effect anymore.
 
@@ -710,6 +736,26 @@ tcp_mtu_probing - INTEGER
 	- 0 - Disabled
 	- 1 - Disabled by default, enabled when an ICMP black hole detected
 	- 2 - Always enabled, use initial MSS of tcp_base_mss.
+
+	A black hole is detected when the retransmission timer fires after
+	the handshake and retransmissions have stayed unacknowledged for as
+	long as tcp_retries1 retransmissions would take with an RTO starting
+	at 200 ms and doubling each time, which is 3 seconds with the
+	default tcp_retries1. This time is counted from the first
+	retransmission and only checked when the timer fires, so a flow
+	with a 200 ms RTO detects the black hole at the fifth timeout,
+	about 6 seconds after the original transmission.
+
+	With value 1, the first detection enables MTU probing and lowers
+	the MSS to tcp_base_mss if it is larger. After that, and from the
+	first detection with value 2, each timeout at which a black hole is
+	still detected lowers search_low to half its MSS, capped at
+	tcp_base_mss but never below tcp_mtu_probe_floor or tcp_min_snd_mss,
+	and lowers the MSS to match if it is larger. Once MTU probing is
+	enabled, the connection also probes for a larger MSS, as with
+	value 2.
+
+	Default: 0
 
 tcp_probe_interval - UNSIGNED INTEGER
 	Controls how often to start TCP Packetization-Layer Path MTU
@@ -1055,6 +1101,7 @@ tcp_fastopen_blackhole_timeout_sec - INTEGER
 	get detected right after Fastopen is re-enabled and will reset to
 	initial value when the blackhole issue goes away.
 	0 to disable the blackhole detection.
+	The maximum value is one day (86400 seconds).
 
 	By default, it is set to 0 (feature is disabled).
 
@@ -1587,7 +1634,7 @@ cipso_rbm_strictvalid - BOOLEAN
 	- 0 (disabled)
 	- 1 (enabled)
 
-	Default: 0 (disabled)
+	Default: 1 (enabled)
 
 IP Variables
 ============
@@ -1907,6 +1954,8 @@ igmp_qrv - INTEGER
 	Default: 2 (as specified by RFC2236 8.1)
 
 	Minimum: 1 (as specified by RFC6636 4.5)
+
+	Maximum: 255
 
 force_igmp_version - INTEGER
 	- 0 - (default) No enforcement of a IGMP version, IGMPv1/v2 fallback
@@ -2302,7 +2351,9 @@ promote_secondaries - BOOLEAN
 
 drop_unicast_in_l2_multicast - BOOLEAN
 	Drop any unicast IP packets that are received in link-layer
-	multicast (or broadcast) frames.
+	multicast (or broadcast) frames. ARP packets received in such
+	frames are not used to create or update neighbour entries,
+	but ARP requests for local addresses are still answered.
 
 	This behavior (for multicast) is actually a SHOULD in RFC
 	1122, but is disabled by default for compatibility reasons.
@@ -2416,7 +2467,7 @@ flowlabel_state_ranges - BOOLEAN
 	- 0 (disabled)
 	- 1 (enabled)
 
-	Default: 1 (enabled)
+	Default: 0 (disabled)
 
 
 flowlabel_reflect - INTEGER
@@ -2516,6 +2567,8 @@ mld_qrv - INTEGER
 	Default: 2 (as specified by RFC3810 9.1)
 
 	Minimum: 1 (as specified by RFC6636 4.5)
+
+	Maximum: 255
 
 max_dst_opts_number - INTEGER
 	Maximum number of non-padding TLVs allowed in a Destination
@@ -2679,6 +2732,8 @@ force_forwarding - BOOLEAN
 	Enable forwarding on this interface only -- regardless of the setting on
 	``conf/all/forwarding``. When setting ``conf.all.forwarding`` to 0,
 	the ``force_forwarding`` flag will be reset on all interfaces.
+	Writing to ``conf/all/force_forwarding`` applies the value to all
+	interfaces, even if the value did not change.
 
 fwmark_reflect - BOOLEAN
 	Controls the fwmark of kernel-generated IPv6 reply packets that are not
@@ -2952,9 +3007,9 @@ router_solicitation_interval - INTEGER
 
 router_solicitations - INTEGER
 	Number of Router Solicitations to send until assuming no
-	routers are present.
+	routers are present. A value of -1 means no limit.
 
-	Default: 3
+	Default: -1
 
 use_oif_addrs_only - BOOLEAN
 	When enabled, the candidate source addresses for destinations
@@ -3030,7 +3085,7 @@ regen_max_retry - INTEGER
 	Number of attempts before give up attempting to generate
 	valid temporary addresses.
 
-	Default: 5
+	Default: 3
 
 max_addresses - INTEGER
 	Maximum number of autoconfigured addresses per interface.  Setting
@@ -3813,6 +3868,45 @@ l3mdev_accept - BOOLEAN
 	- 1 (enabled)
 
 	Default: 1 (enabled)
+
+
+``/proc/sys/net/quic/*`` Variables
+===================================
+
+quic_mem - vector of 3 LONGs: min, pressure, max
+	Number of pages allowed for queueing by all QUIC sockets.
+
+	min: below this number of pages QUIC is not bothered about its
+	memory appetite.
+
+	pressure: when amount of memory allocated by QUIC exceeds this number
+	of pages, QUIC moderates its memory consumption and enters memory
+	pressure mode, which is exited when memory consumption falls
+	under "min".
+
+	max: number of pages allowed for queueing by all QUIC sockets.
+
+	Defaults are calculated at boot time from amount of available
+	memory.
+
+quic_rmem - vector of 3 INTEGERs: min, default, max
+	Only the first value ("min") is used, "default" and "max" are
+	ignored.
+
+	min: Minimal size of receive buffer used by QUIC sockets.
+	It is guaranteed to each QUIC socket, even under moderate memory
+	pressure.
+
+	Default: 4K
+
+quic_wmem - vector of 3 INTEGERs: min, default, max
+	Only the first value ("min") is used, "default" and "max" are
+	ignored.
+
+	min: Amount of memory reserved for send buffers for QUIC sockets.
+	Each QUIC socket has rights to use it due to fact of its birth.
+
+	Default: 4K
 
 
 ``/proc/sys/net/core/*``

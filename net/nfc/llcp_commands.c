@@ -542,7 +542,7 @@ static struct sk_buff *nfc_llcp_allocate_snl(struct nfc_llcp_local *local,
 {
 	struct sk_buff *skb;
 	struct nfc_dev *dev;
-	u16 size = 0;
+	size_t size = 0;
 
 	if (local == NULL)
 		return ERR_PTR(-ENODEV);

@@ -551,11 +551,16 @@ struct i3c_master_controller_ops {
  *            context (notably the resume path), and is skipped if the
  *            controller is shutting down
  * @dev_nack_retry_count: retry count when slave device nack
+ * @max_tx_bytes: maximum number of bytes this controller can transmit in a
+ *		   single message, or 0 if it has no such limit
+ * @max_rx_bytes: maximum number of bytes this controller can receive in a
+ *		   single message, or 0 if it has no such limit
  *
  * A &struct i3c_master_controller has to be registered to the I3C subsystem
- * through i3c_master_register(). None of &struct i3c_master_controller fields
- * should be set manually, just pass appropriate values to
- * i3c_master_register().
+ * through i3c_master_register(). Except for @max_tx_bytes and
+ * @max_rx_bytes, which a controller driver may set before registering, none
+ * of &struct i3c_master_controller fields should be set manually, just pass
+ * appropriate values to i3c_master_register().
  */
 struct i3c_master_controller {
 	struct device dev;
@@ -580,6 +585,8 @@ struct i3c_master_controller {
 	struct work_struct hj_work;
 	struct work_struct reg_work;
 	unsigned int dev_nack_retry_count;
+	u16 max_tx_bytes;
+	u16 max_rx_bytes;
 };
 
 /**

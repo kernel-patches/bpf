@@ -11078,7 +11078,7 @@ static int nf_tables_commit(struct net *net, struct sk_buff *skb)
 					nft_trans_destroy(trans);
 					break;
 				}
-				if (table->flags & NFT_TABLE_F_DORMANT)
+				if (table->flags & __NFT_TABLE_F_WAS_AWAKEN)
 					nf_tables_table_disable(net, table);
 
 				table->flags &= ~__NFT_TABLE_F_UPDATE;

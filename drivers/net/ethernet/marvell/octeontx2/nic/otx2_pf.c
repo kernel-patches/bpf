@@ -213,6 +213,7 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 	if (ret) {
 		dev_err(pf->dev,
 			"RVUPF: IRQ registration failed for ME0\n");
+		return ret;
 	}
 
 	/* Register FLR interrupt handler */
@@ -224,7 +225,7 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 	if (ret) {
 		dev_err(pf->dev,
 			"RVUPF: IRQ registration failed for FLR0\n");
-		return ret;
+		goto free_me0;
 	}
 
 	if (numvfs > 64) {
@@ -237,6 +238,7 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 		if (ret) {
 			dev_err(pf->dev,
 				"RVUPF: IRQ registration failed for ME1\n");
+			goto free_flr0;
 		}
 		irq_name = &hw->irq_name[RVU_PF_INT_VEC_VFFLR1 * NAME_SIZE];
 		snprintf(irq_name, NAME_SIZE, "RVUPF%d_FLR1",
@@ -247,7 +249,7 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 		if (ret) {
 			dev_err(pf->dev,
 				"RVUPF: IRQ registration failed for FLR1\n");
-			return ret;
+			goto free_me1;
 		}
 	}
 
@@ -271,6 +273,14 @@ static int otx2_register_flr_me_intr(struct otx2_nic *pf, int numvfs)
 			     INTR_MASK(numvfs));
 	}
 	return 0;
+
+free_me1:
+	free_irq(pci_irq_vector(pf->pdev, RVU_PF_INT_VEC_VFME1), pf);
+free_flr0:
+	free_irq(pci_irq_vector(pf->pdev, RVU_PF_INT_VEC_VFFLR0), pf);
+free_me0:
+	free_irq(pci_irq_vector(pf->pdev, RVU_PF_INT_VEC_VFME0), pf);
+	return ret;
 }
 
 static int otx2_pf_flr_init(struct otx2_nic *pf, int num_vfs)
@@ -618,6 +628,10 @@ static int otx2_pfvf_mbox_init(struct otx2_nic *pf, int numvfs)
 	 */
 	if (is_cn20k(pf->pdev)) {
 		hwbase = (void __iomem *)cn20k_pfvf_mbox_alloc(pf, numvfs);
+		if (IS_ERR(hwbase)) {
+			err = PTR_ERR(hwbase);
+			goto free_wq;
+		}
 	} else {
 		/* On CN10K platform, PF <-> VF mailbox region follows after
 		 * PF <-> AF mailbox region.
@@ -644,7 +658,7 @@ static int otx2_pfvf_mbox_init(struct otx2_nic *pf, int numvfs)
 	err = otx2_mbox_init(&mbox->mbox_up, hwbase, pf->pdev, pf->reg_base,
 			     MBOX_DIR_PFVF_UP, numvfs);
 	if (err)
-		goto free_iomem;
+		goto destroy_mbox;
 
 	for (vf = 0; vf < numvfs; vf++) {
 		mbox->pfvf = pf;
@@ -655,11 +669,18 @@ static int otx2_pfvf_mbox_init(struct otx2_nic *pf, int numvfs)
 
 	return 0;
 
+destroy_mbox:
+	otx2_mbox_destroy(&mbox->mbox);
 free_iomem:
-	if (hwbase && !(is_cn20k(pf->pdev)))
+	if (is_cn20k(pf->pdev)) {
+		qmem_free(&pf->pdev->dev, pf->pfvf_mbox_addr);
+		pf->pfvf_mbox_addr = NULL;
+	} else if (hwbase) {
 		iounmap(hwbase);
+	}
 free_wq:
 	destroy_workqueue(pf->mbox_pfvf_wq);
+	pf->mbox_pfvf_wq = NULL;
 	return err;
 }
 

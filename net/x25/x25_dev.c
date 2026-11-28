@@ -135,7 +135,7 @@ int x25_lapb_receive_frame(struct sk_buff *skb, struct net_device *dev,
 		break;
 
 	case X25_IFACE_DISCONNECT:
-		x25_link_terminated(nb);
+		x25_link_terminated(nb, true);
 		break;
 	}
 	x25_neigh_put(nb);

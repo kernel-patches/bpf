@@ -1684,7 +1684,12 @@ EXPORT_SYMBOL(fman_port_enable);
  */
 struct fman_port *fman_port_bind(struct device *dev)
 {
-	return (struct fman_port *)(dev_get_drvdata(get_device(dev)));
+	struct fman_port *port = dev_get_drvdata(get_device(dev));
+
+	if (!port)
+		put_device(dev);
+
+	return port;
 }
 EXPORT_SYMBOL(fman_port_bind);
 

@@ -4,6 +4,8 @@
 #ifndef _HW_CHANNEL_H
 #define _HW_CHANNEL_H
 
+#include <linux/minmax.h>
+
 #define DEFAULT_LOG2_THROTTLING_FOR_ERROR_EQ  4
 
 #define HW_CHANNEL_MAX_REQUEST_SIZE  0x1000
@@ -114,6 +116,7 @@ struct hwc_work_request {
 	void *buf_sge_addr;
 	u32 buf_len;
 	u32 msg_size;
+	bool refill_needed;
 
 	struct gdma_wqe_request wqe_req;
 	struct hwc_tx_oob tx_oob;
@@ -168,11 +171,24 @@ struct hwc_wq {
 
 struct hwc_caller_ctx {
 	struct completion comp_event;
-	void *output_buf;
-	u32 output_buflen;
+	/* Completed RQ buffer, not yet consumed by the sender. */
+	struct hwc_work_request *reply;
+	u32 reply_len;
+	int error;
 
-	u32 error; /* Linux error code */
-	u32 status_code;
+	/* The ID and TX buffer belong to the sender until it has taken its
+	 * result, and to the device until the corresponding response arrives.
+	 */
+	bool sender;
+	bool pending;
+	unsigned long posted_at;
+	unsigned long deadline;
+};
+
+enum hwc_channel_state {
+	HWC_STOPPED,
+	HWC_READY,
+	HWC_TIMED_OUT,
 };
 
 struct hw_channel_context {
@@ -181,31 +197,67 @@ struct hw_channel_context {
 
 	u16 num_inflight_msg;
 	u32 max_req_msg_size;
+	u32 max_resp_msg_size;
+	/* Immutable reported maxima for the final RQ and SQ directions. */
+	u32 rx_msg_size_limit;
+	u32 tx_msg_size_limit;
 
-	u16 hwc_init_q_depth_max;
+	u32 hwc_init_q_depth_max;
 	u32 hwc_init_max_req_msg_size;
 	u32 hwc_init_max_resp_msg_size;
+	u32 hwc_init_max_num_cqs;
+	u32 hwc_init_cq_id;
 
+	int hwc_init_error;
 	struct completion hwc_init_eqe_comp;
 
 	struct hwc_wq *rxq;
 	struct hwc_wq *txq;
 	struct hwc_cq *cq;
 
-	struct semaphore sema;
+	wait_queue_head_t admission_waitq;
+	struct list_head submissions;
+	/* The map lock serializes slot ownership, SQ publication, response
+	 * delivery, timeout changes and the transition to a faulted channel.
+	 */
 	struct gdma_resource inflight_msg_res;
+	enum hwc_channel_state state;
 
 	u32 dest_vrq_id;
 	u32 dest_vrcq_id;
 	u32 hwc_timeout;
 
+	/* Once ESTABLISH_HWC submits the queue addresses, a setup error
+	 * does not release them. The PF may still use the rings and buffers
+	 * until it acknowledges DESTROY_HWC.
+	 */
+	bool setup_active;
+	bool teardown_failed;
+
+	/* mana_gd_send_request() callers, including waiters; under hwc_lock. */
+	unsigned int active_senders;
+
 	struct hwc_caller_ctx *caller_ctx;
 };
 
+/* Host-to-PF requests are bounded by the negotiated TX limit and SQ stride. */
+static inline u32
+mana_hwc_get_max_req_size(const struct hw_channel_context *hwc)
+{
+	return min(hwc->tx_msg_size_limit, hwc->max_resp_msg_size);
+}
+
 int mana_hwc_create_channel(struct gdma_context *gc);
 void mana_hwc_destroy_channel(struct gdma_context *gc);
+void mana_hwc_free_retained_channel(struct gdma_context *gc);
 
 int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
-			  const void *req, u32 resp_len, void *resp);
+			  const void *req, u32 resp_len, void *resp,
+			  bool teardown);
+int mana_gd_test_hwc_eq(struct hw_channel_context *hwc,
+			struct gdma_queue *eq);
+
+u32 mana_hwc_timeout_read(const struct hw_channel_context *hwc);
+void mana_hwc_timeout_update(struct hw_channel_context *hwc, u32 timeout_ms);
 
 #endif /* _HW_CHANNEL_H */

@@ -28,6 +28,7 @@
 #include <linux/spinlock.h>
 #include <linux/sysctl.h>
 #include <linux/proc_fs.h>
+#include <linux/fs.h>
 #include <linux/security.h>
 #include <linux/list.h>
 #include <linux/slab.h>
@@ -632,25 +633,23 @@ __build_packet_message(struct nfnl_log_net *log,
 	/* UID */
 	sk = skb->sk;
 	if (sk && sk_fullsock(sk)) {
-		const struct socket *sock;
-		const struct file *file;
+		struct socket *sock;
+		struct file *file;
 
-		/* The sk pointer remains valid as long as the skb is.
-		 * The sk_socket and file pointer may become NULL
-		 * if the socket is closed.
-		 * Both structures (including file->cred) are RCU freed
-		 * which means they can be accessed within a RCU read section.
-		 */
 		sock = READ_ONCE(sk->sk_socket);
-		file = sock ? READ_ONCE(sock->file) : NULL;
-		if (file) {
-			const struct cred *cred = file->f_cred;
-			struct user_namespace *user_ns = inst->peer_user_ns;
-			__be32 uid = htonl(from_kuid_munged(user_ns, cred->fsuid));
-			__be32 gid = htonl(from_kgid_munged(user_ns, cred->fsgid));
-			if (nla_put_be32(inst->skb, NFULA_UID, uid) ||
-			    nla_put_be32(inst->skb, NFULA_GID, gid))
-				goto nla_put_failure;
+		if (sock) {
+			file = get_file_active(&sock->file);
+			if (file) {
+				const struct cred *cred = file->f_cred;
+				struct user_namespace *user_ns = inst->peer_user_ns;
+				__be32 uid = htonl(from_kuid_munged(user_ns, cred->fsuid));
+				__be32 gid = htonl(from_kgid_munged(user_ns, cred->fsgid));
+
+				fput(file);
+				if (nla_put_be32(inst->skb, NFULA_UID, uid) ||
+				    nla_put_be32(inst->skb, NFULA_GID, gid))
+					goto nla_put_failure;
+			}
 		}
 	}
 

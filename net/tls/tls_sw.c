@@ -142,12 +142,16 @@ static int __skb_nsg(struct sk_buff *skb, int offset, int len,
                         start = end;
                 }
         }
-        BUG_ON(len);
+	if (unlikely(len)) {
+		DEBUG_NET_WARN_ON_ONCE(1);
+		return -EINVAL;
+	}
         return elt;
 }
 
 /* Return the number of scatterlist elements required to completely map the
- * skb, or -EMSGSIZE if the recursion depth is exceeded.
+ * skb, -EMSGSIZE if the recursion depth is exceeded, or -EINVAL if the skb
+ * runs out before @len does.
  */
 static int skb_nsg(struct sk_buff *skb, int offset, int len)
 {
@@ -348,6 +352,17 @@ static int tls_clone_plaintext_msg(struct sock *sk, int required)
 	 * same offset of both plain and encrypted data.
 	 */
 	skip = prot->prepend_size + msg_pl->sg.size;
+
+	if (msg_pl->sg.size) {
+		u32 i = msg_pl->sg.end;
+
+		sk_msg_iter_var_prev(i);
+		msg_pl->sg.curr = i;
+		msg_pl->sg.copybreak = msg_pl->sg.data[i].length;
+	} else {
+		msg_pl->sg.curr = msg_pl->sg.start;
+		msg_pl->sg.copybreak = 0;
+	}
 
 	return sk_msg_clone(sk, msg_pl, msg_en, skip, len);
 }
@@ -760,8 +775,10 @@ static int tls_sw_sendmsg_splice(struct sock *sk, struct msghdr *msg,
 		}
 
 		sk_msg_page_add(msg_pl, page, part, off);
-		msg_pl->sg.copybreak = 0;
+		/* keep sg.curr on the last frag so a later copy won't wrap */
 		msg_pl->sg.curr = msg_pl->sg.end;
+		sk_msg_iter_var_prev(msg_pl->sg.curr);
+		msg_pl->sg.copybreak = sk_msg_elem(msg_pl, msg_pl->sg.curr)->length;
 		sk_mem_charge(sk, part);
 		*copied += part;
 		try_to_copy -= part;
@@ -1104,9 +1121,11 @@ tls_rx_rec_wait(struct sock *sk, bool nonblock, bool released, bool has_copied)
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_sw_context_rx *ctx = tls_sw_ctx_rx(tls_ctx);
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
-	int ret = 0;
+	int ret;
 	long timeo;
 
+retry:
+	ret = 0;
 	/* a rekey is pending, let userspace deal with it */
 	if (unlikely(ctx->key_update_pending))
 		return -EKEYEXPIRED;
@@ -1167,8 +1186,10 @@ tls_rx_rec_wait(struct sock *sk, bool nonblock, bool released, bool has_copied)
 			return sock_intr_errno(timeo);
 	}
 
-	if (unlikely(!tls_strp_msg_load(&ctx->strp, released)))
-		return tls_rx_rec_wait(sk, nonblock, false, has_copied);
+	if (unlikely(!tls_strp_msg_load(&ctx->strp, released))) {
+		released = false;
+		goto retry;
+	}
 
 	return 1;
 }
@@ -1826,6 +1847,22 @@ static void tls_rx_reader_unlock(struct sock *sk, struct tls_sw_context_rx *ctx)
 	release_sock(sk);
 }
 
+static bool tls_rx_list_add(struct sock *sk, struct sk_buff_head *list,
+			    struct sk_buff *skb)
+{
+	bool forced = false;
+
+	if (!skb->sk) {
+		forced = !sk_rmem_schedule(sk, skb, skb->truesize);
+		if (forced)
+			sk_forced_mem_schedule(sk, skb->truesize);
+		skb_set_owner_r(skb, sk);
+	}
+	__skb_queue_tail(list, skb);
+
+	return forced;
+}
+
 int tls_sw_recvmsg(struct sock *sk,
 		   struct msghdr *msg,
 		   size_t len,
@@ -1923,7 +1960,7 @@ int tls_sw_recvmsg(struct sock *sk,
 			DEBUG_NET_WARN_ON_ONCE(darg.zc);
 			tls_rx_rec_done(ctx);
 put_on_rx_list_err:
-			__skb_queue_tail(&ctx->rx_list, darg.skb);
+			tls_rx_list_add(sk, &ctx->rx_list, darg.skb);
 			goto recv_end;
 		}
 
@@ -1953,7 +1990,8 @@ put_on_rx_list_err:
 put_on_rx_list:
 				decrypted += chunk;
 				len -= chunk;
-				__skb_queue_tail(&ctx->rx_list, skb);
+				if (tls_rx_list_add(sk, &ctx->rx_list, skb))
+					goto recv_end;
 				if (unlikely(control != TLS_RECORD_TYPE_DATA))
 					break;
 				continue;
@@ -2327,7 +2365,7 @@ void tls_sw_release_resources_tx(struct sock *sk)
 	/* Wait for any pending async encryptions to complete */
 	tls_encrypt_async_wait(ctx);
 
-	tls_tx_records(sk, -1);
+	tls_tx_records(sk, current->flags & PF_KTHREAD ? MSG_DONTWAIT : -1);
 
 	/* Free up un-sent records in tx_list. First, free
 	 * the partially sent record if any at head of tx_list.
@@ -2427,10 +2465,17 @@ static void tx_work_handler(struct work_struct *work)
 		return;
 
 	if (mutex_trylock(&tls_ctx->tx_lock)) {
+		bool retry;
+		int ret;
+
 		lock_sock(sk);
-		tls_tx_records(sk, -1);
+		ret = tls_tx_records(sk, MSG_DONTWAIT);
+		retry = ret == -EAGAIN && tcp_rtx_and_write_queues_empty(sk);
 		release_sock(sk);
 		mutex_unlock(&tls_ctx->tx_lock);
+		if (retry &&
+		    !test_and_set_bit(BIT_TX_SCHEDULED, &ctx->tx_bitmask))
+			schedule_delayed_work(&ctx->tx_work.work, 1);
 	} else if (!test_and_set_bit(BIT_TX_SCHEDULED, &ctx->tx_bitmask)) {
 		/* Someone is holding the tx_lock, they will likely run Tx
 		 * and cancel the work on their way out of the lock section.

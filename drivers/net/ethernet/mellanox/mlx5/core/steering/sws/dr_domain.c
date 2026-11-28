@@ -87,8 +87,10 @@ int mlx5dr_domain_get_recalc_cs_ft_addr(struct mlx5dr_domain *dmn,
 
 		ret = xa_err(xa_store(&dmn->csum_fts_xa, vport_num,
 				      recalc_cs_ft, GFP_KERNEL));
-		if (ret)
+		if (ret) {
+			mlx5dr_fw_destroy_recalc_cs_ft(dmn, recalc_cs_ft);
 			return ret;
+		}
 	}
 
 	*rx_icm_addr = recalc_cs_ft->rx_icm_addr;

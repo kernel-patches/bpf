@@ -25,8 +25,14 @@
  */
 static void __hw_addr_changed(struct netdev_hw_addr_list *list)
 {
-	if (list->mc_dev)
-		atomic_inc(&dev_net(list->mc_dev)->dev_mc_genid);
+	struct net_device *dev;
+
+	if (!list->is_dev_mc)
+		return;
+	dev = container_of(list, struct net_device, mc);
+	rcu_read_lock();
+	atomic_inc(&dev_net_rcu(dev)->dev_mc_genid);
+	rcu_read_unlock();
 }
 
 static void __hw_addr_count_add(struct netdev_hw_addr_list *list, int value)
@@ -96,7 +102,7 @@ __hw_addr_create(const unsigned char *addr, int addr_len,
 	alloc_size = sizeof(*ha);
 	if (alloc_size < L1_CACHE_BYTES)
 		alloc_size = L1_CACHE_BYTES;
-	ha = kmalloc(alloc_size, GFP_ATOMIC);
+	ha = kzalloc(alloc_size, GFP_ATOMIC);
 	if (!ha)
 		return NULL;
 	memcpy(ha->addr, addr, addr_len);
@@ -104,7 +110,6 @@ __hw_addr_create(const unsigned char *addr, int addr_len,
 	ha->refcount = 1;
 	ha->global_use = global;
 	ha->synced = sync ? 1 : 0;
-	ha->sync_cnt = 0;
 
 	return ha;
 }
@@ -538,7 +543,7 @@ void __hw_addr_init(struct netdev_hw_addr_list *list)
 	INIT_LIST_HEAD(&list->list);
 	list->_count = 0;
 	list->tree = RB_ROOT;
-	list->mc_dev = NULL;
+	list->is_dev_mc = false;
 }
 EXPORT_SYMBOL(__hw_addr_init);
 
@@ -1215,7 +1220,7 @@ EXPORT_SYMBOL(dev_mc_flush);
 void dev_mc_init(struct net_device *dev)
 {
 	__hw_addr_init(&dev->mc);
-	dev->mc.mc_dev = dev;
+	dev->mc.is_dev_mc = true;
 }
 EXPORT_SYMBOL(dev_mc_init);
 
@@ -1563,6 +1568,27 @@ static void netif_rx_mode_queue(struct net_device *dev)
 {
 	__netdev_work_core_sched(dev, NETDEV_WORK_RX_MODE);
 }
+
+/**
+ * netif_rx_mode_schedule_update() - schedule a new receive-mode update
+ * @dev: network device
+ *
+ * Cancel any pending retry and reset its backoff before scheduling an
+ * immediate receive-mode update. This does not reset address-list
+ * synchronization state. Callers which need to replay lost device state must
+ * unsynchronize the affected address lists before scheduling the update.
+ *
+ * Context: sleepable. The caller must hold the device operations lock, or
+ * RTNL for a device which still uses RTNL-compatible operations.
+ */
+void netif_rx_mode_schedule_update(struct net_device *dev)
+{
+	might_sleep();
+	netdev_assert_locked_ops_compat(dev);
+	netif_rx_mode_cancel_retry(dev);
+	netif_rx_mode_queue(dev);
+}
+EXPORT_SYMBOL_GPL(netif_rx_mode_schedule_update);
 
 static void netif_rx_mode_retry(struct timer_list *t)
 {

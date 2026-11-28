@@ -173,6 +173,7 @@ struct fbnic_napi_vector {
 	u16 v_idx;
 	u8 txt_count;
 	u8 rxt_count;
+	bool xdp_flush;		/* An XDP redirect awaits xdp_do_flush() */
 
 	struct fbnic_q_triad qt[];
 };

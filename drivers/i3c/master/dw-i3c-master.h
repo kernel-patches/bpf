@@ -14,7 +14,8 @@
 
 struct dw_i3c_master_caps {
 	u8 cmdfifodepth;
-	u8 datafifodepth;
+	u8 txfifodepth;
+	u8 rxfifodepth;
 };
 
 struct dw_i3c_dat_entry {

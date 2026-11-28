@@ -2018,10 +2018,6 @@ static int icssm_prueth_probe(struct platform_device *pdev)
 	dev_info(dev, "TI PRU ethernet driver initialized: %s EMAC mode\n",
 		 (!eth0_node || !eth1_node) ? "single" : "dual");
 
-	if (eth1_node)
-		of_node_put(eth1_node);
-	if (eth0_node)
-		of_node_put(eth0_node);
 	return 0;
 
 netdev_unregister:

@@ -695,7 +695,12 @@ static struct sk_buff *bounce_skb(const struct sk_buff *skb)
 	/* Set the tail pointer and length */
 	skb_put(n, skb->len);
 
-	BUG_ON(skb_copy_bits(skb, -headerlen, n->head, headerlen + skb->len));
+	if (unlikely(skb_copy_bits(skb, -headerlen, n->head,
+				   headerlen + skb->len))) {
+		DEBUG_NET_WARN_ON_ONCE(1);
+		kfree_skb(n);
+		return NULL;
+	}
 
 	skb_copy_header(n, skb);
 	return n;
@@ -1860,7 +1865,10 @@ static void xennet_disconnect_backend(struct netfront_info *info)
 		queue->tx.sring = NULL;
 		queue->rx.sring = NULL;
 
+		if (xdp_rxq_info_is_reg(&queue->xdp_rxq))
+			xdp_rxq_info_unreg(&queue->xdp_rxq);
 		page_pool_destroy(queue->page_pool);
+		queue->page_pool = NULL;
 	}
 }
 
@@ -2244,8 +2252,9 @@ static int xennet_create_queues(struct netfront_info *info,
 		ret = xennet_create_page_pool(queue);
 		if (ret < 0) {
 			dev_err(&info->xbdev->dev, "can't allocate page pool\n");
-			*num_queues = i;
-			return ret;
+			gnttab_free_grant_references(queue->gref_tx_head);
+			gnttab_free_grant_references(queue->gref_rx_head);
+			goto err_unwind;
 		}
 
 		netif_napi_add(queue->info->netdev, &queue->napi, xennet_poll);
@@ -2260,6 +2269,21 @@ static int xennet_create_queues(struct netfront_info *info,
 		return -EINVAL;
 	}
 	return 0;
+
+err_unwind:
+	while (i--) {
+		struct netfront_queue *queue = &info->queues[i];
+
+		if (netif_running(info->netdev))
+			napi_disable(&queue->napi);
+		netif_napi_del(&queue->napi);
+		xdp_rxq_info_unreg(&queue->xdp_rxq);
+		page_pool_destroy(queue->page_pool);
+		gnttab_free_grant_references(queue->gref_tx_head);
+		gnttab_free_grant_references(queue->gref_rx_head);
+	}
+	*num_queues = 0;
+	return ret;
 }
 
 /* Common code used when first setting up, and when resuming. */

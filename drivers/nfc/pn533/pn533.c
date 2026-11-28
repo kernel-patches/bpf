@@ -1104,6 +1104,7 @@ static int pn533_tm_get_data_complete(struct pn533 *dev, void *arg,
 	}
 
 	skb_queue_tail(&dev->resp_q, resp);
+	resp = NULL;
 
 	if (mi) {
 		queue_work(dev->wq, &dev->mi_tm_rx_work);
@@ -2138,6 +2139,7 @@ static int pn533_data_exchange_complete(struct pn533 *dev, void *_arg,
 	}
 
 	skb_queue_tail(&dev->resp_q, resp);
+	resp = NULL;
 
 	if (mi) {
 		dev->cmd_complete_mi_arg = arg;

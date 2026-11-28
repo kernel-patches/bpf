@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * Motorcomm 8511/8521/8522/8531/8531S/861x/8821 PHY driver.
+ * Motorcomm 8511/8521/8522/8531/8531S/861x/8821/8831 PHY driver.
  *
  * Author: Peter Geis <pgwipeout@gmail.com>
  * Author: Frank <Frank.Sae@motor-comm.com>
@@ -22,6 +22,7 @@
 /* Live captured from YT921x switch internal MDIO bus */
 #define PHY_ID_INT861X		0x01e04281
 #define PHY_ID_YT8821		0x4f51ea19
+#define PHY_ID_YT8831		0x4f51e938
 /* YT8521/YT8531S/YT8821 Register Overview
  *	UTP Register space	|	FIBER Register space
  *  ------------------------------------------------------------
@@ -97,6 +98,9 @@
  */
 #define YTPHY_SADCR_SPEED_RETRY_LIMIT		(0x3 << 2)
 
+#define YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK		GENMASK(4, 2)
+#define YTPHY_SADCR_DOWNSHIFT_ATTEMPTS_MIN		2
+#define YTPHY_SADCR_DOWNSHIFT_ATTEMPTS_MAX		9
 /* Rx Error Counter Register */
 #define YTPHY_RX_ERROR_COUNTER_REG		0x15
 
@@ -170,6 +174,12 @@
 #define YT8521_RSSR_FIBER_SPACE			(0x1 << 1)
 #define YT8521_RSSR_UTP_SPACE			(0x0 << 1)
 #define YT8521_RSSR_TO_BE_ARBITRATED		(0xFF)
+
+#define YT8831_REG_SPACE_SELECT_REG		0x8020
+#define YT8831_RSSR_SPACE_MASK			(BIT(1) | BIT(0))
+#define YT8831_RSSR_FIBER_SPACE			BIT(1)
+#define YT8831_RSSR_UTP_SPACE			BIT(0)
+#define YT8831_RSSR_TOP_SPACE			0x0
 
 #define YT8521_CHIP_CONFIG_REG			0xA001
 #define YT8521_CCR_SW_RST			BIT(15)
@@ -257,6 +267,34 @@
 #define YTPHY_WOL_CONFIG_REG			0xA00A
 #define YTPHY_WCR_INTR_SEL			BIT(6)
 #define YTPHY_WCR_ENABLE			BIT(3)
+
+#define YT8831_SDS_WRITE_PROTECT_REG		0x873
+#define YT8831_SDS_SGMII_OUTPUT_REG		0x1002
+
+#define YT8831_UTP_WRITE_PROTECT_REG			0x1
+#define YT8831_UTP_DAC_DATA_DLY_REG			0x0
+#define YT8831_UTP_REF_DLAY_SEL_REG			0x3
+#define YT8831_UTP_REF_DLAY_SEL_FEXT_REG		0x4
+#define YT8831_UTP_COE_MANUAL_SHIFT_SEL_2500_REG	0x723
+#define YT8831_UTP_EEE_OPTIM_1_REG			0x727
+#define YT8831_UTP_EEE_OPTIM_2_REG			0x339
+#define YT8831_UTP_EEE_MSE1_REG				0xc3
+#define YT8831_UTP_EEE_MSE2_REG				0x32
+#define YT8831_UTP_EEE_OPTIM_3_REG			0xff
+#define YT8831_UTP_EEE_OPTIM_4_REG			0x372
+#define YT8831_UTP_EEE_OPTIM_5_REG			0x336
+#define YT8831_UTP_EEE_OPTIM_6_REG			0x340
+#define YT8831_UTP_PSAN_OPTIM_REG			0x1e58
+#define YT8831_UTP_1000M_TEMPLATE_OPTIM_1_REG		0x209e
+#define YT8831_UTP_1000M_TEMPLATE_OPTIM_2_REG		0x20a4
+#define YT8831_UTP_1000M_TEMPLATE_OPTIM_3_REG		0x20a9
+#define YT8831_UTP_1000M_TEMPLATE_OPTIM_4_REG		0x20af
+#define YT8831_UTP_1000M_TEMPLATE_OPTIM_5_REG		0x20b4
+#define YT8831_UTP_1000M_TEMPLATE_OPTIM_6_REG		0x20ba
+#define YT8831_UTP_1000M_TEMPLATE_OPTIM_7_REG		0x20bf
+#define YT8831_UTP_1000M_TEMPLATE_OPTIM_8_REG		0x20c5
+#define YT8831_UTP_2500M_TEMPLATE_OPTIM_1_REG		0x20ff
+#define YT8831_UTP_2500M_TEMPLATE_OPTIM_2_REG		0x2100
 
 /* 2b00 84ms
  * 2b01 168ms  *default*
@@ -396,6 +434,16 @@
 
 #define YT8821_CHIP_MODE_AUTO_BX2500_SGMII	0
 #define YT8821_CHIP_MODE_FORCE_BX2500		1
+
+#define YT8831_CHIP_MODE_SEL				0x8802
+#define YT8831_CHIP_MODE_SEL_MASK			GENMASK(2, 0)
+#define YT8831_CHIP_MODE_AUTO_BX2500_SGMII		0x0
+#define YT8831_CHIP_MODE_FORCE_2500BASEX		BIT(0)
+#define YT8831_CHIP_MODE_UTP_TO_FIBER_FORCE		(BIT(2) | BIT(0))
+
+#define YT8831_MDIO_ADDRESS_CTL				0x8004
+#define YT8831_MDIO_ADDRESS_CTL_EN_BROADCAST_MASK	BIT(8)
+#define YT8831_MDIO_ADDRESS_CTL_EN_BROADCAST		BIT(8)
 
 struct yt8521_priv {
 	/* combo_advertising is used for case of YT8521 in combo mode,
@@ -799,6 +847,24 @@ static int yt8521_read_page(struct phy_device *phydev)
 };
 
 /**
+ * yt8831_read_page() - read reg page
+ * @phydev: a pointer to a &struct phy_device
+ *
+ * Returns: current reg space of yt8831 (YT8831_RSSR_FIBER_SPACE/
+ * YT8831_RSSR_UTP_SPACE) or negative errno code
+ */
+static int yt8831_read_page(struct phy_device *phydev)
+{
+	int old_page;
+
+	old_page = ytphy_read_ext(phydev, YT8831_REG_SPACE_SELECT_REG);
+	if (old_page < 0)
+		return old_page;
+
+	return old_page & YT8831_RSSR_SPACE_MASK;
+};
+
+/**
  * yt8521_write_page() - write reg page
  * @phydev: a pointer to a &struct phy_device
  * @page: The reg page(YT8521_RSSR_FIBER_SPACE/YT8521_RSSR_UTP_SPACE) to write.
@@ -816,6 +882,24 @@ static int yt8521_write_page(struct phy_device *phydev, int page)
 		set = YT8521_RSSR_UTP_SPACE;
 
 	return ytphy_modify_ext(phydev, YT8521_REG_SPACE_SELECT_REG, mask, set);
+};
+
+/**
+ * yt8831_write_page() - write reg page
+ * @phydev: a pointer to a &struct phy_device
+ * @page: The reg page(YT8831_RSSR_FIBER_SPACE/YT8831_RSSR_UTP_SPACE) to write.
+ *
+ * Returns: 0 or negative errno code
+ */
+static int yt8831_write_page(struct phy_device *phydev, int page)
+{
+	if (page < 0 || page > YT8831_RSSR_SPACE_MASK) {
+		phydev_err(phydev, "Invalid page %d\n", page);
+		return -EINVAL;
+	}
+
+	return ytphy_modify_ext(phydev, YT8831_REG_SPACE_SELECT_REG,
+					YT8831_RSSR_SPACE_MASK, page);
 };
 
 /**
@@ -1203,6 +1287,96 @@ static int yt8521_probe(struct phy_device *phydev)
 
 	return ytphy_modify_ext_with_lock(phydev, YTPHY_SYNCE_CFG_REG, mask,
 					  val);
+}
+
+static int yt8521_modify_bmcr_paged(struct phy_device *phydev, int page,
+				    u16 mask, u16 set);
+
+static int yt8531_get_downshift(struct phy_device *phydev, u8 *data)
+{
+	int val, cnt, enable;
+
+	val = phy_read_paged(phydev, YT8521_RSSR_UTP_SPACE,
+			     YTPHY_SPEED_AUTO_DOWNGRADE_CONTROL_REG);
+	if (val < 0)
+		return val;
+
+	enable = FIELD_GET(YTPHY_SADCR_SPEED_DOWNGRADE_EN, val);
+	/* The retry limit field stores (attempts - 2): the default 0x3
+	 * means 5 attempts before downgrading.
+	 */
+	cnt = FIELD_GET(YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK, val) + 2;
+
+	*data = enable ? cnt : DOWNSHIFT_DEV_DISABLE;
+
+	return 0;
+}
+
+static int yt8531_set_downshift(struct phy_device *phydev, u8 cnt)
+{
+	u16 mask, set;
+	int err;
+
+	if (cnt == DOWNSHIFT_DEV_DEFAULT_COUNT) {
+		/* Restore the power-on default: enabled, 5 attempts */
+		mask = YTPHY_SADCR_SPEED_DOWNGRADE_EN |
+		       YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK;
+		set = YTPHY_SADCR_SPEED_DOWNGRADE_EN |
+		      FIELD_PREP(YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK, 3);
+	} else if (!cnt) {
+		mask = YTPHY_SADCR_SPEED_DOWNGRADE_EN;
+		set = 0;
+	} else {
+		/* The tunable value is the number of autoneg attempts
+		 * before downgrading, in range [2, 9]. The register
+		 * field stores (cnt - 2).
+		 */
+		if (cnt < YTPHY_SADCR_DOWNSHIFT_ATTEMPTS_MIN ||
+		    cnt > YTPHY_SADCR_DOWNSHIFT_ATTEMPTS_MAX)
+			return -ERANGE;
+
+		mask = YTPHY_SADCR_SPEED_DOWNGRADE_EN |
+		       YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK;
+		set = YTPHY_SADCR_SPEED_DOWNGRADE_EN |
+		      FIELD_PREP(YTPHY_SADCR_SPEED_RETRY_LIMIT_MASK, cnt - 2);
+	}
+
+	/* The SADCR change is only committed by a UTP-space software reset.
+	 * genphy_soft_reset() resets the BMCR of the currently selected
+	 * register space only, and YT8531S powers up with the fiber space
+	 * selected, so reset the UTP space explicitly. Both helpers manage
+	 * their own paged access window.
+	 */
+	err = phy_modify_paged(phydev, YT8521_RSSR_UTP_SPACE,
+			       YTPHY_SPEED_AUTO_DOWNGRADE_CONTROL_REG,
+			       mask, set);
+	if (err < 0)
+		return err;
+
+	return yt8521_modify_bmcr_paged(phydev, YT8521_RSSR_UTP_SPACE,
+					0, BMCR_RESET);
+}
+
+static int yt8531_get_tunable(struct phy_device *phydev,
+			      struct ethtool_tunable *tuna, void *data)
+{
+	switch (tuna->id) {
+	case ETHTOOL_PHY_DOWNSHIFT:
+		return yt8531_get_downshift(phydev, data);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+static int yt8531_set_tunable(struct phy_device *phydev,
+			      struct ethtool_tunable *tuna,
+			      const void *data)
+{
+	if (tuna->id != ETHTOOL_PHY_DOWNSHIFT ||
+	    tuna->len != sizeof(u8))
+		return -EOPNOTSUPP;
+
+	return yt8531_set_downshift(phydev, *(const u8 *)data);
 }
 
 static int yt8531_probe(struct phy_device *phydev)
@@ -2555,6 +2729,198 @@ static int yt8521_get_features(struct phy_device *phydev)
 }
 
 /**
+ * yt8831_config_aneg() - config auto-aneg
+ * @phydev: a pointer to a &struct phy_device
+ *
+ * Returns: 0 or negative errno code
+ */
+static int yt8831_config_aneg(struct phy_device *phydev)
+{
+	int ret;
+
+	ret = genphy_config_aneg(phydev);
+	if (ret < 0)
+		return ret;
+
+	return genphy_c45_config_aneg(phydev);
+}
+
+/**
+ * yt8831_top_init() - top init
+ * @phydev: a pointer to a &struct phy_device
+ *
+ * Returns: 0 or negative errno code
+ */
+static int yt8831_top_init(struct phy_device *phydev)
+{
+	int old_page, ret;
+
+	ret = old_page = phy_select_page(phydev, YT8831_RSSR_TOP_SPACE);
+	if (old_page < 0) {
+		phydev_err(phydev, "Failed to select page: %d\n",
+				old_page);
+		return old_page;
+	}
+
+	/* Disable broadcast */
+	ret = ytphy_write_ext(phydev, YT8831_MDIO_ADDRESS_CTL, 0x101f);
+	if (ret < 0)
+		goto err_restore_page;
+
+	/* Gloable Reset */
+	ret = ytphy_write_ext(phydev, YT8831_CHIP_MODE_SEL, 0x2000);
+	if (ret < 0)
+		goto err_restore_page;
+
+err_restore_page:
+	return phy_restore_page(phydev, old_page, ret);
+}
+
+/**
+ * yt8831_serdes_init() - serdes init
+ * @phydev: a pointer to a &struct phy_device
+ *
+ * Returns: 0 or negative errno code
+ */
+static int yt8831_serdes_init(struct phy_device *phydev)
+{
+	int old_page, ret;
+
+	ret = old_page = phy_select_page(phydev, YT8831_RSSR_FIBER_SPACE);
+	if (old_page < 0) {
+		phydev_err(phydev, "Failed to select page: %d\n",
+				old_page);
+		return old_page;
+	}
+
+	ret = ytphy_write_ext(phydev, YT8831_SDS_WRITE_PROTECT_REG, 0x1);
+	if (ret < 0)
+		goto err_restore_page;
+
+	ret = ytphy_write_ext(phydev, YT8831_SDS_SGMII_OUTPUT_REG, 0xc4);
+	if (ret < 0)
+		goto err_restore_page;
+
+	/* softreset sds space */
+	ret = __phy_modify(phydev, MII_BMCR, BMCR_RESET, BMCR_RESET);
+	if (ret < 0)
+		goto err_restore_page;
+
+err_restore_page:
+	return phy_restore_page(phydev, old_page, ret);
+}
+
+/**
+ * yt8831_utp_init() - utp init
+ * @phydev: a pointer to a &struct phy_device
+ *
+ * Returns: 0 or negative errno code
+ */
+static int yt8831_utp_init(struct phy_device *phydev)
+{
+	int ret;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_WRITE_PROTECT_REG, 0x3);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_DAC_DATA_DLY_REG, 0xc8d);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_REF_DLAY_SEL_REG, 0xa426);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_REF_DLAY_SEL_FEXT_REG, 0x8009);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_COE_MANUAL_SHIFT_SEL_2500_REG, 6);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_EEE_OPTIM_1_REG, 0x1001);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_EEE_OPTIM_2_REG, 0x7c52);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_EEE_MSE1_REG, 0x3848);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_EEE_MSE2_REG, 0xa8e8);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_EEE_OPTIM_3_REG, 0x5200);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_EEE_OPTIM_4_REG, 0x5849);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_EEE_OPTIM_5_REG, 0xb00a);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_EEE_OPTIM_6_REG, 0x3022);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_PSAN_OPTIM_REG, 0x1f10);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_1000M_TEMPLATE_OPTIM_1_REG, 0x22c8);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_1000M_TEMPLATE_OPTIM_2_REG, 0x2437);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_1000M_TEMPLATE_OPTIM_3_REG, 0x22c8);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_1000M_TEMPLATE_OPTIM_4_REG, 0x2437);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_1000M_TEMPLATE_OPTIM_5_REG, 0x22c8);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_1000M_TEMPLATE_OPTIM_6_REG, 0x2437);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_1000M_TEMPLATE_OPTIM_7_REG, 0x22c8);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_1000M_TEMPLATE_OPTIM_8_REG, 0x2437);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_2500M_TEMPLATE_OPTIM_1_REG, 0x1111);
+	if (ret < 0)
+		goto err;
+
+	ret = ytphy_write_ext_with_lock(phydev, YT8831_UTP_2500M_TEMPLATE_OPTIM_2_REG, 0x1111);
+	if (ret < 0)
+		goto err;
+
+err:
+	return ret;
+}
+
+/**
  * yt861x_config_init() - apply the auto sleep setting to the PHY
  * @phydev: a pointer to a &struct phy_device
  *
@@ -2993,6 +3359,37 @@ static int yt8821_soft_reset(struct phy_device *phydev)
 }
 
 /**
+ * yt8831_config_init() - phy initialisation
+ * @phydev: a pointer to a &struct phy_device
+ *
+ * Returns: 0 or negative errno code
+ */
+static int yt8831_config_init(struct phy_device *phydev)
+{
+	int ret;
+
+	__set_bit(PHY_INTERFACE_MODE_2500BASEX,
+			phydev->possible_interfaces);
+
+	__set_bit(PHY_INTERFACE_MODE_SGMII,
+			phydev->possible_interfaces);
+
+	ret = yt8831_top_init(phydev);
+	if (ret < 0)
+		return ret;
+
+	ret = yt8831_serdes_init(phydev);
+	if (ret < 0)
+		return ret;
+
+	ret = yt8831_utp_init(phydev);
+	if (ret < 0)
+		return ret;
+
+	return genphy_soft_reset(phydev);
+}
+
+/**
  * yt8821_config_init() - phy initializatioin
  * @phydev: a pointer to a &struct phy_device
  *
@@ -3100,6 +3497,53 @@ static void yt8821_update_interface(struct phy_device *phydev)
 		phydev_warn(phydev, "phy speed err :%d\n", phydev->speed);
 		break;
 	}
+}
+
+/**
+ * yt8831_read_status() -  determines the negotiated speed and duplex
+ * @phydev: a pointer to a &struct phy_device
+ *
+ * Returns: 0 or negative errno code
+ */
+static int yt8831_read_status(struct phy_device *phydev)
+{
+	int ret;
+	int val;
+
+	phydev->speed = SPEED_UNKNOWN;
+	phydev->duplex = DUPLEX_UNKNOWN;
+
+	ret = genphy_read_status(phydev);
+	if (ret < 0)
+		return ret;
+
+	ret = genphy_c45_read_status(phydev);
+	if (ret < 0)
+		return ret;
+
+	ret = phy_read(phydev, YTPHY_SPECIFIC_STATUS_REG);
+	if (ret < 0)
+		return ret;
+
+	val = ret;
+	if (val & YTPHY_SSR_LINK) {
+		phydev->link = true;
+		yt8821_adjust_status(phydev, val);
+	}
+
+	phydev_dbg(phydev,
+		"%s, phy addr: %d, link %s\n",
+		__func__, phydev->mdio.addr, phydev->link ? "up" : "down");
+
+	val = ytphy_read_ext_with_lock(phydev, YT8831_CHIP_MODE_SEL);
+	if (val < 0)
+		return val;
+
+	if (FIELD_GET(YT8521_CCR_MODE_SEL_MASK, val) ==
+	    YT8821_CHIP_MODE_AUTO_BX2500_SGMII)
+		yt8821_update_interface(phydev);
+
+	return 0;
 }
 
 /**
@@ -3280,6 +3724,8 @@ static struct phy_driver motorcomm_phy_drvs[] = {
 	},
 	{
 		PHY_ID_MATCH_EXACT(PHY_ID_YT8531),
+		.get_tunable	= yt8531_get_tunable,
+		.set_tunable	= yt8531_set_tunable,
 		.name		= "YT8531 Gigabit Ethernet",
 		.probe		= yt8531_probe,
 		.config_init	= yt8531_config_init,
@@ -3294,6 +3740,8 @@ static struct phy_driver motorcomm_phy_drvs[] = {
 	},
 	{
 		PHY_ID_MATCH_EXACT(PHY_ID_YT8531S),
+		.get_tunable	= yt8531_get_tunable,
+		.set_tunable	= yt8531_set_tunable,
 		.name		= "YT8531S Gigabit Ethernet",
 		.get_features	= yt8521_get_features,
 		.probe		= yt8521_probe,
@@ -3337,11 +3785,25 @@ static struct phy_driver motorcomm_phy_drvs[] = {
 		.suspend		= yt8821_suspend,
 		.resume			= yt8821_resume,
 	},
+	{
+		PHY_ID_MATCH_EXACT(PHY_ID_YT8831),
+		.name			= "YT8831/YT8821-VD 2.5Gbps PHY",
+		.get_features		= yt8821_get_features,
+		.read_page		= yt8831_read_page,
+		.write_page		= yt8831_write_page,
+		.config_aneg		= yt8831_config_aneg,
+		.aneg_done		= genphy_aneg_done,
+		.config_init		= yt8831_config_init,
+		.read_status		= yt8831_read_status,
+		.soft_reset		= genphy_soft_reset,
+		.suspend		= genphy_suspend,
+		.resume			= genphy_resume,
+	},
 };
 
 module_phy_driver(motorcomm_phy_drvs);
 
-MODULE_DESCRIPTION("Motorcomm 8511/8521/8531/8531S/861x/8821 PHY driver");
+MODULE_DESCRIPTION("Motorcomm 8511/8521/8531/8531S/861x/8821/8831 PHY driver");
 MODULE_AUTHOR("Peter Geis");
 MODULE_AUTHOR("Frank");
 MODULE_LICENSE("GPL");
@@ -3354,6 +3816,7 @@ static const struct mdio_device_id __maybe_unused motorcomm_tbl[] = {
 	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8531S) },
 	{ PHY_ID_MATCH_EXACT(PHY_ID_INT861X) },
 	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8821) },
+	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8831) },
 	{ /* sentinel */ }
 };
 

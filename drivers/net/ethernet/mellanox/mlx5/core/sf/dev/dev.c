@@ -343,7 +343,7 @@ void mlx5_sf_dev_table_create(struct mlx5_core_dev *dev)
 	}
 
 	table->dev = dev;
-	table->sf_bar_length = 1 << (MLX5_CAP_GEN(dev, log_min_sf_size) + 12);
+	table->sf_bar_length = BIT_ULL(MLX5_CAP_GEN(dev, log_min_sf_size) + 12);
 	table->base_address = pci_resource_start(dev->pdev, 2);
 	xa_init(&table->devices);
 	dev->priv.sf_dev_table = table;

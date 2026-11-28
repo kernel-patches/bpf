@@ -3,7 +3,6 @@
  * Copyright (C) 2020-21 Intel Corporation.
  */
 
-#include <linux/acpi.h>
 #include <linux/bitfield.h>
 #include <linux/module.h>
 #include <linux/suspend.h>
@@ -16,9 +15,6 @@
 MODULE_DESCRIPTION("IOSM Driver");
 MODULE_LICENSE("GPL v2");
 
-/* WWAN GUID */
-static guid_t wwan_acpi_guid = GUID_INIT(0xbad01b75, 0x22a8, 0x4f48, 0x87, 0x92,
-				       0xbd, 0xde, 0x94, 0x67, 0x74, 0x7d);
 static bool pci_registered;
 
 static void ipc_pcie_resources_release(struct iosm_pcie *ipc_pcie)
@@ -229,34 +225,6 @@ static void ipc_pcie_config_init(struct iosm_pcie *ipc_pcie)
 	ipc_pcie->doorbell_capture = IPC_CAPTURE_PTR_REG_0;
 }
 
-/* This will read the BIOS WWAN RTD3 settings:
- * D0L1.2/D3L2/Disabled
- */
-static enum ipc_pcie_sleep_state ipc_pcie_read_bios_cfg(struct device *dev)
-{
-	enum ipc_pcie_sleep_state sleep_state = IPC_PCIE_D0L12;
-	union acpi_object *object;
-	acpi_handle handle_acpi;
-
-	handle_acpi = ACPI_HANDLE(dev);
-	if (!handle_acpi) {
-		pr_debug("pci device is NOT ACPI supporting device\n");
-		goto default_ret;
-	}
-
-	object = acpi_evaluate_dsm(handle_acpi, &wwan_acpi_guid, 0, 3, NULL);
-	if (!object)
-		goto default_ret;
-
-	if (object->integer.value == 3)
-		sleep_state = IPC_PCIE_D3L2;
-
-	ACPI_FREE(object);
-
-default_ret:
-	return sleep_state;
-}
-
 static int ipc_pcie_probe(struct pci_dev *pci,
 			  const struct pci_device_id *pci_id)
 {
@@ -303,12 +271,6 @@ static int ipc_pcie_probe(struct pci_dev *pci,
 	ipc_pcie_config_aspm(ipc_pcie);
 	dev_dbg(ipc_pcie->dev, "PCIe device enabled.");
 
-	/* Read WWAN RTD3 BIOS Setting
-	 */
-	ipc_pcie->d3l2_support = ipc_pcie_read_bios_cfg(&pci->dev);
-
-	ipc_pcie->suspend = 0;
-
 	if (ipc_pcie_resources_request(ipc_pcie))
 		goto resources_req_fail;
 
@@ -340,43 +302,6 @@ static const struct pci_device_id iosm_ipc_ids[] = {
 };
 MODULE_DEVICE_TABLE(pci, iosm_ipc_ids);
 
-/* Enter sleep in s2idle case
- */
-static int __maybe_unused ipc_pcie_suspend_s2idle(struct iosm_pcie *ipc_pcie)
-{
-	ipc_cp_irq_sleep_control(ipc_pcie, IPC_MEM_DEV_PM_FORCE_SLEEP);
-
-	/* Complete all memory stores before setting bit */
-	smp_mb__before_atomic();
-
-	set_bit(0, &ipc_pcie->suspend);
-
-	/* Complete all memory stores after setting bit */
-	smp_mb__after_atomic();
-
-	ipc_imem_pm_s2idle_sleep(ipc_pcie->imem, true);
-
-	return 0;
-}
-
-/* Resume from sleep in s2idle case
- */
-static int __maybe_unused ipc_pcie_resume_s2idle(struct iosm_pcie *ipc_pcie)
-{
-	ipc_cp_irq_sleep_control(ipc_pcie, IPC_MEM_DEV_PM_FORCE_ACTIVE);
-
-	ipc_imem_pm_s2idle_sleep(ipc_pcie->imem, false);
-
-	/* Complete all memory stores before clearing bit. */
-	smp_mb__before_atomic();
-
-	clear_bit(0, &ipc_pcie->suspend);
-
-	/* Complete all memory stores after clearing bit. */
-	smp_mb__after_atomic();
-	return 0;
-}
-
 int __maybe_unused ipc_pcie_suspend(struct iosm_pcie *ipc_pcie)
 {
 	/* The HAL shall ask the shared memory layer whether D3 is allowed. */
@@ -406,14 +331,10 @@ static int __maybe_unused ipc_pcie_suspend_cb(struct device *dev)
 
 	ipc_pcie = pci_get_drvdata(pdev);
 
-	switch (ipc_pcie->d3l2_support) {
-	case IPC_PCIE_D0L12:
-		ipc_pcie_suspend_s2idle(ipc_pcie);
-		break;
-	case IPC_PCIE_D3L2:
-		ipc_pcie_suspend(ipc_pcie);
-		break;
-	}
+	/* The PCI core may put the device into D3, so the modem has to be
+	 * told with the host sleep message first.
+	 */
+	ipc_pcie_suspend(ipc_pcie);
 
 	return 0;
 }
@@ -427,14 +348,7 @@ static int __maybe_unused ipc_pcie_resume_cb(struct device *dev)
 
 	ipc_pcie = pci_get_drvdata(pdev);
 
-	switch (ipc_pcie->d3l2_support) {
-	case IPC_PCIE_D0L12:
-		ipc_pcie_resume_s2idle(ipc_pcie);
-		break;
-	case IPC_PCIE_D3L2:
-		ipc_pcie_resume(ipc_pcie);
-		break;
-	}
+	ipc_pcie_resume(ipc_pcie);
 
 	return 0;
 }

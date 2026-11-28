@@ -27,6 +27,7 @@
  */
 #define LAN9303_CHIP_REV 0x14
 # define LAN9303_CHIP_ID 0x9303
+# define LAX9303_CHIP_ID 0x9E04
 # define LAN9352_CHIP_ID 0x9352
 # define LAN9353_CHIP_ID 0x9353
 # define LAN9354_CHIP_ID 0x9354
@@ -903,7 +904,8 @@ static int lan9303_check_device(struct lan9303 *chip)
 	}
 
 	if (((reg >> 16) != LAN9303_CHIP_ID) &&
-	    ((reg >> 16) != LAN9354_CHIP_ID)) {
+	    ((reg >> 16) != LAN9354_CHIP_ID) &&
+	    ((reg >> 16) != LAX9303_CHIP_ID)) {
 		dev_err(chip->dev, "unexpected device found: LAN%4.4X\n",
 			reg >> 16);
 		return -ENODEV;

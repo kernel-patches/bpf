@@ -71,10 +71,11 @@ static int run_tests(void)
 			close(fd);
 
 			if (s->expect < 0) {
-				msg1 = strerror_r(errno, err_string1, ERR_STRING_SZ);
+				msg1 = strerror_r(-s->expect, err_string1,
+						  ERR_STRING_SZ);
 
 				fprintf(stderr, "socket(%d, %d, %d) expected "
-					"success got err (%s)\n",
+					"err (%s) got success\n",
 					s->domain, s->type, s->protocol,
 					msg1);
 

@@ -2032,14 +2032,17 @@ static bool __pktgen_NN_threads(const struct pktgen_net *pn,
 	bool exact = (remove == FIND);
 
 	list_for_each_entry(t, &pn->pktgen_threads, th_list) {
+		if_lock(t);
 		pkt_dev = pktgen_find_dev(t, ifname, exact);
 		if (pkt_dev) {
 			if (remove) {
 				pkt_dev->removal_mark = 1;
 				t->control |= T_REMDEV;
 			}
+			if_unlock(t);
 			return true;
 		}
+		if_unlock(t);
 	}
 	return false;
 }
@@ -3774,8 +3777,9 @@ static struct pktgen_dev *pktgen_find_dev(struct pktgen_thread *t,
 	struct pktgen_dev *p, *pkt_dev = NULL;
 	size_t len = strlen(ifname);
 
-	rcu_read_lock();
-	list_for_each_entry_rcu(p, &t->if_list, list)
+	lockdep_assert_held(&t->if_lock);
+
+	list_for_each_entry(p, &t->if_list, list)
 		if (strncmp(p->odevname, ifname, len) == 0) {
 			if (p->odevname[len]) {
 				if (exact || p->odevname[len] != '@')
@@ -3785,7 +3789,6 @@ static struct pktgen_dev *pktgen_find_dev(struct pktgen_thread *t,
 			break;
 		}
 
-	rcu_read_unlock();
 	pr_debug("find_dev(%s) returning %p\n", ifname, pkt_dev);
 	return pkt_dev;
 }

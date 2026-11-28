@@ -24,6 +24,8 @@ tests="
 	nat_connect_v4				ip4-nat-xon: Basic ipv4 tcp connection via NAT
 	nat_related_v4				ip4-nat-related: ICMP related matches work with SNAT
 	netlink_checks				ovsnl: validate netlink attrs and settings
+	dp_features				ovsdp: failed set keeps bits
+	dp_features_recirc			ovsdp: recirc bit survives
 	upcall_interfaces			ovs: test the upcall interfaces
 	tunnel_metadata				ovs: test extraction of tunnel metadata
 	drop_reason				drop: test drop reasons are emitted
@@ -115,11 +117,15 @@ ovs_sbx() {
 }
 
 ovs_add_dp () {
+	local rc
+
 	info "Adding DP/Bridge IF: sbx:$1 dp:$2 {$3, $4, $5}"
 	sbxname="$1"
 	shift
 	ovs_sbx "$sbxname" python3 $ovs_base/ovs-dpctl.py add-dp $*
+	rc=$?
 	on_exit "ovs_sbx $sbxname python3 $ovs_base/ovs-dpctl.py del-dp $1;"
+	return $rc
 }
 
 ovs_add_if () {
@@ -1406,6 +1412,201 @@ test_netlink_checks () {
 		info "failed - error not generated"
 		return 1
 	fi
+	return 0
+}
+
+ovs_dp_features_set() {
+	python3 "$ovs_base"/ovs-dpctl.py set-dp "$@"
+}
+
+ovs_dp_features_check() {
+	local out
+
+	# A datapath that cannot be read and a datapath that reports other
+	# features are different faults, so they return different statuses.
+	# ovs-dpctl prints a missing datapath instead of failing, and it leaves
+	# the features line out when the kernel does not report them, so both
+	# have to be recognised in the output. It prints the value with %X, so
+	# convert before comparing.
+	out=$(python3 "$ovs_base"/ovs-dpctl.py show "$1") || {
+		printf '# could not run ovs-dpctl show %s\n' "$1" >&2
+		return 2
+	}
+	case $out in
+	*"No DP found"*)
+		printf '# the datapath %s does not exist\n' "$1" >&2
+		return 2
+		;;
+	*"features: 0x"*) ;;
+	*)
+		printf '# the datapath %s reports no features\n' "$1" >&2
+		return 2
+		;;
+	esac
+	printf '%s\n' "$out" |
+		grep -q "features: 0x$(printf '%X' "$2")\$"
+}
+
+# info() writes debug.log, and a failing run deletes that file, so a FAIL
+# would reach CI with no reason. ovs_sbx sends a command's stdout to that
+# file too, which is why this writes to stderr: it is the one stream that
+# still reaches the test runner from inside ovs_sbx. Do not duplicate stdout
+# for this. The suite spawns daemons that outlive the script, and a second
+# handle on the runner's pipe keeps it open after the script exits, which is
+# a run that never finishes.
+ovs_fail() {
+	printf '# %s\n' "$*" >&2
+	return 1
+}
+
+ovs_dp_features_expect() {
+	local rc
+
+	ovs_dp_features_check "$1" "$2"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		# The check already said why it could not answer; this adds the
+		# expectation that was not met.
+		ovs_fail "$3"
+		return 1
+	fi
+	return 0
+}
+
+# EOPNOTSUPP is not in the base errno list and its number differs by
+# architecture, so ask python instead of hard-coding one.
+ovs_errno() {
+	local n
+
+	n=$(python3 -c "import errno; print(errno.$1)" 2>/dev/null)
+	if [ -z "$n" ]; then
+		printf '# could not read errno.%s from python\n' "$1" >&2
+		return 1
+	fi
+	printf '%s\n' "$n"
+}
+
+# dp_features test
+# - a set with the dispatch bit and pids is accepted and reported back
+# - a set with an empty per-cpu-pids is rejected with EINVAL and leaves
+#   the features as they were
+# - an outdated new request drops the features, and sets work afterwards
+test_dp_features() {
+	local t="test_dp_features"
+	local dp="dpfeat0"
+
+	sbx_add "$t" || return $?
+	ovs_add_dp "$t" "$dp" ||
+	    { ovs_fail "the datapath was not created"; return 1; }
+
+	info "clear the datapath features"
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 0 ||
+	    { ovs_fail "the datapath features could not be cleared"; return 1; }
+	ovs_sbx "$t" ovs_dp_features_expect "$dp" 0 \
+	    "features were not cleared" || return 1
+
+	# 8 is OVS_DP_F_DISPATCH_UPCALL_PER_CPU, the bit that makes the
+	# kernel read per-cpu-pids.
+	info "a set with the dispatch bit and pids is accepted"
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 \
+	    --per-cpu-pids 1,2 ||
+	    { ovs_fail "the set with dispatch and pids failed"; return 1; }
+	ovs_sbx "$t" ovs_dp_features_expect "$dp" 8 \
+	    "the accepted set was not applied" || return 1
+
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 0 ||
+	    { ovs_fail "the features could not be cleared"; return 1; }
+
+	# ovs-dpctl sends the empty list as an attribute with no payload,
+	# which is what the kernel rejects.
+	info "a set with an empty per-cpu-pids is rejected"
+	einval=$(ovs_errno EINVAL) || return 1
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 \
+	    --per-cpu-pids "" &> /dev/null
+	rc=$?
+	[ "$rc" -eq "$einval" ] || {
+		ovs_fail "the empty per-cpu-pids set failed with $rc"
+		return 1
+	}
+
+	info "the rejected set keeps the features it had"
+	ovs_sbx "$t" ovs_dp_features_expect "$dp" 0 \
+	    "the rejected set changed the features" || return 1
+
+	# An outdated client that asks for an existing datapath again makes
+	# the kernel drop its features. The datapath keeps working.
+	info "an outdated new request drops the features"
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 ||
+	    { ovs_fail "the datapath rejected the dispatch bit"; return 1; }
+	ovs_sbx "$t" python3 "$ovs_base"/ovs-dpctl.py add-dp "$dp" -V 1:0 || {
+		ovs_fail "the outdated add request did not run"
+		return 1
+	}
+	ovs_sbx "$t" ovs_dp_features_expect "$dp" 0 \
+	    "the outdated new request did not drop the features" || return 1
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 || {
+		ovs_fail "the datapath stopped accepting sets"
+		return 1
+	}
+	ovs_sbx "$t" ovs_dp_features_expect "$dp" 8 \
+	    "the reset datapath took no features" || return 1
+
+	return 0
+}
+
+# dp_features_recirc test
+# - a datapath that holds the recirc bit keeps it across a rejected set
+# - an outdated new request drops the features
+# - the bit needs CONFIG_NET_TC_SKB_EXT, so the test skips without it
+test_dp_features_recirc() {
+	local t="test_dp_features_recirc"
+	local dp="dpfeat1"
+
+	sbx_add "$t" || return $?
+	ovs_add_dp "$t" "$dp" ||
+	    { ovs_fail "the datapath was not created"; return 1; }
+
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 0 ||
+	    { ovs_fail "the datapath features could not be cleared"; return 1; }
+
+	# 4 is OVS_DP_F_TC_RECIRC_SHARING. The kernel takes the bit only when
+	# the tc skb extension is compiled in.
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 4 &> /dev/null
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		eopnotsupp=$(ovs_errno EOPNOTSUPP) || return 1
+		if [ "$rc" -eq "$eopnotsupp" ]; then
+			# info() only writes debug.log, which CI does not keep.
+			printf '# no tc skb extension, skipping recirc\n' >&2
+			ovs_exit_sig
+			return "$ksft_skip"
+		fi
+		ovs_fail "the recirc set failed with $rc"
+		return 1
+	fi
+	ovs_sbx "$t" ovs_dp_features_expect "$dp" 4 \
+	    "the accepted recirc set was not applied" || return 1
+
+	info "the rejected set keeps the recirc bit"
+	einval=$(ovs_errno EINVAL) || return 1
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 \
+	    --per-cpu-pids "" &> /dev/null
+	rc=$?
+	[ "$rc" -eq "$einval" ] || {
+		ovs_fail "the rejected set failed with $rc"
+		return 1
+	}
+	ovs_sbx "$t" ovs_dp_features_expect "$dp" 4 \
+	    "the rejected set dropped the recirc bit" || return 1
+
+	info "an outdated new request drops the features"
+	ovs_sbx "$t" python3 "$ovs_base"/ovs-dpctl.py add-dp "$dp" -V 1:0 || {
+		ovs_fail "the outdated add request did not run"
+		return 1
+	}
+	ovs_sbx "$t" ovs_dp_features_expect "$dp" 0 \
+	    "the outdated new request did not drop the features" || return 1
+
 	return 0
 }
 

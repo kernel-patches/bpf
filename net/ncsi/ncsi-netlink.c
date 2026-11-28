@@ -106,37 +106,42 @@ static int ncsi_write_package_info(struct sk_buff *skb,
 	}
 
 	found = false;
+	rcu_read_lock();
 	NCSI_FOR_EACH_PACKAGE(ndp, np) {
 		if (np->id != id)
 			continue;
 		pnest = nla_nest_start_noflag(skb, NCSI_PKG_ATTR);
-		if (!pnest)
-			return -ENOMEM;
+		if (!pnest) {
+			rc = -ENOMEM;
+			goto out_rcu;
+		}
 		rc = nla_put_u32(skb, NCSI_PKG_ATTR_ID, np->id);
 		if (rc) {
 			nla_nest_cancel(skb, pnest);
-			return rc;
+			goto out_rcu;
 		}
 		if ((0x1 << np->id) == ndp->package_whitelist)
 			nla_put_flag(skb, NCSI_PKG_ATTR_FORCED);
 		cnest = nla_nest_start_noflag(skb, NCSI_PKG_ATTR_CHANNEL_LIST);
 		if (!cnest) {
 			nla_nest_cancel(skb, pnest);
-			return -ENOMEM;
+			rc = -ENOMEM;
+			goto out_rcu;
 		}
 		NCSI_FOR_EACH_CHANNEL(np, nc) {
 			nest = nla_nest_start_noflag(skb, NCSI_CHANNEL_ATTR);
 			if (!nest) {
 				nla_nest_cancel(skb, cnest);
 				nla_nest_cancel(skb, pnest);
-				return -ENOMEM;
+				rc = -ENOMEM;
+				goto out_rcu;
 			}
 			rc = ncsi_write_channel_info(skb, ndp, nc);
 			if (rc) {
 				nla_nest_cancel(skb, nest);
 				nla_nest_cancel(skb, cnest);
 				nla_nest_cancel(skb, pnest);
-				return rc;
+				goto out_rcu;
 			}
 			nla_nest_end(skb, nest);
 		}
@@ -145,10 +150,11 @@ static int ncsi_write_package_info(struct sk_buff *skb,
 		found = true;
 	}
 
-	if (!found)
-		return -ENODEV;
+	rc = found ? 0 : -ENODEV;
 
-	return 0;
+out_rcu:
+	rcu_read_unlock();
+	return rc;
 }
 
 static int ncsi_pkg_info_nl(struct sk_buff *msg, struct genl_info *info)
@@ -236,9 +242,13 @@ static int ncsi_pkg_info_all_nl(struct sk_buff *skb,
 
 	package_id = cb->args[0];
 	package = NULL;
+	rcu_read_lock();
 	NCSI_FOR_EACH_PACKAGE(ndp, np)
-		if (np->id == package_id)
+		if (np->id == package_id) {
 			package = np;
+			break;
+		}
+	rcu_read_unlock();
 
 	if (!package)
 		return 0; /* done */
@@ -255,7 +265,7 @@ static int ncsi_pkg_info_all_nl(struct sk_buff *skb,
 		rc = -EMSGSIZE;
 		goto err;
 	}
-	rc = ncsi_write_package_info(skb, ndp, package->id);
+	rc = ncsi_write_package_info(skb, ndp, package_id);
 	if (rc) {
 		nla_nest_cancel(skb, attr);
 		goto err;

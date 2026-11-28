@@ -203,6 +203,13 @@
 #	on host A and B on lo reachable via both routers. Host A and B
 #	addresses have multipath routes to each other, b_r1 mtu = 1500.
 #	Check that PMTU exceptions are created for both paths.
+#
+# - pmtu_ipv4_mp_asym_exceptions
+#	Same topology as pmtu_ipv4_mp_exceptions, with b_r1 mtu = 1400,
+#	a_r2 mtu = 1350 and b_r2 mtu = 1300. Pick a flow through each router
+#	and check that a Fragmentation Needed from R1 creates a PMTU
+#	exception on the path via R1 only, as the path via R2 can't carry
+#	1400, then that a flow through R2 lowers the PMTU of both paths
 
 source lib.sh
 
@@ -272,7 +279,8 @@ tests="
 	list_flush_ipv6_exception	ipv6: list and flush cached exceptions	1
 	pmtu_ipv4_route_change		ipv4: PMTU exception w/route replace	1
 	pmtu_ipv6_route_change		ipv6: PMTU exception w/route replace	1
-	pmtu_ipv4_mp_exceptions		ipv4: PMTU multipath nh exceptions	1"
+	pmtu_ipv4_mp_exceptions		ipv4: PMTU multipath nh exceptions	1
+	pmtu_ipv4_mp_asym_exceptions	ipv4: PMTU multipath exceptions, asym MTU	1"
 
 # Addressing and routing for tests with routers: four network segments, with
 # index SEGMENT between 1 and 4, a common prefix (PREFIX4 or PREFIX6) and an
@@ -350,6 +358,7 @@ tunnel6_b_addr="fd00:2::b"
 tunnel6_mask="64"
 
 host4_a_addr="192.168.99.99"
+host4_a_net="192.168.97"
 host4_b_addr="192.168.88.88"
 
 dummy6_0_prefix="fc00:1000::"
@@ -2405,6 +2414,69 @@ test_pmtu_ipv4_mp_exceptions() {
 
 	check_pmtu_value "1500" "${pmtu_a_R1}" "exceeding MTU (veth_A-R1)" || return 1
 	check_pmtu_value "1500" "${pmtu_a_R2}" "exceeding MTU (veth_A-R2)" || return 1
+}
+
+# Pick a source address out of ${host4_a_net} for a flow from host A to
+# ${1} through ${2}: the IPv4 multipath hash covers addresses only by
+# default
+mp_flow_via() {
+	dst="${1}"
+	oif="${2}"
+
+	for i in $(seq 1 32); do
+		flow="${host4_a_net}.${i}"
+		${ns_a} ip route get ${dst} from ${flow} |
+			grep -q " dev ${oif} " && echo "${flow}" && return
+	done
+
+	return 1
+}
+
+test_pmtu_ipv4_mp_asym_exceptions() {
+	setup namespaces routing multipath || return $ksft_skip
+
+	trace "${ns_a}"  veth_A-R1    "${ns_r1}" veth_R1-A \
+	      "${ns_r1}" veth_R1-B    "${ns_b}"  veth_B-R1 \
+	      "${ns_a}"  veth_A-R2    "${ns_r2}" veth_R2-A \
+	      "${ns_r2}" veth_R2-B    "${ns_b}"  veth_B-R2
+
+	# Source addresses for mp_flow_via(), with routes back to them
+	run_cmd ${ns_a} ip route add local ${host4_a_net}.0/24 dev lo
+	run_cmd ${ns_r1} ip route add ${host4_a_net}.0/24 via ${prefix4}.${a_r1}.1
+	run_cmd ${ns_r2} ip route add ${host4_a_net}.0/24 via ${prefix4}.${a_r2}.1
+
+	# Set up initial MTU values: 1400 behind R1, 1350 to R2, 1300 behind R2
+	mtu "${ns_a}"  veth_A-R1 2000
+	mtu "${ns_r1}" veth_R1-A 2000
+	mtu "${ns_r1}" veth_R1-B 1400
+	mtu "${ns_b}"  veth_B-R1 1400
+
+	mtu "${ns_a}"  veth_A-R2 1350
+	mtu "${ns_r2}" veth_R2-A 1350
+	mtu "${ns_r2}" veth_R2-B 1300
+	mtu "${ns_b}"  veth_B-R2 1300
+
+	flow_r1="$(mp_flow_via ${host4_b_addr} veth_A-R1)" || {
+		err "  no flow through veth_A-R1 found"; return 1; }
+	flow_r2="$(mp_flow_via ${host4_b_addr} veth_A-R2)" || {
+		err "  no flow through veth_A-R2 found"; return 1; }
+
+	# A Fragmentation Needed from R1 is cached on the path via R1, not on
+	# the path via R2, whose link can't carry 1400
+	run_cmd ${ns_a} ping -I ${flow_r1} -q -M want -i 0.1 -c 1 -s 1800 "${host4_b_addr}"
+
+	pmtu_a_R1="$(route_get_dst_pmtu_from_exception "${ns_a}" "${host4_b_addr}" oif veth_A-R1)"
+	pmtu_a_R2="$(route_get_dst_pmtu_from_exception "${ns_a}" "${host4_b_addr}" oif veth_A-R2)"
+	check_pmtu_value "1400" "${pmtu_a_R1}" "exceeding MTU via R1 (veth_A-R1)" || return 1
+	check_pmtu_value "" "${pmtu_a_R2}" "exceeding MTU via R1 (veth_A-R2)" || return 1
+
+	# The lower MTU behind R2 lowers the PMTU of both paths
+	run_cmd ${ns_a} ping -I ${flow_r2} -q -M want -i 0.1 -c 1 -s 1280 "${host4_b_addr}"
+
+	pmtu_a_R1="$(route_get_dst_pmtu_from_exception "${ns_a}" "${host4_b_addr}" oif veth_A-R1)"
+	pmtu_a_R2="$(route_get_dst_pmtu_from_exception "${ns_a}" "${host4_b_addr}" oif veth_A-R2)"
+	check_pmtu_value "1300" "${pmtu_a_R1}" "exceeding MTU via R2 (veth_A-R1)" || return 1
+	check_pmtu_value "1300" "${pmtu_a_R2}" "exceeding MTU via R2 (veth_A-R2)" || return 1
 }
 
 usage() {

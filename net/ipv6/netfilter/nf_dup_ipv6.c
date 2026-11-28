@@ -9,6 +9,7 @@
 #include <linux/percpu.h>
 #include <linux/skbuff.h>
 #include <linux/netfilter.h>
+#include <linux/netfilter_bridge.h>
 #include <net/ipv6.h>
 #include <net/ip6_route.h>
 #include <net/netfilter/ipv6/nf_dup_ipv6.h>
@@ -47,6 +48,11 @@ static bool nf_dup_ipv6_route(struct net *net, struct sk_buff *skb,
 void nf_dup_ipv6(struct net *net, struct sk_buff *skb, unsigned int hooknum,
 		 const struct in6_addr *gw, int oif)
 {
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
+	if (nf_bridge_info_exists(skb))
+		return;
+#endif
+
 	local_bh_disable();
 	if (current->in_nf_duplicate)
 		goto out;

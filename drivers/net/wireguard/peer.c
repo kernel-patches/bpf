@@ -91,6 +91,19 @@ static void peer_make_dead(struct wg_peer *peer)
 	/* The caller must now synchronize_net() for this to take effect. */
 }
 
+/* Each receive queue entry holds a keypair and a peer reference. */
+static void peer_purge_rx_queue(struct wg_peer *peer)
+{
+	struct sk_buff *skb;
+
+	while ((skb = wg_prev_queue_peek(&peer->rx_queue)) != NULL) {
+		wg_prev_queue_drop_peeked(&peer->rx_queue);
+		wg_noise_keypair_put(PACKET_CB(skb)->keypair, false);
+		wg_peer_put(peer);
+		dev_kfree_skb(skb);
+	}
+}
+
 static void peer_remove_after_dead(struct wg_peer *peer)
 {
 	WARN_ON(!peer->is_dead);
@@ -108,8 +121,9 @@ static void peer_remove_after_dead(struct wg_peer *peer)
 	/* The transition between packet encryption/decryption queues isn't
 	 * guarded by is_dead, but each reference's life is strictly bounded by
 	 * two generations: once for parallel crypto and once for serial
-	 * ingestion, so we can simply flush twice, and be sure that we no
-	 * longer have references inside these queues.
+	 * ingestion, so we can simply flush twice, and be sure that no crypto
+	 * worker still holds a packet of this peer. The per-peer queues may
+	 * still hold packets after that; see below.
 	 */
 
 	/* a) For encrypt/decrypt. */
@@ -122,6 +136,13 @@ static void peer_remove_after_dead(struct wg_peer *peer)
 	 * here from process context.
 	 */
 	netif_napi_del(&peer->napi);
+	/* A NAPI that is being disabled completes after the poll in progress,
+	 * even if that poll used its whole budget, so rx_queue may still hold
+	 * packets, and nothing reads it any more. tx_queue is left alone: a
+	 * transmit_packet_work queued during the second flush may still be
+	 * draining it, and its entries keep the peer alive until it has.
+	 */
+	peer_purge_rx_queue(peer);
 
 	/* Ensure any workstructs we own (like transmit_handshake_work or
 	 * clear_peer_work) no longer are in use.

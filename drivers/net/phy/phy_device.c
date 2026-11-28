@@ -10,6 +10,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/acpi.h>
+#include <linux/async.h>
 #include <linux/bitmap.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
@@ -18,6 +19,7 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/irq.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/mdio.h>
@@ -332,21 +334,85 @@ out:
 	return !phydev->suspended;
 }
 
+/* Wakeup interrupts may occur during the system sleep transition when
+ * the PHY is inaccessible. Set flag to postpone handling until the PHY
+ * has resumed. Wait for concurrent interrupt handler to complete.
+ */
+static __maybe_unused void mdio_bus_phy_suspend_irq(struct phy_device *phydev)
+{
+	if (!phy_interrupt_is_valid(phydev))
+		return;
+
+	WRITE_ONCE(phydev->irq_suspended, true);
+	synchronize_irq(phydev->irq);
+}
+
+/* Rerun interrupts which were postponed by phy_interrupt()
+ * because they occurred during the system sleep transition.
+ */
+static __maybe_unused void mdio_bus_phy_resume_irq(struct phy_device *phydev)
+{
+	WRITE_ONCE(phydev->irq_suspended, false);
+
+	mutex_lock(&phydev->irq_pm_lock);
+	if (phy_interrupt_is_valid(phydev))
+		synchronize_irq(phydev->irq);
+	/* The PHY may have fallen back to polling since it disabled the line,
+	 * or freed its interrupt while another user keeps the line.
+	 */
+	if (phydev->irq_rerun) {
+		phydev->irq_rerun = false;
+		enable_irq(phydev->irq_rerun_line);
+		/* A nested threaded line has no thread; we run the handler */
+		if (phydev->irq == phydev->irq_rerun_line &&
+		    phydev->interrupts) {
+			mutex_lock(&phydev->lock);
+			phydev->drv->handle_interrupt(phydev);
+			mutex_unlock(&phydev->lock);
+		}
+	}
+	mutex_unlock(&phydev->irq_pm_lock);
+}
+
+static __maybe_unused int mdio_bus_phy_prepare(struct device *dev)
+{
+	struct phy_device *phydev = to_phy_device(dev);
+
+	/* The MAC can suspend the PHY or power the MDIO bus down before our
+	 * suspend callback runs, so we postpone interrupts from here on.
+	 */
+	if (phydev->mac_managed_pm) {
+		mdio_bus_phy_suspend_irq(phydev);
+		phydev->irq_prepared = true;
+	}
+
+	return 0;
+}
+
+static __maybe_unused void mdio_bus_phy_complete(struct device *dev)
+{
+	struct phy_device *phydev = to_phy_device(dev);
+
+	/* The PM core skips our resume callback if the transition aborted
+	 * before our suspend callback.
+	 */
+	if (phydev->irq_prepared) {
+		phydev->irq_prepared = false;
+		mdio_bus_phy_resume_irq(phydev);
+	}
+}
+
 static __maybe_unused int mdio_bus_phy_suspend(struct device *dev)
 {
 	struct phy_device *phydev = to_phy_device(dev);
+	int ret;
+
+	phydev->irq_prepared = false;
 
 	if (phydev->mac_managed_pm)
 		return 0;
 
-	/* Wakeup interrupts may occur during the system sleep transition when
-	 * the PHY is inaccessible. Set flag to postpone handling until the PHY
-	 * has resumed. Wait for concurrent interrupt handler to complete.
-	 */
-	if (phy_interrupt_is_valid(phydev)) {
-		phydev->irq_suspended = 1;
-		synchronize_irq(phydev->irq);
-	}
+	mdio_bus_phy_suspend_irq(phydev);
 
 	/* We must stop the state machine manually, otherwise it stops out of
 	 * control, possibly with the phydev->lock held. Upon resume, netdev
@@ -359,9 +425,20 @@ static __maybe_unused int mdio_bus_phy_suspend(struct device *dev)
 	if (!mdio_bus_phy_may_suspend(phydev))
 		return 0;
 
+	ret = phy_suspend(phydev);
+	if (ret) {
+		/* The PM core skips the resume callback of a device whose
+		 * suspend callback failed.
+		 */
+		mdio_bus_phy_resume_irq(phydev);
+		if (phy_uses_state_machine(phydev))
+			phy_start_machine(phydev);
+		return ret;
+	}
+
 	phydev->suspended_by_mdio_bus = 1;
 
-	return phy_suspend(phydev);
+	return 0;
 }
 
 static __maybe_unused int mdio_bus_phy_resume(struct device *dev)
@@ -369,8 +446,10 @@ static __maybe_unused int mdio_bus_phy_resume(struct device *dev)
 	struct phy_device *phydev = to_phy_device(dev);
 	int ret;
 
-	if (phydev->mac_managed_pm)
+	if (phydev->mac_managed_pm) {
+		mdio_bus_phy_resume_irq(phydev);
 		return 0;
+	}
 
 	if (!phydev->suspended_by_mdio_bus)
 		goto no_resume;
@@ -393,19 +472,7 @@ static __maybe_unused int mdio_bus_phy_resume(struct device *dev)
 	if (ret < 0)
 		return ret;
 no_resume:
-	if (phy_interrupt_is_valid(phydev)) {
-		phydev->irq_suspended = 0;
-		synchronize_irq(phydev->irq);
-
-		/* Rerun interrupts which were postponed by phy_interrupt()
-		 * because they occurred during the system sleep transition.
-		 */
-		if (phydev->irq_rerun) {
-			phydev->irq_rerun = 0;
-			enable_irq(phydev->irq);
-			irq_wake_thread(phydev->irq, phydev);
-		}
-	}
+	mdio_bus_phy_resume_irq(phydev);
 
 	if (phy_uses_state_machine(phydev))
 		phy_start_machine(phydev);
@@ -413,8 +480,48 @@ no_resume:
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(mdio_bus_phy_pm_ops, mdio_bus_phy_suspend,
-			 mdio_bus_phy_resume);
+static __maybe_unused int mdio_bus_phy_suspend_noirq(struct device *dev)
+{
+	struct phy_device *phydev = to_phy_device(dev);
+	struct irq_data *d;
+
+	mutex_lock(&phydev->irq_pm_lock);
+	/* We enable the line a postponed interrupt disabled if the irq core
+	 * armed it for wakeup, so that it wakes the system.
+	 */
+	if (phydev->irq_rerun) {
+		d = irq_get_irq_data(phydev->irq_rerun_line);
+		if (d && irqd_irq_disabled(d) && irqd_is_wakeup_armed(d)) {
+			enable_irq(phydev->irq_rerun_line);
+			phydev->irq_wake_enabled = true;
+		}
+	}
+	mutex_unlock(&phydev->irq_pm_lock);
+
+	return 0;
+}
+
+static __maybe_unused int mdio_bus_phy_resume_noirq(struct device *dev)
+{
+	struct phy_device *phydev = to_phy_device(dev);
+
+	mutex_lock(&phydev->irq_pm_lock);
+	if (phydev->irq_wake_enabled) {
+		phydev->irq_wake_enabled = false;
+		disable_irq_nosync(phydev->irq_rerun_line);
+	}
+	mutex_unlock(&phydev->irq_pm_lock);
+
+	return 0;
+}
+
+static const struct dev_pm_ops mdio_bus_phy_pm_ops = {
+	.prepare = pm_sleep_ptr(mdio_bus_phy_prepare),
+	.complete = pm_sleep_ptr(mdio_bus_phy_complete),
+	SET_SYSTEM_SLEEP_PM_OPS(mdio_bus_phy_suspend, mdio_bus_phy_resume)
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(mdio_bus_phy_suspend_noirq,
+				      mdio_bus_phy_resume_noirq)
+};
 
 /**
  * genphy_match_phy_device - match a PHY device with a PHY driver
@@ -639,8 +746,12 @@ static int phy_request_driver_module(struct phy_device *dev, u32 phy_id)
 {
 	int ret;
 
-	ret = request_module(MDIO_MODULE_PREFIX MDIO_ID_FMT,
-			     MDIO_ID_ARGS(phy_id));
+	if (current_is_async())
+		ret = request_module_nowait(MDIO_MODULE_PREFIX MDIO_ID_FMT,
+					    MDIO_ID_ARGS(phy_id));
+	else
+		ret = request_module(MDIO_MODULE_PREFIX MDIO_ID_FMT,
+				     MDIO_ID_ARGS(phy_id));
 	/* We only check for failures in executing the usermode binary,
 	 * not whether a PHY driver module exists for the PHY ID.
 	 * Accept -ENOENT because this may occur in case no initramfs exists,
@@ -711,6 +822,7 @@ struct phy_device *phy_device_create(struct mii_bus *bus, int addr, u32 phy_id,
 	dev->max_n_ports = 1;
 
 	mutex_init(&dev->lock);
+	mutex_init(&dev->irq_pm_lock);
 	INIT_DELAYED_WORK(&dev->state_queue, phy_state_machine);
 
 	/* Request the appropriate module unconditionally; don't
@@ -780,7 +892,11 @@ static int phy_c45_probe_present(struct mii_bus *bus, int prtad, int devad)
  * Description: reads devices in package registers of a MMD at @dev_addr
  * from PHY at @addr on @bus.
  *
- * Returns: 0 on success, -EIO on failure.
+ * Returns: 0 on success, %-ENODEV if the first read failed with -EIO or
+ * -ENODEV, which is how a controller signals that nothing answered at this
+ * address, or %-EIO on any other failure. A failure of the second read, once
+ * the first one succeeded, means that the MMD did answer and is therefore
+ * always reported as %-EIO.
  */
 static int get_phy_c45_devs_in_pkg(struct mii_bus *bus, int addr, int dev_addr,
 				   u32 *devices_in_package)
@@ -789,7 +905,10 @@ static int get_phy_c45_devs_in_pkg(struct mii_bus *bus, int addr, int dev_addr,
 
 	phy_reg = mdiobus_c45_read(bus, addr, dev_addr, MDIO_DEVS2);
 	if (phy_reg < 0)
-		return -EIO;
+		/* Like get_phy_c22_id(): returning -ENODEV doesn't stop bus
+		 * scanning
+		 */
+		return (phy_reg == -EIO || phy_reg == -ENODEV) ? -ENODEV : -EIO;
 	*devices_in_package = phy_reg << 16;
 
 	phy_reg = mdiobus_c45_read(bus, addr, dev_addr, MDIO_DEVS1);
@@ -810,8 +929,10 @@ static int get_phy_c45_devs_in_pkg(struct mii_bus *bus, int addr, int dev_addr,
  * the PHY identifiers for each device. Return the "devices in package"
  * and identifiers in @c45_ids.
  *
- * Returns zero on success, %-EIO on bus access error, or %-ENODEV if
- * the "devices in package" is invalid or no device responds.
+ * Returns zero on success, %-ENODEV if the "devices in package" is invalid or
+ * if no MMD responds (including when the bus reports -EIO or -ENODEV for the
+ * reads that look for a device), or a negative error code from a failed bus
+ * access otherwise (usually %-EIO).
  */
 static int get_phy_c45_ids(struct mii_bus *bus, int addr,
 			   struct phy_c45_device_ids *c45_ids)
@@ -844,8 +965,18 @@ static int get_phy_c45_ids(struct mii_bus *bus, int addr,
 				continue;
 		}
 		phy_reg = get_phy_c45_devs_in_pkg(bus, addr, i, &devs_in_pkg);
+		if (phy_reg == -ENODEV) {
+			/* The MMD did not answer: treat it like a read of all
+			 * Fs, which is what controllers that do not check the
+			 * turnaround return, and go straight to the MMD 0
+			 * probe below. Do not probe the remaining MMDs, each
+			 * one costs two bus reads on a slow bus.
+			 */
+			devs_in_pkg = 0xffffffff;
+			break;
+		}
 		if (phy_reg < 0)
-			return -EIO;
+			return phy_reg;
 	}
 
 	if ((devs_in_pkg & 0x1fffffff) == 0x1fffffff) {
@@ -855,7 +986,7 @@ static int get_phy_c45_ids(struct mii_bus *bus, int addr,
 		 */
 		phy_reg = get_phy_c45_devs_in_pkg(bus, addr, 0, &devs_in_pkg);
 		if (phy_reg < 0)
-			return -EIO;
+			return phy_reg;
 
 		/* no device there, let's get out of here */
 		if ((devs_in_pkg & 0x1fffffff) == 0x1fffffff)
@@ -1077,8 +1208,10 @@ EXPORT_SYMBOL(phy_device_remove);
  * phy_get_c45_ids - Read 802.3-c45 IDs for phy device.
  * @phydev: phy_device structure to read 802.3-c45 IDs
  *
- * Returns zero on success, %-EIO on bus access error, or %-ENODEV if
- * the "devices in package" is invalid.
+ * Returns zero on success, %-ENODEV if the "devices in package" is invalid or
+ * no MMD responds (this includes a bus read failing with -EIO or -ENODEV while
+ * looking for a device), or a negative error code from a failed bus access
+ * otherwise (usually %-EIO).
  */
 int phy_get_c45_ids(struct phy_device *phydev)
 {

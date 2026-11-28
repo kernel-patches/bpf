@@ -38,6 +38,52 @@ static int police_act_validate(const struct flow_action_entry *act,
 }
 
 static bool
+police_act_can_offload_jump(struct mlx5e_tc_act_parse_state *parse_state,
+			    const struct flow_action_entry *act,
+			    int act_index, u32 target)
+{
+	const struct flow_action *flow_action = parse_state->flow_action;
+	struct netlink_ext_ack *extack = parse_state->extack;
+	const struct flow_action_entry *prev, *entry;
+	u32 i;
+
+	if (act_index) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Jump is only supported when police is the first action");
+		return false;
+	}
+
+	if (!target || target >= flow_action->num_entries) {
+		NL_SET_ERR_MSG_MOD(extack, "Jump target must be a later action");
+		return false;
+	}
+
+	prev = act;
+	for (i = 1; i <= target; i++) {
+		entry = &flow_action->entries[i];
+
+		if (i < target &&
+		    ((entry->id != FLOW_ACTION_DROP &&
+		      entry->id != FLOW_ACTION_ACCEPT) ||
+		     entry->id != flow_action->entries[1].id)) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Jump can only skip actions that are all drop or all ok");
+			return false;
+		}
+
+		if (entry->id == prev->id && entry->hw_index == prev->hw_index) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Jump over the same action twice in a row is not supported");
+			return false;
+		}
+
+		prev = entry;
+	}
+
+	return true;
+}
+
+static bool
 tc_act_can_offload_police(struct mlx5e_tc_act_parse_state *parse_state,
 			  const struct flow_action_entry *act,
 			  int act_index,
@@ -47,6 +93,16 @@ tc_act_can_offload_police(struct mlx5e_tc_act_parse_state *parse_state,
 
 	err = police_act_validate(act, parse_state->extack);
 	if (err)
+		return false;
+
+	if (act->police.exceed.act_id == FLOW_ACTION_JUMP &&
+	    !police_act_can_offload_jump(parse_state, act, act_index,
+					 act->police.exceed.extval))
+		return false;
+
+	if (act->police.notexceed.act_id == FLOW_ACTION_JUMP &&
+	    !police_act_can_offload_jump(parse_state, act, act_index,
+					 act->police.notexceed.extval))
 		return false;
 
 	return !!mlx5e_get_flow_meters(parse_state->flow->priv->mdev);
@@ -94,12 +150,13 @@ tc_act_parse_police(struct mlx5e_tc_act_parse_state *parse_state,
 		      MLX5_FLOW_STEERING_CAP_MATCH_RANGES))
 			return -EOPNOTSUPP;
 
-		attr->action |= MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
 		attr->flags |= MLX5_ATTR_FLAG_MTU;
 	} else {
 		attr->action |= MLX5_FLOW_CONTEXT_ACTION_EXECUTE_ASO;
 		attr->exe_aso_type = MLX5_EXE_ASO_FLOW_METER;
 	}
+
+	attr->action |= MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
 
 	return 0;
 }

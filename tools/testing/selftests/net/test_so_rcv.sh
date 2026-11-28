@@ -11,6 +11,8 @@ FAILED_TESTS=0
 declare -A TESTS=(
 	["SO_RCVPRIORITY"]="-P 2"
 	["SO_RCVMARK"]="-M 3"
+	["SO_RCVPRIORITY_ZERO"]="-P 0"
+	["SO_RCVMARK_ZERO"]="-M 0"
 )
 
 check_result() {
@@ -66,8 +68,8 @@ done
 
 if [ "$FAILED_TESTS" -ne 0 ]; then
 	echo "FAIL - $FAILED_TESTS/$TOTAL_TESTS tests failed"
-	exit ${KSFT_FAIL}
+	exit ${ksft_fail}
 else
 	echo "OK - All $TOTAL_TESTS tests passed"
-	exit ${KSFT_PASS}
+	exit ${ksft_pass}
 fi

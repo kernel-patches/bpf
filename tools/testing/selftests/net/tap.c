@@ -425,4 +425,33 @@ TEST_F(tap, test_packet_crash_tap_invalid_eth_proto)
 	ASSERT_EQ(errno, EINVAL);
 }
 
+TEST_F(tap, padded_hdr_len_exceeds_payload)
+{
+	const int hdr_size = 512;
+	uint8_t pkt[512 + ETH_HLEN] = { 0 };
+	struct virtio_net_hdr *vh = (void *)pkt;
+	ssize_t ret;
+
+	ASSERT_EQ(ioctl(self->fd, TUNSETVNETHDRSZ, &hdr_size), 0);
+	vh->hdr_len = 256;
+	build_eth(pkt + hdr_size, ETH_P_IP);
+
+	ret = write(self->fd, pkt, sizeof(pkt));
+	ASSERT_EQ(ret, -1);
+	ASSERT_EQ(errno, EINVAL);
+}
+
+TEST_F(tap, padded_hdr_len_zero)
+{
+	const int hdr_size = 512;
+	uint8_t pkt[512 + ETH_HLEN] = { 0 };
+	ssize_t ret;
+
+	ASSERT_EQ(ioctl(self->fd, TUNSETVNETHDRSZ, &hdr_size), 0);
+	build_eth(pkt + hdr_size, ETH_P_IP);
+
+	ret = write(self->fd, pkt, sizeof(pkt));
+	ASSERT_EQ(ret, sizeof(pkt));
+}
+
 TEST_HARNESS_MAIN

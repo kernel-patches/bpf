@@ -109,15 +109,6 @@ bool inet_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2,
 				    match_wildcard);
 }
 
-bool inet_rcv_saddr_any(const struct sock *sk)
-{
-#if IS_ENABLED(CONFIG_IPV6)
-	if (sk->sk_family == AF_INET6)
-		return ipv6_addr_any(&sk->sk_v6_rcv_saddr);
-#endif
-	return !sk->sk_rcv_saddr;
-}
-
 /**
  *	inet_sk_get_local_port_range - fetch ephemeral ports range
  *	@sk: socket
@@ -343,8 +334,6 @@ other_half_scan:
 			low = half;
 	}
 	remaining = high - low;
-	if (likely(remaining > 1))
-		remaining &= ~1U;
 
 	offset = get_random_u32_below(remaining);
 	/* __inet_hash_connect() favors ports having @low parity
@@ -1131,8 +1120,8 @@ static void reqsk_timer_handler(struct timer_list *t)
 			return;
 
 		if (!inet_ehash_insert(req_to_sk(nreq), req_to_sk(oreq), NULL)) {
-			/* delete timer */
-			__inet_csk_reqsk_queue_drop(sk_listener, nreq, false);
+			if (timer_delete(&nreq->rsk_timer))
+				reqsk_put(nreq);
 			goto no_ownership;
 		}
 
@@ -1383,8 +1372,8 @@ int inet_csk_listen_start(struct sock *sk)
 
 	/* There is race window here: we announce ourselves listening,
 	 * but this transition is still not validated by get_port().
-	 * It is OK, because this socket enters to hash table only
-	 * after validation is complete.
+	 * This socket enters to hash table only after validation is
+	 * complete, but reqs of an earlier listen() may queue children.
 	 */
 	inet_sk_state_store(sk, TCP_LISTEN);
 	err = sk->sk_prot->get_port(sk, inet->inet_num);
@@ -1402,9 +1391,13 @@ int inet_csk_listen_start(struct sock *sk)
 
 	/* A Fast Open child accepted before a previous shutdown() of this
 	 * listener might have queued its request in rskq_rst_head while
-	 * we were transiently in TCP_LISTEN state.
+	 * we were transiently in TCP_LISTEN state. The accept queue of an
+	 * MPTCP subflow is drained by mptcp_listen().
 	 */
-	reqsk_fastopen_purge_rst(&icsk->icsk_accept_queue);
+	if (sk_is_mptcp(sk))
+		reqsk_fastopen_purge_rst(&icsk->icsk_accept_queue);
+	else
+		inet_csk_listen_stop(sk);
 	return err;
 }
 

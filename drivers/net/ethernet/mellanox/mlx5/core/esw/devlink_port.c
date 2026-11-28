@@ -83,7 +83,9 @@ static void mlx5_esw_offloads_pf_vf_devlink_port_attrs_set(struct mlx5_eswitch *
 
 		memcpy(dl_port->attrs.switch_id.id, ppid.id, ppid.id_len);
 		dl_port->attrs.switch_id.id_len = ppid.id_len;
-		devlink_port_attrs_pci_vf_set(dl_port, 0, pfnum,
+		controller_num = mlx5_esw_get_self_pf_ctrl_num(esw);
+		pfnum = mlx5_esw_get_self_pf_pfnum(esw);
+		devlink_port_attrs_pci_vf_set(dl_port, controller_num, pfnum,
 					      vport_num - base_vport, false);
 	} else if (mlx5_esw_is_spf_vport(esw, vport_num)) {
 		int spf_idx = mlx5_esw_spf_vport_to_idx(esw, vport_num);
@@ -148,16 +150,16 @@ static const struct devlink_port_ops mlx5_esw_pf_vf_dl_port_ops = {
 	.port_fn_max_io_eqs_set = mlx5_devlink_port_fn_max_io_eqs_set,
 };
 
-static void mlx5_esw_offloads_sf_devlink_port_attrs_set(struct mlx5_eswitch *esw,
-							struct devlink_port *dl_port,
-							u32 controller, u32 sfnum)
+static void
+mlx5_esw_offloads_sf_devlink_port_attrs_set(struct mlx5_eswitch *esw,
+					    struct devlink_port *dl_port,
+					    u32 controller, u32 pfnum,
+					    u32 sfnum)
 {
 	struct mlx5_core_dev *dev = esw->dev;
 	struct netdev_phys_item_id ppid = {};
 	u32 hpf_ctrl;
-	u16 pfnum;
 
-	pfnum = mlx5_esw_sf_controller_to_pfnum(dev, controller);
 	hpf_ctrl = mlx5_esw_get_hpf_host_number(dev) + 1;
 	mlx5_esw_get_port_parent_id(dev, &ppid);
 	memcpy(dl_port->attrs.switch_id.id, &ppid.id[0], ppid.id_len);
@@ -166,11 +168,15 @@ static void mlx5_esw_offloads_sf_devlink_port_attrs_set(struct mlx5_eswitch *esw
 				      controller == hpf_ctrl);
 }
 
-int mlx5_esw_offloads_sf_devlink_port_init(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
+int mlx5_esw_offloads_sf_devlink_port_init(struct mlx5_eswitch *esw,
+					   struct mlx5_vport *vport,
 					   struct mlx5_devlink_port *dl_port,
-					   u32 controller, u32 sfnum)
+					   u32 controller, u32 pfnum,
+					   u32 sfnum)
 {
-	mlx5_esw_offloads_sf_devlink_port_attrs_set(esw, &dl_port->dl_port, controller, sfnum);
+	mlx5_esw_offloads_sf_devlink_port_attrs_set(esw, &dl_port->dl_port,
+						    controller, pfnum,
+						    sfnum);
 
 	vport->dl_port = dl_port;
 	mlx5_devlink_port_init(dl_port, vport);

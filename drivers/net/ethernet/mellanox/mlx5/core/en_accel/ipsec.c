@@ -42,6 +42,7 @@
 #include "ipsec.h"
 #include "ipsec_rxtx.h"
 #include "en_rep.h"
+#include "lib/eq.h"
 
 #define MLX5_IPSEC_RESCHED msecs_to_jiffies(1000)
 #define MLX5E_IPSEC_TUNNEL_SA XA_MARK_1
@@ -255,6 +256,17 @@ static void mlx5e_ipsec_init_limits(struct mlx5e_ipsec_sa_entry *sa_entry,
 	attrs->lft.numb_rounds_soft = (u64)n;
 }
 
+static void mlx5e_ipsec_set_tnl_nh(struct mlx5e_ipsec_sa_entry *sa_entry,
+				   struct mlx5_accel_esp_xfrm_attrs *attrs,
+				   const struct neigh_table *tbl,
+				   const struct net_device *dev,
+				   const void *pkey)
+{
+	attrs->nh.tbl = tbl;
+	attrs->nh.ifindex = dev == sa_entry->x->xso.dev ? dev->ifindex : 0;
+	memcpy(attrs->nh.key, pkey, tbl->key_len);
+}
+
 static void mlx5e_ipsec_init_macs(struct mlx5e_ipsec_sa_entry *sa_entry,
 				  struct mlx5_accel_esp_xfrm_attrs *attrs)
 {
@@ -262,6 +274,7 @@ static void mlx5e_ipsec_init_macs(struct mlx5e_ipsec_sa_entry *sa_entry,
 	struct net_device *netdev = sa_entry->dev;
 	struct xfrm_state *x = sa_entry->x;
 	struct dst_entry *rt_dst_entry;
+	const struct neigh_table *tbl;
 	struct flowi4 fl4 = {};
 	struct flowi6 fl6 = {};
 	struct neighbour *n;
@@ -359,22 +372,36 @@ static void mlx5e_ipsec_init_macs(struct mlx5e_ipsec_sa_entry *sa_entry,
 	if (attrs->dir == XFRM_DEV_OFFLOAD_OUT &&
 	    is_zero_ether_addr(addr))
 		neigh_event_send(n, NULL);
+	mlx5e_ipsec_set_tnl_nh(sa_entry, attrs, n->tbl, n->dev, n->primary_key);
 	dst_release(rt_dst_entry);
 	neigh_release(n);
 	return;
 
 neigh:
-	n = ipv4_neigh_lookup(netdev, pkey);
+	if (addrs->family == AF_INET)
+		n = ipv4_neigh_lookup(netdev, pkey);
+	else
+		n = ipv6_neigh_lookup(netdev, pkey);
 	if (!n) {
-		n = ipv4_neigh_create(netdev, pkey);
-		if (IS_ERR(n))
-			return;
-		neigh_event_send(n, NULL);
+		if (addrs->family == AF_INET)
+			n = ipv4_neigh_create(netdev, pkey);
+		else
+			n = ipv6_neigh_create(netdev, pkey);
 		attrs->drop = true;
+		if (IS_ERR(n)) {
+			tbl = addrs->family == AF_INET ?
+			      arp_table(dev_net(netdev)) :
+			      nd_table(dev_net(netdev));
+			mlx5e_ipsec_set_tnl_nh(sa_entry, attrs, tbl, netdev,
+					       pkey);
+			return;
+		}
+		neigh_event_send(n, NULL);
 	} else {
 		neigh_ha_snapshot(addr, n, netdev);
 		ether_addr_copy(dst, addr);
 	}
+	mlx5e_ipsec_set_tnl_nh(sa_entry, attrs, n->tbl, n->dev, n->primary_key);
 	neigh_release(n);
 }
 
@@ -674,15 +701,20 @@ static void mlx5e_ipsec_handle_netdev_event(struct work_struct *_work)
 	struct mlx5e_ipsec_sa_entry *sa_entry = work->sa_entry;
 	struct mlx5e_ipsec_netevent_data *data = work->data;
 	struct mlx5_accel_esp_xfrm_attrs *attrs;
+	u8 addr[ETH_ALEN] __aligned(2);
 
 	attrs = &sa_entry->attrs;
 
+	spin_lock_bh(&data->lock);
+	ether_addr_copy(addr, data->addr);
+	spin_unlock_bh(&data->lock);
+
 	switch (attrs->dir) {
 	case XFRM_DEV_OFFLOAD_IN:
-		ether_addr_copy(attrs->smac, data->addr);
+		ether_addr_copy(attrs->smac, addr);
 		break;
 	case XFRM_DEV_OFFLOAD_OUT:
-		ether_addr_copy(attrs->dmac, data->addr);
+		ether_addr_copy(attrs->dmac, addr);
 		break;
 	default:
 		WARN_ON_ONCE(true);
@@ -693,6 +725,7 @@ static void mlx5e_ipsec_handle_netdev_event(struct work_struct *_work)
 
 static int mlx5_ipsec_create_work(struct mlx5e_ipsec_sa_entry *sa_entry)
 {
+	struct mlx5e_ipsec_netevent_data *ndata;
 	struct xfrm_state *x = sa_entry->x;
 	struct mlx5e_ipsec_work *work;
 	void *data = NULL;
@@ -727,6 +760,8 @@ static int mlx5_ipsec_create_work(struct mlx5e_ipsec_sa_entry *sa_entry)
 		if (!data)
 			goto free_work;
 
+		ndata = data;
+		spin_lock_init(&ndata->lock);
 		INIT_WORK(&work->work, mlx5e_ipsec_handle_netdev_event);
 		break;
 	default:
@@ -865,9 +900,15 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 	if (err)
 		goto release_dwork;
 
-	err = mlx5e_accel_ipsec_fs_add_rule(sa_entry);
+	err = mlx5e_accel_ipsec_fs_alloc_counters(sa_entry);
 	if (err)
 		goto err_hw_ctx;
+
+	INIT_WORK(&sa_entry->event_work, mlx5e_ipsec_handle_event);
+
+	err = mlx5e_accel_ipsec_fs_add_rule(sa_entry);
+	if (err)
+		goto err_counters;
 
 	/* We use *_bh() variant because xfrm_timer_handler(), which runs
 	 * in softirq context, can reach our state delete logic and we need
@@ -901,6 +942,8 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 
 err_add_rule:
 	mlx5e_accel_ipsec_fs_del_rule(sa_entry);
+err_counters:
+	mlx5e_accel_ipsec_fs_free_counters(sa_entry);
 err_hw_ctx:
 	mlx5_ipsec_free_sa_ctx(sa_entry);
 release_dwork:
@@ -944,6 +987,9 @@ static void mlx5e_xfrm_free_state(struct net_device *dev, struct xfrm_state *x)
 	if (x->xso.flags & XFRM_DEV_OFFLOAD_FLAG_ACQ)
 		goto sa_entry_free;
 
+	mlx5_eq_synchronize_async_irq(ipsec->mdev);
+	cancel_work_sync(&sa_entry->event_work);
+
 	if (sa_entry->work)
 		cancel_work_sync(&sa_entry->work->work);
 
@@ -951,6 +997,7 @@ static void mlx5e_xfrm_free_state(struct net_device *dev, struct xfrm_state *x)
 		cancel_delayed_work_sync(&sa_entry->dwork->dwork);
 
 	mlx5e_accel_ipsec_fs_del_rule(sa_entry);
+	mlx5e_accel_ipsec_fs_free_counters(sa_entry);
 	mlx5_ipsec_free_sa_ctx(sa_entry);
 	kfree(sa_entry->dwork);
 	if (sa_entry->work)
@@ -961,10 +1008,20 @@ sa_entry_free:
 	kfree(sa_entry);
 }
 
+static bool
+mlx5e_ipsec_neigh_matches(const struct mlx5e_ipsec_sa_entry *sa_entry,
+			  const struct neighbour *n)
+{
+	const struct mlx5_accel_esp_xfrm_attrs *attrs = &sa_entry->attrs;
+
+	return attrs->nh.tbl == n->tbl &&
+	       (!attrs->nh.ifindex || attrs->nh.ifindex == n->dev->ifindex) &&
+	       !memcmp(attrs->nh.key, n->primary_key, n->tbl->key_len);
+}
+
 static int mlx5e_ipsec_netevent_event(struct notifier_block *nb,
 				      unsigned long event, void *ptr)
 {
-	struct mlx5_accel_esp_xfrm_attrs *attrs;
 	struct mlx5e_ipsec_netevent_data *data;
 	struct mlx5e_ipsec_sa_entry *sa_entry;
 	struct mlx5e_ipsec *ipsec;
@@ -976,24 +1033,14 @@ static int mlx5e_ipsec_netevent_event(struct notifier_block *nb,
 
 	ipsec = container_of(nb, struct mlx5e_ipsec, netevent_nb);
 	xa_for_each_marked(&ipsec->sadb, idx, sa_entry, MLX5E_IPSEC_TUNNEL_SA) {
-		attrs = &sa_entry->attrs;
-
-		if (attrs->addrs.family != n->tbl->family)
+		if (!mlx5e_ipsec_neigh_matches(sa_entry, n))
 			continue;
-
-		if (attrs->addrs.family == AF_INET) {
-			if (!neigh_key_eq32(n, &attrs->addrs.saddr.a4) &&
-			    !neigh_key_eq32(n, &attrs->addrs.daddr.a4))
-				continue;
-		} else {
-			if (!neigh_key_eq128(n, &attrs->addrs.saddr.a4) &&
-			    !neigh_key_eq128(n, &attrs->addrs.daddr.a4))
-				continue;
-		}
 
 		data = sa_entry->work->data;
 
+		spin_lock_bh(&data->lock);
 		neigh_ha_snapshot(data->addr, n, sa_entry->dev);
+		spin_unlock_bh(&data->lock);
 		queue_work(ipsec->wq, &sa_entry->work->work);
 	}
 
@@ -1002,10 +1049,13 @@ static int mlx5e_ipsec_netevent_event(struct notifier_block *nb,
 
 void mlx5e_ipsec_init(struct mlx5e_priv *priv)
 {
+	u32 caps = mlx5_ipsec_device_caps(priv->mdev);
+	bool pkt_offload = caps & MLX5_IPSEC_CAP_PACKET_OFFLOAD;
+	bool tunnel = caps & MLX5_IPSEC_CAP_TUNNEL;
 	struct mlx5e_ipsec *ipsec;
 	int ret = -ENOMEM;
 
-	if (!mlx5_ipsec_device_caps(priv->mdev)) {
+	if (!caps) {
 		netdev_dbg(priv->netdev, "Not an IPSec offload device\n");
 		return;
 	}
@@ -1014,7 +1064,7 @@ void mlx5e_ipsec_init(struct mlx5e_priv *priv)
 	if (!ipsec)
 		return;
 
-	xa_init_flags(&ipsec->sadb, XA_FLAGS_ALLOC);
+	xa_init_flags(&ipsec->sadb, XA_FLAGS_ALLOC | XA_FLAGS_LOCK_BH);
 	ipsec->mdev = priv->mdev;
 	init_completion(&ipsec->comp);
 	ipsec->wq = alloc_workqueue("mlx5e_ipsec: %s", WQ_UNBOUND, 0,
@@ -1022,18 +1072,22 @@ void mlx5e_ipsec_init(struct mlx5e_priv *priv)
 	if (!ipsec->wq)
 		goto err_wq;
 
-	if (mlx5_ipsec_device_caps(priv->mdev) &
-	    MLX5_IPSEC_CAP_PACKET_OFFLOAD) {
+	if (pkt_offload) {
 		ret = mlx5e_ipsec_aso_init(ipsec);
 		if (ret)
 			goto err_aso;
+
+		ipsec->nb.notifier_call = mlx5e_ipsec_event;
+		ret = mlx5_notifier_register(priv->mdev, &ipsec->nb);
+		if (ret)
+			goto clear_aso;
 	}
 
-	if (mlx5_ipsec_device_caps(priv->mdev) & MLX5_IPSEC_CAP_TUNNEL) {
+	if (tunnel) {
 		ipsec->netevent_nb.notifier_call = mlx5e_ipsec_netevent_event;
 		ret = register_netevent_notifier(&ipsec->netevent_nb);
 		if (ret)
-			goto clear_aso;
+			goto err_notifier;
 	}
 
 	ipsec->is_uplink_rep = mlx5e_is_uplink_rep(priv);
@@ -1047,10 +1101,13 @@ void mlx5e_ipsec_init(struct mlx5e_priv *priv)
 	return;
 
 err_fs_init:
-	if (mlx5_ipsec_device_caps(priv->mdev) & MLX5_IPSEC_CAP_TUNNEL)
+	if (tunnel)
 		unregister_netevent_notifier(&ipsec->netevent_nb);
+err_notifier:
+	if (pkt_offload)
+		mlx5_notifier_unregister(priv->mdev, &ipsec->nb);
 clear_aso:
-	if (mlx5_ipsec_device_caps(priv->mdev) & MLX5_IPSEC_CAP_PACKET_OFFLOAD)
+	if (pkt_offload)
 		mlx5e_ipsec_aso_cleanup(ipsec);
 err_aso:
 	destroy_workqueue(ipsec->wq);
@@ -1073,8 +1130,10 @@ void mlx5e_ipsec_cleanup(struct mlx5e_priv *priv)
 		ipsec->netevent_nb.notifier_call = NULL;
 	}
 	if (ipsec->aso)
-		mlx5e_ipsec_aso_cleanup(ipsec);
+		mlx5_notifier_unregister(ipsec->mdev, &ipsec->nb);
 	destroy_workqueue(ipsec->wq);
+	if (ipsec->aso)
+		mlx5e_ipsec_aso_cleanup(ipsec);
 	kfree(ipsec);
 	priv->ipsec = NULL;
 }
@@ -1099,8 +1158,8 @@ static void mlx5e_xfrm_advance_esn_state(struct xfrm_state *x)
 static void mlx5e_xfrm_update_stats(struct xfrm_state *x)
 {
 	struct mlx5e_ipsec_sa_entry *sa_entry = to_ipsec_sa_entry(x);
-	struct mlx5e_ipsec_rule *ipsec_rule = &sa_entry->ipsec_rule;
 	struct net *net = dev_net(x->xso.dev);
+	struct mlx5_fc **fcs = sa_entry->fcs;
 	u64 trailer_packets = 0, trailer_bytes = 0;
 	u64 replay_packets = 0, replay_bytes = 0;
 	u64 auth_packets = 0, auth_bytes = 0;
@@ -1116,12 +1175,12 @@ static void mlx5e_xfrm_update_stats(struct xfrm_state *x)
 		return;
 
 	if (sa_entry->attrs.dir == XFRM_DEV_OFFLOAD_IN) {
-		mlx5_fc_query_cached(ipsec_rule->auth.fc, &auth_bytes,
+		mlx5_fc_query_cached(fcs[MLX5_IPSEC_FC_AUTH], &auth_bytes,
 				     &auth_packets, &lastuse);
 		x->stats.integrity_failed += auth_packets;
 		XFRM_ADD_STATS(net, LINUX_MIB_XFRMINSTATEPROTOERROR, auth_packets);
 
-		mlx5_fc_query_cached(ipsec_rule->trailer.fc, &trailer_bytes,
+		mlx5_fc_query_cached(fcs[MLX5_IPSEC_FC_TRAILER], &trailer_bytes,
 				     &trailer_packets, &lastuse);
 		XFRM_ADD_STATS(net, LINUX_MIB_XFRMINHDRERROR, trailer_packets);
 	}
@@ -1130,13 +1189,14 @@ static void mlx5e_xfrm_update_stats(struct xfrm_state *x)
 		return;
 
 	if (sa_entry->attrs.dir == XFRM_DEV_OFFLOAD_IN) {
-		mlx5_fc_query_cached(ipsec_rule->replay.fc, &replay_bytes,
+		mlx5_fc_query_cached(fcs[MLX5_IPSEC_FC_REPLAY], &replay_bytes,
 				     &replay_packets, &lastuse);
 		x->stats.replay += replay_packets;
 		XFRM_ADD_STATS(net, LINUX_MIB_XFRMINSTATESEQERROR, replay_packets);
 	}
 
-	mlx5_fc_query_cached(ipsec_rule->fc, &bytes, &packets, &lastuse);
+	mlx5_fc_query_cached(fcs[MLX5_IPSEC_FC_RULE], &bytes, &packets,
+			     &lastuse);
 	success_packets = packets - auth_packets - trailer_packets - replay_packets;
 	x->curlft.packets += success_packets;
 	/* NIC counts all bytes passed through flow steering and doesn't have

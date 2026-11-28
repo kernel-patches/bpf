@@ -299,7 +299,7 @@ void mlx5_accel_esp_modify_xfrm(struct mlx5e_ipsec_sa_entry *sa_entry,
 	if (err)
 		return;
 
-	memcpy(&sa_entry->attrs, attrs, sizeof(sa_entry->attrs));
+	sa_entry->attrs.replay_esn = attrs->replay_esn;
 }
 
 static void mlx5e_ipsec_aso_update(struct mlx5e_ipsec_sa_entry *sa_entry,
@@ -438,11 +438,10 @@ hard:
 	}
 }
 
-static void mlx5e_ipsec_handle_event(struct work_struct *_work)
+void mlx5e_ipsec_handle_event(struct work_struct *work)
 {
-	struct mlx5e_ipsec_work *work =
-		container_of(_work, struct mlx5e_ipsec_work, work);
-	struct mlx5e_ipsec_sa_entry *sa_entry = work->data;
+	struct mlx5e_ipsec_sa_entry *sa_entry =
+		container_of(work, struct mlx5e_ipsec_sa_entry, event_work);
 	struct mlx5_accel_esp_xfrm_attrs tmp = {};
 	struct mlx5_accel_esp_xfrm_attrs *attrs;
 	bool need_modify = false;
@@ -471,16 +470,14 @@ unlock:
 	spin_unlock_bh(&sa_entry->x->lock);
 	if (need_modify)
 		mlx5_accel_esp_modify_xfrm(sa_entry, &tmp);
-	kfree(work);
 }
 
-static int mlx5e_ipsec_event(struct notifier_block *nb, unsigned long event,
-			     void *data)
+int mlx5e_ipsec_event(struct notifier_block *nb, unsigned long event,
+		      void *data)
 {
 	struct mlx5e_ipsec *ipsec = container_of(nb, struct mlx5e_ipsec, nb);
 	struct mlx5e_ipsec_sa_entry *sa_entry;
 	struct mlx5_eqe_obj_change *object;
-	struct mlx5e_ipsec_work *work;
 	struct mlx5_eqe *eqe = data;
 	u16 type;
 
@@ -497,14 +494,7 @@ static int mlx5e_ipsec_event(struct notifier_block *nb, unsigned long event,
 	if (!sa_entry)
 		return NOTIFY_DONE;
 
-	work = kmalloc_obj(*work, GFP_ATOMIC);
-	if (!work)
-		return NOTIFY_DONE;
-
-	INIT_WORK(&work->work, mlx5e_ipsec_handle_event);
-	work->data = sa_entry;
-
-	queue_work(ipsec->wq, &work->work);
+	queue_work(ipsec->wq, &sa_entry->event_work);
 	return NOTIFY_OK;
 }
 
@@ -536,8 +526,6 @@ int mlx5e_ipsec_aso_init(struct mlx5e_ipsec *ipsec)
 	}
 
 	spin_lock_init(&aso->lock);
-	ipsec->nb.notifier_call = mlx5e_ipsec_event;
-	mlx5_notifier_register(mdev, &ipsec->nb);
 
 	ipsec->aso = aso;
 	return 0;
@@ -559,7 +547,6 @@ void mlx5e_ipsec_aso_cleanup(struct mlx5e_ipsec *ipsec)
 	aso = ipsec->aso;
 	pdev = mlx5_core_dma_dev(mdev);
 
-	mlx5_notifier_unregister(mdev, &ipsec->nb);
 	mlx5_aso_destroy(aso->aso);
 	dma_unmap_single(pdev, aso->dma_addr, sizeof(aso->ctx),
 			 DMA_BIDIRECTIONAL);

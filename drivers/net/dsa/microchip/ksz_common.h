@@ -7,6 +7,7 @@
 #ifndef __KSZ_COMMON_H
 #define __KSZ_COMMON_H
 
+#include <linux/dsa/ksz_common.h>
 #include <linux/etherdevice.h>
 #include <linux/irqdomain.h>
 #include <linux/kernel.h>
@@ -243,6 +244,8 @@ struct ksz_device {
 	u16 mirror_rx;
 	u16 mirror_tx;
 	u16 port_mask;
+	/* link-local groups sent to the CPU only, bit X: 01:80:C2:00:00:0X */
+	u16 link_local_to_cpu;
 	struct mutex lock_irq;		/* IRQ Access */
 	struct ksz_irq girq;
 	struct ksz_ptp_data ptp_data;
@@ -832,6 +835,17 @@ static inline bool is_lan937x_tx_phy(struct ksz_device *dev, int port)
 {
 	return (dev->chip_id == LAN9371_CHIP_ID ||
 		dev->chip_id == LAN9372_CHIP_ID) && port == KSZ_PORT_4;
+}
+
+/* Copy dev->link_local_to_cpu to the tagger. Call this from
+ * connect_tag_protocol: ksz9477_enable_stp_addr() fills the bitmap during
+ * ->setup(), and DSA connects the tagger only after ->setup().
+ */
+static inline void ksz_tagger_set_link_local_to_cpu(struct dsa_switch *ds)
+{
+	struct ksz_device *dev = ds->priv;
+
+	ksz_tagger_data(ds)->link_local_to_cpu = dev->link_local_to_cpu;
 }
 
 static inline int ksz_get_sgmii_port(struct ksz_device *dev)

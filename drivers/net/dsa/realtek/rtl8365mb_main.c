@@ -108,6 +108,8 @@
 #include "realtek-smi.h"
 #include "realtek-mdio.h"
 #include "rtl83xx.h"
+#include "rtl83xx-qos.h"
+#include "rtl8365mb_qos.h"
 #include "rtl8365mb_l2.h"
 #include "rtl8365mb_vlan.h"
 
@@ -707,9 +709,11 @@ struct rtl8365mb_extint {
  * @name: human-readable chip name
  * @chip_id: chip identifier
  * @chip_ver: chip silicon revision
+ * @port_mask: ports the chip has
  * @extints: available external interfaces
  * @jam_table: chip-specific initialization jam table
  * @jam_size: size of the chip's jam table
+ * @num_tx_queues: number of egress queues exposed by the chip
  *
  * These data are specific to a given chip in the family of switches supported
  * by this driver. When adding support for another chip in the family, a new
@@ -719,29 +723,43 @@ struct rtl8365mb_chip_info {
 	const char *name;
 	u32 chip_id;
 	u32 chip_ver;
+	u32 port_mask;
 	const struct rtl8365mb_extint extints[RTL8365MB_MAX_NUM_EXTINTS];
 	const struct rtl8365mb_jam_tbl_entry *jam_table;
 	size_t jam_size;
+	unsigned int num_tx_queues;
 };
 
 /* Chip info for each supported switch in the family */
 #define PHY_INTF(_mode) (RTL8365MB_PHY_INTERFACE_MODE_ ## _mode)
+/* Every chip entry must set .port_mask through PORT_MASK(). PORT_MASK()
+ * fails the build when a port does not exist in the family or is outside
+ * the ports the QoS register macros address.
+ */
+#define PORT_MASK(_m) \
+	((_m) + \
+	 BUILD_BUG_ON_ZERO((_m) & ~GENMASK(RTL8365MB_MAX_NUM_PORTS - 1, 0)) + \
+	 BUILD_BUG_ON_ZERO((_m) & ~GENMASK(RTL8365MB_QOS_MAX_PORTS - 1, 0)))
+
 static const struct rtl8365mb_chip_info rtl8365mb_chip_infos[] = {
 	{
 		.name = "RTL8365MB-VC",
 		.chip_id = 0x6367,
 		.chip_ver = 0x0040,
+		.port_mask = PORT_MASK(GENMASK(3, 0) | BIT(6)),
 		.extints = {
 			{ 6, 1, PHY_INTF(MII) | PHY_INTF(TMII) |
 				PHY_INTF(RMII) | PHY_INTF(RGMII) },
 		},
 		.jam_table = rtl8365mb_init_jam_8365mb_vc,
 		.jam_size = ARRAY_SIZE(rtl8365mb_init_jam_8365mb_vc),
+		.num_tx_queues = 8,
 	},
 	{
 		.name = "RTL8367S",
 		.chip_id = 0x6367,
 		.chip_ver = 0x00A0,
+		.port_mask = PORT_MASK(GENMASK(4, 0) | BIT(6) | BIT(7)),
 		.extints = {
 			{ 6, 1, PHY_INTF(SGMII) | PHY_INTF(HSGMII) },
 			{ 7, 2, PHY_INTF(MII) | PHY_INTF(TMII) |
@@ -749,11 +767,13 @@ static const struct rtl8365mb_chip_info rtl8365mb_chip_infos[] = {
 		},
 		.jam_table = rtl8365mb_init_jam_8365mb_vc,
 		.jam_size = ARRAY_SIZE(rtl8365mb_init_jam_8365mb_vc),
+		.num_tx_queues = 8,
 	},
 	{
 		.name = "RTL8367SB",
 		.chip_id = 0x6367,
 		.chip_ver = 0x0010,
+		.port_mask = PORT_MASK(GENMASK(4, 0) | BIT(6) | BIT(7)),
 		.extints = {
 			{ 6, 1, PHY_INTF(MII) | PHY_INTF(TMII) |
 				PHY_INTF(RMII) | PHY_INTF(RGMII) |
@@ -763,11 +783,13 @@ static const struct rtl8365mb_chip_info rtl8365mb_chip_infos[] = {
 		},
 		.jam_table = rtl8365mb_init_jam_8365mb_vc,
 		.jam_size = ARRAY_SIZE(rtl8365mb_init_jam_8365mb_vc),
+		.num_tx_queues = 8,
 	},
 	{
 		.name = "RTL8367RB-VB",
 		.chip_id = 0x6367,
 		.chip_ver = 0x0020,
+		.port_mask = PORT_MASK(GENMASK(4, 0) | BIT(6) | BIT(7)),
 		.extints = {
 			{ 6, 1, PHY_INTF(MII) | PHY_INTF(TMII) |
 				PHY_INTF(RMII) | PHY_INTF(RGMII) },
@@ -776,6 +798,7 @@ static const struct rtl8365mb_chip_info rtl8365mb_chip_infos[] = {
 		},
 		.jam_table = rtl8365mb_init_jam_8365mb_vc,
 		.jam_size = ARRAY_SIZE(rtl8365mb_init_jam_8365mb_vc),
+		.num_tx_queues = 8,
 	},
 };
 
@@ -858,6 +881,8 @@ struct rtl8365mb_port {
  * @pcs: PCS for the SerDes external interface
  * @sds_supported: SerDes tuning parameters match the chip option, so the
  *                 SerDes interface modes can be advertised
+ * @sds_in_use: the SerDes external interface has been configured
+ * @sds_core_reset_work: switch core soft reset after the conduit comes up
  *
  * Private data for this driver.
  */
@@ -870,6 +895,8 @@ struct rtl8365mb {
 	struct rtl8365mb_port ports[RTL8365MB_MAX_NUM_PORTS];
 	struct phylink_pcs pcs;
 	bool sds_supported;
+	bool sds_in_use;
+	struct delayed_work sds_core_reset_work;
 };
 
 #define pcs_to_rtl8365mb(_pcs) container_of((_pcs), struct rtl8365mb, pcs)
@@ -1380,6 +1407,24 @@ static int rtl8365mb_sds_raise_rate_limits(struct realtek_priv *priv)
 				  RTL8365MB_PORT6_EGRESSBW_CTRL1_MASK);
 }
 
+/* Reset the SerDes data path and resync its PLL, mirroring what the vendor
+ * firmware does right after deasserting the SerDes reset. This flushes the
+ * FIFOs and ensures a clean state for the link, preventing silent drops and
+ * CRC errors.
+ */
+static int rtl8365mb_sds_reset_datapath(struct realtek_priv *priv)
+{
+	int ret;
+
+	ret = rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_BMCR,
+				  RTL8365MB_SDS_BMCR_DPRST_PHASE1);
+	if (ret)
+		return ret;
+
+	return rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_BMCR,
+				   RTL8365MB_SDS_BMCR_DPRST_PHASE2);
+}
+
 static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 				phy_interface_t interface,
 				const unsigned long *advertising,
@@ -1467,18 +1512,7 @@ static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 	if (ret)
 		return ret;
 
-	/* Reset the SerDes data path and resync its PLL, mirroring what the
-	 * vendor firmware does right after deasserting the SerDes reset.
-	 * This flushes the FIFOs and ensures a clean state for the link,
-	 * preventing silent drops and CRC errors.
-	 */
-	ret = rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_BMCR,
-				  RTL8365MB_SDS_BMCR_DPRST_PHASE1);
-	if (ret)
-		return ret;
-
-	ret = rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_BMCR,
-				  RTL8365MB_SDS_BMCR_DPRST_PHASE2);
+	ret = rtl8365mb_sds_reset_datapath(priv);
 	if (ret)
 		return ret;
 
@@ -1492,7 +1526,13 @@ static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 	val &= ~RTL8365MB_SDS_NWAY_EN_MASK;
 	val |= RTL8365MB_SDS_NWAY_RESTART_MASK;
 
-	return rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_NWAY, val);
+	ret = rtl8365mb_sds_write(priv, RTL8365MB_SDS_REG_NWAY, val);
+	if (ret)
+		return ret;
+
+	mb->sds_in_use = true;
+
+	return 0;
 }
 
 static bool rtl8365mb_interface_is_serdes(phy_interface_t interface)
@@ -3079,6 +3119,73 @@ static int rtl8365mb_reset_chip(struct realtek_priv *priv)
 					20000, 1e6);
 }
 
+/* On an RTL8367S connected to an IPQ5018 over HSGMII, the port MAC behind the
+ * SerDes occasionally ends up, after the link comes up, in a state where the
+ * frames received from the CPU are counted (ifInUcastPkts rises, no FCS
+ * errors) but never forwarded to any user port, while the switch to CPU
+ * direction keeps working. The port debug information register
+ * (PORT_DEBUG_INFO_CTRL3, 0x091A) then reads 0x0000 instead of 0x0035. This
+ * state can also turn, by itself, into one where those frames are forwarded
+ * but corrupted, or show up like that from the start, without any trace in
+ * the port debug information. Neither a SerDes data path reset nor re-running
+ * the SerDes configuration recovers from any of this, but a switch core soft
+ * reset does, and it keeps the configuration done by this driver, including
+ * the VLAN setup.
+ */
+static void rtl8365mb_sds_core_reset_work(struct work_struct *work)
+{
+	struct rtl8365mb *mb = container_of(to_delayed_work(work),
+					    struct rtl8365mb,
+					    sds_core_reset_work);
+	struct realtek_priv *priv = mb->priv;
+	u32 val;
+	int ret;
+
+	ret = regmap_update_bits(priv->map, RTL8365MB_CHIP_RESET_REG,
+				 RTL8365MB_CHIP_RESET_SW_MASK,
+				 RTL8365MB_CHIP_RESET_SW_MASK);
+	if (!ret)
+		ret = regmap_read_poll_timeout(priv->map,
+					       RTL8365MB_CHIP_RESET_REG, val,
+					       !(val & RTL8365MB_CHIP_RESET_SW_MASK),
+					       1000, 100000);
+	if (ret)
+		dev_err(priv->dev, "failed to soft reset switch core: %pe\n",
+			ERR_PTR(ret));
+}
+
+/* The SerDes is configured from phylink long before the conduit Ethernet
+ * controller starts transmitting on the link, so its receiver initially locks
+ * on an idle line. On an RTL8367S connected to an IPQ5018 over HSGMII this
+ * regularly left the switch receiving every frame from the CPU with an FCS
+ * error. Reset the SerDes data path again once the conduit is up, and soft
+ * reset the switch core a few seconds later, see
+ * rtl8365mb_sds_core_reset_work().
+ */
+static void rtl8365mb_conduit_state_change(struct dsa_switch *ds,
+					   const struct net_device *conduit,
+					   bool operational)
+{
+	struct realtek_priv *priv = ds->priv;
+	struct rtl8365mb *mb = priv->chip_data;
+	int ret;
+
+	if (!operational) {
+		cancel_delayed_work(&mb->sds_core_reset_work);
+		return;
+	}
+
+	if (!mb->sds_in_use)
+		return;
+
+	ret = rtl8365mb_sds_reset_datapath(priv);
+	if (ret)
+		dev_err(priv->dev, "failed to reset SerDes data path: %pe\n",
+			ERR_PTR(ret));
+
+	schedule_delayed_work(&mb->sds_core_reset_work, 3 * HZ);
+}
+
 static int rtl8365mb_setup(struct dsa_switch *ds)
 {
 	struct realtek_priv *priv = ds->priv;
@@ -3093,6 +3200,9 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 	cpu = &mb->cpu;
 
 	mb->pcs.ops = &rtl8365mb_pcs_ops;
+	mb->sds_in_use = false;
+	INIT_DELAYED_WORK(&mb->sds_core_reset_work,
+			  rtl8365mb_sds_core_reset_work);
 
 	/* The SerDes has no link interrupt wired up, so phylink must poll the
 	 * PCS for link changes when it tracks the link through pcs_get_state()
@@ -3139,7 +3249,14 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 	else if (ret)
 		dev_info(priv->dev, "no interrupt support\n");
 
-	dsa_switch_for_each_port(dp, ds) {
+	dsa_switch_for_each_available_port(dp, ds) {
+		if (!(mb->chip_info->port_mask & BIT(dp->index))) {
+			dev_err(priv->dev, "port %d does not exist on %s\n",
+				dp->index, mb->chip_info->name);
+			ret = -EINVAL;
+			goto out_teardown_irq;
+		}
+
 		/* Cascading (DSA links) is not supported yet.
 		 * Historically, the driver has always been broken
 		 * without a dedicated CPU port because CPU tagging
@@ -3152,6 +3269,22 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 			goto out_teardown_irq;
 		}
 	}
+
+	/* The QoS baseline below assigns queues from this count */
+	ds->num_tx_queues = mb->chip_info->num_tx_queues;
+
+	/* Set up the QoS baseline before the per-port defaults */
+	ret = rtl83xx_qos_init(ds);
+	if (ret)
+		goto out_teardown_irq;
+
+	ret = rtl8365mb_qos_pridec_init(priv);
+	if (ret)
+		goto out_teardown_irq;
+
+	ret = rtl8365mb_qos_qmap_init(priv);
+	if (ret)
+		goto out_teardown_irq;
 
 	/* Start with all ports blocked, including unused ports */
 	dsa_switch_for_each_port(dp, ds) {
@@ -3180,6 +3313,10 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 
 		/* Enable all types of flooding */
 		ret = rtl83xx_setup_port_flood_control(priv, dp->index);
+		if (ret)
+			goto out_teardown_irq;
+
+		ret = rtl83xx_qos_init_port(ds, dp->index);
 		if (ret)
 			goto out_teardown_irq;
 
@@ -3284,7 +3421,9 @@ out_error:
 static void rtl8365mb_teardown(struct dsa_switch *ds)
 {
 	struct realtek_priv *priv = ds->priv;
+	struct rtl8365mb *mb = priv->chip_data;
 
+	cancel_delayed_work_sync(&mb->sds_core_reset_work);
 	rtl8365mb_stats_teardown(priv);
 	rtl8365mb_irq_teardown(priv);
 }
@@ -3349,7 +3488,10 @@ static int rtl8365mb_detect(struct realtek_priv *priv)
 
 	dev_info(priv->dev, "found an %s switch\n", mb->chip_info->name);
 
-	priv->num_ports = RTL8365MB_MAX_NUM_PORTS;
+	/* port_mask can have gaps, so count up to the highest port, not the
+	 * ports set
+	 */
+	priv->num_ports = fls(mb->chip_info->port_mask);
 	mb->priv = priv;
 	mb->cpu.trap_port = RTL8365MB_MAX_NUM_PORTS;
 	mb->cpu.insert = RTL8365MB_CPU_INSERT_TO_ALL;
@@ -3414,6 +3556,7 @@ static int rtl8365mb_set_mac_eee(struct dsa_switch *ds, int port,
 }
 
 static const struct dsa_switch_ops rtl8365mb_switch_ops = {
+	.conduit_state_change = rtl8365mb_conduit_state_change,
 	.get_tag_protocol = rtl8365mb_get_tag_protocol,
 	.change_tag_protocol = rtl8365mb_change_tag_protocol,
 	.setup = rtl8365mb_setup,
@@ -3425,6 +3568,11 @@ static const struct dsa_switch_ops rtl8365mb_switch_ops = {
 	.port_bridge_leave = rtl83xx_port_bridge_leave,
 	.port_pre_bridge_flags = rtl8365mb_port_pre_bridge_flags,
 	.port_bridge_flags = rtl83xx_port_bridge_flags,
+	.port_get_default_prio = rtl83xx_port_get_default_prio,
+	.port_set_default_prio = rtl83xx_port_set_default_prio,
+	.port_get_apptrust = rtl83xx_port_get_apptrust,
+	.port_set_apptrust = rtl83xx_port_set_apptrust,
+	.port_get_dscp_prio = rtl83xx_port_get_dscp_prio,
 	.port_stp_state_set = rtl8365mb_port_stp_state_set,
 	.port_fast_age = rtl83xx_port_fast_age,
 	.port_fdb_add = rtl83xx_port_fdb_add,
@@ -3467,6 +3615,13 @@ static const struct realtek_ops rtl8365mb_ops = {
 	.phy_write = rtl8365mb_phy_write,
 	.phy_read_c45 = rtl8365mb_phy_read_c45,
 	.phy_write_c45 = rtl8365mb_phy_write_c45,
+	.qos_get_port_prio = rtl8365mb_qos_get_port_prio,
+	.qos_set_port_prio = rtl8365mb_qos_set_port_prio,
+	.qos_set_pcp_prio = rtl8365mb_qos_set_pcp_prio,
+	.qos_get_dscp_prio = rtl8365mb_qos_get_dscp_prio,
+	.qos_set_dscp_prio = rtl8365mb_qos_set_dscp_prio,
+	.qos_set_apptrust = rtl8365mb_qos_set_apptrust,
+	.qos_get_apptrust = rtl8365mb_qos_get_apptrust,
 };
 
 static const char *const rtl8365mb_supplies[] = {

@@ -104,8 +104,8 @@ static int tcf_gact_init(struct net *net, struct nlattr *nla,
 
 	err = tcf_idr_check_alloc(tn, &index, a, bind);
 	if (!err) {
-		ret = tcf_idr_create_from_flags(tn, index, est, a,
-						&act_gact_ops, bind, flags);
+		ret = tcf_idr_create(tn, index, est, a,
+				     &act_gact_ops, bind, flags);
 		if (ret) {
 			tcf_idr_cleanup(tn, index);
 			return ret;
@@ -233,9 +233,10 @@ static size_t tcf_gact_get_fill_size(const struct tc_action *act)
 	size_t sz = nla_total_size(sizeof(struct tc_gact)); /* TCA_GACT_PARMS */
 
 #ifdef CONFIG_GACT_PROB
-	if (to_gact(act)->tcfg_ptype)
-		/* TCA_GACT_PROB */
-		sz += nla_total_size(sizeof(struct tc_gact_p));
+	/* tcfg_ptype may be set by a concurrent replace after this budget has
+	 * been computed, so account for TCA_GACT_PROB unconditionally.
+	 */
+	sz += nla_total_size(sizeof(struct tc_gact_p));
 #endif
 
 	return sz;

@@ -1038,8 +1038,8 @@ int hw_atl_b0_hw_irq_read(struct aq_hw_s *self, u64 *mask)
 
 #define IS_FILTER_ENABLED(_F_) ((packet_filter & (_F_)) ? 1U : 0U)
 
-int hw_atl_b0_hw_packet_filter_set(struct aq_hw_s *self,
-				   unsigned int packet_filter)
+static int hw_atl_b0_hw_packet_filter_set(struct aq_hw_s *self,
+					  unsigned int packet_filter)
 {
 	struct aq_nic_cfg_s *cfg = self->aq_nic_cfg;
 	unsigned int i = 0U;
@@ -1777,6 +1777,11 @@ out:
 	return err;
 }
 
+static unsigned int hw_atl_b0_get_multicast_address_max(struct aq_hw_s *self)
+{
+	return AQ_HW_MULTICAST_ADDRESS_MAX;
+}
+
 const struct aq_hw_ops hw_atl_ops_b0 = {
 	.hw_soft_reset        = hw_atl_utils_soft_reset,
 	.hw_prepare           = hw_atl_utils_initfw,
@@ -1836,4 +1841,6 @@ const struct aq_hw_ops hw_atl_ops_b0 = {
 
 	.hw_get_mac_temp         = hw_atl_b0_get_mac_temp,
 	.hw_read_module_eeprom   = hw_atl_b0_read_module_eeprom,
+
+	.hw_get_multicast_address_max = hw_atl_b0_get_multicast_address_max,
 };

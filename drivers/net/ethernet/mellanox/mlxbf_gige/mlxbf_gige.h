@@ -13,6 +13,7 @@
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/irqreturn.h>
 #include <linux/netdevice.h>
+#include <linux/notifier.h>
 #include <linux/irq.h>
 #include <linux/phy.h>
 
@@ -130,6 +131,7 @@ struct mlxbf_gige {
 	u8 hw_version;
 	struct mlxbf_gige_mdio_gw *mdio_gw;
 	int prev_speed;
+	struct notifier_block panic_nb;
 };
 
 /* Rx Work Queue Element definitions */

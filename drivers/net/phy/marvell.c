@@ -146,6 +146,9 @@
 #define MII_88E1318S_PHY_LED_FUNC_ON		(0x9)
 #define MII_88E1318S_PHY_LED_FUNC_HI_Z		(0xa)
 #define MII_88E1318S_PHY_LED_FUNC_BLINK		(0xb)
+#define MII_88E1318S_PHY_LED_POL		0x11
+#define MII_88E1318S_PHY_LED_POL_ACT_HIGH(idx)	BIT(2 * (idx))
+#define MII_88E1318S_PHY_LED_POL_HIGH_IMP(idx)	BIT(2 * (idx) + 1)
 #define MII_88E1318S_PHY_LED_TCR		0x12
 #define MII_88E1318S_PHY_LED_TCR_FORCE_INT	BIT(15)
 #define MII_88E1318S_PHY_LED_TCR_INTn_ENABLE	BIT(7)
@@ -300,6 +303,8 @@
 
 #define NB_FIBER_STATS	1
 #define NB_STAT_MAX	3
+
+#define M88E1318S_MAX_LEDS	3
 
 MODULE_DESCRIPTION("Marvell PHY driver");
 MODULE_AUTHOR("Andy Fleming");
@@ -1332,7 +1337,28 @@ static int m88e1318_config_init(struct phy_device *phydev)
 	return marvell_config_init(phydev);
 }
 
-static int m88e1510_config_init(struct phy_device *phydev)
+static int m88e1510_config_mode(struct phy_device *phydev, u16 mode)
+{
+	int oldpage;
+	int ret = 0;
+
+	oldpage = phy_select_page(phydev, MII_MARVELL_MODE_PAGE);
+	if (oldpage < 0)
+		goto error;
+
+	ret = __phy_modify(phydev, MII_88E1510_GEN_CTRL_REG_1,
+			   MII_88E1510_GEN_CTRL_REG_1_MODE_MASK, mode);
+	if (ret < 0)
+		goto error;
+
+	ret = __phy_set_bits(phydev, MII_88E1510_GEN_CTRL_REG_1,
+			     MII_88E1510_GEN_CTRL_REG_1_RESET);
+
+error:
+	return phy_restore_page(phydev, oldpage, ret);
+}
+
+static int m88e1510_eee_errata(struct phy_device *phydev)
 {
 	static const struct {
 		u16 reg17, reg16;
@@ -1342,62 +1368,54 @@ static int m88e1510_config_init(struct phy_device *phydev)
 		{ 0xb233, 0x214d },
 		{ 0xcc0c, 0x2159 },
 	};
-	int err;
-	int i;
+	int i, oldpage, ret = 0;
 
 	/* As per Marvell Release Notes - Alaska 88E1510/88E1518/88E1512/
 	 * 88E1514 Rev A0, Errata Section 5.1:
 	 * If EEE is intended to be used, the following register writes
 	 * must be done once after every hardware reset.
 	 */
-	err = marvell_set_page(phydev, 0x00FF);
-	if (err < 0)
-		return err;
+	oldpage = phy_select_page(phydev, 0x00FF);
+	if (oldpage < 0)
+		goto restore;
 
 	for (i = 0; i < ARRAY_SIZE(errata_vals); ++i) {
-		err = phy_write(phydev, 17, errata_vals[i].reg17);
-		if (err)
-			return err;
-		err = phy_write(phydev, 16, errata_vals[i].reg16);
-		if (err)
-			return err;
+		ret = __phy_write(phydev, 17, errata_vals[i].reg17);
+		if (ret)
+			goto restore;
+
+		ret = __phy_write(phydev, 16, errata_vals[i].reg16);
+		if (ret)
+			goto restore;
 	}
 
-	err = marvell_set_page(phydev, 0x00FB);
-	if (err < 0)
-		return err;
-	err = phy_write(phydev, 07, 0xC00D);
+restore:
+	ret = phy_restore_page(phydev, oldpage, ret);
+	if (ret < 0)
+		return ret;
+
+	return phy_write_paged(phydev, 0x00FB, 07, 0xC00D);
+}
+
+static int m88e1510_config_init(struct phy_device *phydev)
+{
+	int err;
+
+	err = m88e1510_eee_errata(phydev);
 	if (err < 0)
 		return err;
 	err = marvell_set_page(phydev, MII_MARVELL_COPPER_PAGE);
 	if (err < 0)
 		return err;
 
-	/* SGMII-to-Copper mode initialization */
-	if (phydev->interface == PHY_INTERFACE_MODE_SGMII) {
-		/* Select page 18 */
-		err = marvell_set_page(phydev, 18);
-		if (err < 0)
-			return err;
+	/* RGMII/SGMII-to-Copper mode initialization */
+	if (phydev->interface == PHY_INTERFACE_MODE_SGMII)
+		err = m88e1510_config_mode(phydev, MII_88E1510_GEN_CTRL_REG_1_MODE_SGMII);
+	else if (phy_interface_is_rgmii(phydev))
+		err = m88e1510_config_mode(phydev, MII_88E1510_GEN_CTRL_REG_1_MODE_RGMII);
+	if (err < 0)
+		return err;
 
-		/* In reg 20, write MODE[2:0] = 0x1 (SGMII to Copper) */
-		err = phy_modify(phydev, MII_88E1510_GEN_CTRL_REG_1,
-				 MII_88E1510_GEN_CTRL_REG_1_MODE_MASK,
-				 MII_88E1510_GEN_CTRL_REG_1_MODE_SGMII);
-		if (err < 0)
-			return err;
-
-		/* PHY reset is necessary after changing MODE[2:0] */
-		err = phy_set_bits(phydev, MII_88E1510_GEN_CTRL_REG_1,
-				   MII_88E1510_GEN_CTRL_REG_1_RESET);
-		if (err < 0)
-			return err;
-
-		/* Reset page selection */
-		err = marvell_set_page(phydev, MII_MARVELL_COPPER_PAGE);
-		if (err < 0)
-			return err;
-	}
 	err = m88e1011_set_downshift(phydev, 3);
 	if (err < 0)
 		return err;
@@ -3625,7 +3643,7 @@ static int m88e1318_led_hw_control_get(struct phy_device *phydev, u8 index,
 {
 	int mode, reg;
 
-	if (index > 2)
+	if (index >= M88E1318S_MAX_LEDS)
 		return -EINVAL;
 
 	reg = phy_read_paged(phydev, MII_MARVELL_LED_PAGE,
@@ -3636,6 +3654,36 @@ static int m88e1318_led_hw_control_get(struct phy_device *phydev, u8 index,
 	mode = (reg >> (4 * index)) & 0xf;
 
 	return marvell_get_led_rules(index, rules, mode);
+}
+
+static int m88e1318_led_polarity_set(struct phy_device *phydev, int index,
+				     unsigned long modes)
+{
+	u16 val = 0;
+	u32 mode;
+
+	if (index >= M88E1318S_MAX_LEDS)
+		return -EINVAL;
+
+	for_each_set_bit(mode, &modes, __PHY_LED_MODES_NUM) {
+		switch (mode) {
+		case PHY_LED_ACTIVE_LOW:
+			break;
+		case PHY_LED_ACTIVE_HIGH:
+			val |= MII_88E1318S_PHY_LED_POL_ACT_HIGH(index);
+			break;
+		case PHY_LED_INACTIVE_HIGH_IMPEDANCE:
+			val |= MII_88E1318S_PHY_LED_POL_HIGH_IMP(index);
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	return phy_modify_paged(phydev, MII_MARVELL_LED_PAGE,
+				MII_88E1318S_PHY_LED_POL,
+				MII_88E1318S_PHY_LED_POL_ACT_HIGH(index) |
+				MII_88E1318S_PHY_LED_POL_HIGH_IMP(index), val);
 }
 
 static int marvell_probe(struct phy_device *phydev)
@@ -3656,8 +3704,6 @@ static int m88e1510_port_configure_serdes(struct phy_port *port, bool enable,
 {
 	struct phy_device *phydev = port_phydev(port);
 	struct device *dev;
-	int oldpage;
-	int ret = 0;
 	u16 mode;
 
 	dev = &phydev->mdio.dev;
@@ -3685,20 +3731,7 @@ static int m88e1510_port_configure_serdes(struct phy_port *port, bool enable,
 		mode = MII_88E1510_GEN_CTRL_REG_1_MODE_RGMII;
 	}
 
-	oldpage = phy_select_page(phydev, MII_MARVELL_MODE_PAGE);
-	if (oldpage < 0)
-		goto error;
-
-	ret = __phy_modify(phydev, MII_88E1510_GEN_CTRL_REG_1,
-			   MII_88E1510_GEN_CTRL_REG_1_MODE_MASK, mode);
-	if (ret < 0)
-		goto error;
-
-	ret = __phy_set_bits(phydev, MII_88E1510_GEN_CTRL_REG_1,
-			     MII_88E1510_GEN_CTRL_REG_1_RESET);
-
-error:
-	return phy_restore_page(phydev, oldpage, ret);
+	return m88e1510_config_mode(phydev, mode);
 }
 
 static const struct phy_port_ops m88e1510_serdes_port_ops = {
@@ -3886,6 +3919,7 @@ static struct phy_driver marvell_drivers[] = {
 		.led_hw_is_supported = m88e1318_led_hw_is_supported,
 		.led_hw_control_set = m88e1318_led_hw_control_set,
 		.led_hw_control_get = m88e1318_led_hw_control_get,
+		.led_polarity_set = m88e1318_led_polarity_set,
 	},
 	{
 		.phy_id = MARVELL_PHY_ID_88E1145,
@@ -3971,6 +4005,7 @@ static struct phy_driver marvell_drivers[] = {
 		.led_hw_is_supported = m88e1318_led_hw_is_supported,
 		.led_hw_control_set = m88e1318_led_hw_control_set,
 		.led_hw_control_get = m88e1318_led_hw_control_get,
+		.led_polarity_set = m88e1318_led_polarity_set,
 	},
 	{
 		.phy_id = MARVELL_PHY_ID_88E1510,
@@ -4005,6 +4040,7 @@ static struct phy_driver marvell_drivers[] = {
 		.led_hw_is_supported = m88e1318_led_hw_is_supported,
 		.led_hw_control_set = m88e1318_led_hw_control_set,
 		.led_hw_control_get = m88e1318_led_hw_control_get,
+		.led_polarity_set = m88e1318_led_polarity_set,
 		.attach_mii_port = m88e1510_attach_mii_port,
 	},
 	{

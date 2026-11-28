@@ -118,6 +118,7 @@ enum {
 #define X25_Q_BIT_FLAG		0
 #define X25_INTERRUPT_FLAG	1
 #define X25_ACCPT_APPRV_FLAG	2
+#define X25_KILL_BY_NEIGH_FLAG	3
 
 /**
  *	struct x25_route - x25 routing entry
@@ -196,7 +197,7 @@ int x25_addr_aton(unsigned char *, struct x25_address *, struct x25_address *);
 struct sock *x25_find_socket(unsigned int, struct x25_neigh *);
 void x25_destroy_socket_from_timer(struct sock *);
 int x25_rx_call_request(struct sk_buff *, struct x25_neigh *, unsigned int);
-void x25_kill_by_neigh(struct x25_neigh *);
+void x25_kill_by_neigh(struct x25_neigh *, bool);
 
 /* x25_dev.c */
 void x25_send_frame(struct sk_buff *, struct x25_neigh *);
@@ -230,7 +231,7 @@ void x25_link_control(struct sk_buff *, struct x25_neigh *, unsigned short);
 void x25_link_device_up(struct net_device *);
 void x25_link_device_down(struct net_device *);
 void x25_link_established(struct x25_neigh *);
-void x25_link_terminated(struct x25_neigh *);
+void x25_link_terminated(struct x25_neigh *, bool);
 void x25_transmit_clear_request(struct x25_neigh *, unsigned int,
 				unsigned char);
 void x25_transmit_link(struct sk_buff *, struct x25_neigh *);
@@ -246,8 +247,10 @@ static __inline__ void x25_neigh_hold(struct x25_neigh *nb)
 
 static __inline__ void x25_neigh_put(struct x25_neigh *nb)
 {
-	if (refcount_dec_and_test(&nb->refcnt))
+	if (refcount_dec_and_test(&nb->refcnt)) {
+		skb_queue_purge(&nb->queue);
 		kfree(nb);
+	}
 }
 
 /* x25_out.c */

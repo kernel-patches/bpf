@@ -922,14 +922,16 @@ static void nfc_llcp_recv_ui(struct nfc_llcp_local *local,
 
 	/* There is no sequence with UI frames */
 	skb_pull(skb, LLCP_HEADER_SIZE);
-	if (!sock_queue_rcv_skb(&llcp_sock->sk, skb)) {
-		/*
-		 * UI frames will be freed from the socket layer, so we
-		 * need to keep them alive until someone receives them.
-		 */
-		skb_get(skb);
-	} else {
+	/*
+	 * UI frames will be freed from the socket layer, so we need to keep
+	 * them alive until someone receives them.  Take the reference before
+	 * the skb is queued: once it is on the receive queue a concurrent
+	 * recvmsg() may already have freed it.
+	 */
+	skb_get(skb);
+	if (sock_queue_rcv_skb(&llcp_sock->sk, skb)) {
 		pr_err("Receive queue is full\n");
+		kfree_skb(skb);
 	}
 
 	nfc_llcp_sock_put(llcp_sock);
@@ -1136,14 +1138,17 @@ static void nfc_llcp_recv_hdlc(struct nfc_llcp_local *local,
 			pr_err("Received out of sequence I PDU\n");
 
 		skb_pull(skb, LLCP_HEADER_SIZE + LLCP_SEQUENCE_SIZE);
-		if (!sock_queue_rcv_skb(&llcp_sock->sk, skb)) {
-			/*
-			 * I frames will be freed from the socket layer, so we
-			 * need to keep them alive until someone receives them.
-			 */
-			skb_get(skb);
-		} else {
+		/*
+		 * I frames will be freed from the socket layer, so we need to
+		 * keep them alive until someone receives them.  Take the
+		 * reference before the skb is queued: once it is on the
+		 * receive queue a concurrent recvmsg() may already have freed
+		 * it.
+		 */
+		skb_get(skb);
+		if (sock_queue_rcv_skb(&llcp_sock->sk, skb)) {
 			pr_err("Receive queue is full\n");
+			kfree_skb(skb);
 		}
 	}
 
@@ -1636,8 +1641,10 @@ void nfc_llcp_recv(void *data, struct sk_buff *skb, int err)
 {
 	struct nfc_llcp_local *local = (struct nfc_llcp_local *) data;
 
-	if (err < 0) {
+	if (err) {
 		pr_err("LLCP PDU receive err %d\n", err);
+		if (skb)
+			kfree_skb(skb);
 		return;
 	}
 

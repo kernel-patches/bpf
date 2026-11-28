@@ -1660,8 +1660,7 @@ int ipmr_sk_ioctl(struct sock *sk, unsigned int cmd, void __user *arg)
 }
 
 /* Getsock opt support for the multicast routing system. */
-int ip_mroute_getsockopt(struct sock *sk, int optname, sockptr_t optval,
-			 sockptr_t optlen)
+int ip_mroute_getsockopt(struct sock *sk, int optname, sockopt_t *opt)
 {
 	int olr;
 	int val;
@@ -1692,16 +1691,14 @@ int ip_mroute_getsockopt(struct sock *sk, int optname, sockptr_t optval,
 		return -ENOPROTOOPT;
 	}
 
-	if (copy_from_sockptr(&olr, optlen, sizeof(int)))
-		return -EFAULT;
+	olr = opt->optlen;
 	if (olr < 0)
 		return -EINVAL;
 
 	olr = min_t(unsigned int, olr, sizeof(int));
 
-	if (copy_to_sockptr(optlen, &olr, sizeof(int)))
-		return -EFAULT;
-	if (copy_to_sockptr(optval, &val, olr))
+	opt->optlen = olr;
+	if (copy_to_iter(&val, olr, &opt->iter_out) != olr)
 		return -EFAULT;
 	return 0;
 }
@@ -1869,6 +1866,10 @@ static void ip_encap(struct net *net, struct sk_buff *skb,
 	struct iphdr *iph;
 	const struct iphdr *old_iph = ip_hdr(skb);
 
+	/* skb_cow() in ipmr_prepare_xmit() leaves no header to unclone */
+	iptunnel_handle_offloads(skb, SKB_GSO_IPXIP4);
+	skb_set_inner_ipproto(skb, IPPROTO_IPIP);
+
 	skb_push(skb, sizeof(struct iphdr));
 	skb->transport_header = skb->network_header;
 	skb_reset_network_header(skb);
@@ -1882,8 +1883,8 @@ static void ip_encap(struct net *net, struct sk_buff *skb,
 	iph->saddr	=	saddr;
 	iph->protocol	=	IPPROTO_IPIP;
 	iph->ihl	=	5;
-	iph->tot_len	=	htons(skb->len);
-	ip_select_ident(net, skb, NULL);
+	iph_set_totlen(iph, skb->len);
+	ip_select_ident_segs(net, skb, NULL, skb_shinfo(skb)->gso_segs ?: 1);
 	ip_send_check(iph);
 
 	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
@@ -1928,7 +1929,8 @@ static bool ipmr_forward_offloaded(struct sk_buff *skb, struct mr_table *mrt,
 /* Processing handlers for ipmr_forward, under rcu_read_lock() */
 
 static int ipmr_prepare_xmit(struct net *net, struct mr_table *mrt,
-			     struct sk_buff *skb, int vifi)
+			     struct sk_buff *skb, int vifi,
+			     unsigned short flags)
 {
 	const struct iphdr *iph = ip_hdr(skb);
 	struct vif_device *vif = &mrt->vif_table[vifi];
@@ -1936,12 +1938,13 @@ static int ipmr_prepare_xmit(struct net *net, struct mr_table *mrt,
 	struct rtable *rt;
 	struct flowi4 fl4;
 	int    encap = 0;
+	unsigned int mtu;
 
 	vif_dev = vif_dev_read(vif);
 	if (!vif_dev)
 		return -1;
 
-	if (vif->flags & VIFF_REGISTER) {
+	if (flags & VIFF_REGISTER) {
 		WRITE_ONCE(vif->pkt_out, vif->pkt_out + 1);
 		WRITE_ONCE(vif->bytes_out, vif->bytes_out + skb->len);
 		DEV_STATS_ADD(vif_dev, tx_bytes, skb->len);
@@ -1950,7 +1953,7 @@ static int ipmr_prepare_xmit(struct net *net, struct mr_table *mrt,
 		return -1;
 	}
 
-	if (vif->flags & VIFF_TUNNEL) {
+	if (flags & VIFF_TUNNEL) {
 		rt = ip_route_output_ports(net, &fl4, NULL,
 					   vif->remote, vif->local,
 					   0, 0,
@@ -1968,7 +1971,10 @@ static int ipmr_prepare_xmit(struct net *net, struct mr_table *mrt,
 			return -1;
 	}
 
-	if (skb->len+encap > dst4_mtu(&rt->dst) && (ntohs(iph->frag_off) & IP_DF)) {
+	mtu = dst4_mtu(&rt->dst);
+	if (skb->len + encap > mtu && (ntohs(iph->frag_off) & IP_DF) &&
+	    !(skb_is_gso(skb) && mtu > encap &&
+	      skb_gso_validate_network_len(skb, mtu - encap))) {
 		/* Do not fragment multicasts. Alas, IPv4 does not
 		 * allow to send ICMP, so that packets will disappear
 		 * to blackhole.
@@ -1985,6 +1991,17 @@ static int ipmr_prepare_xmit(struct net *net, struct mr_table *mrt,
 		return -1;
 	}
 
+	/* Complete the pending checksum of an encapsulated packet, as for
+	 * a packet sent through an ipip device. This may reallocate the
+	 * head: no pointer into it is used after this point.
+	 */
+	if ((flags & VIFF_TUNNEL) && skb->encapsulation &&
+	    skb->ip_summed == CHECKSUM_PARTIAL &&
+	    skb_csum_hwoffload_help(skb, 0)) {
+		ip_rt_put(rt);
+		return -1;
+	}
+
 	WRITE_ONCE(vif->pkt_out, vif->pkt_out + 1);
 	WRITE_ONCE(vif->bytes_out, vif->bytes_out + skb->len);
 
@@ -1995,7 +2012,7 @@ static int ipmr_prepare_xmit(struct net *net, struct mr_table *mrt,
 	/* FIXME: forward and output firewalls used to be called here.
 	 * What do we do with netfilter? -- RR
 	 */
-	if (vif->flags & VIFF_TUNNEL) {
+	if (flags & VIFF_TUNNEL) {
 		ip_encap(net, skb, vif->local, vif->remote);
 		/* FIXME: extra output firewall step used to be here. --RR */
 		DEV_STATS_INC(vif_dev, tx_packets);
@@ -2005,15 +2022,49 @@ static int ipmr_prepare_xmit(struct net *net, struct mr_table *mrt,
 	return 0;
 }
 
+/* ip_encap() describes its IPIP header with the inner header offsets of
+ * the skb, which an encapsulated packet already uses for its own tunnel.
+ * An ipip device offers no tunnel offloads, so validate_xmit_skb()
+ * segments such a GSO packet before ipip_tunnel_xmit() adds the header.
+ * Do the same for a tunnel vif.
+ */
+static bool ipmr_needs_segment(const struct sk_buff *skb, unsigned short flags)
+{
+	return (flags & VIFF_TUNNEL) && skb->encapsulation && skb_is_gso(skb);
+}
+
+static struct sk_buff *ipmr_segment(struct sk_buff *skb)
+{
+	struct sk_buff *segs = skb_gso_segment(skb, 0);
+
+	if (IS_ERR_OR_NULL(segs)) {
+		kfree_skb(skb);
+		return NULL;
+	}
+	consume_skb(skb);
+	return segs;
+}
+
 static void ipmr_queue_fwd_xmit(struct net *net, struct mr_table *mrt,
 				int in_vifi, struct sk_buff *skb, int vifi)
 {
+	unsigned short flags = READ_ONCE(mrt->vif_table[vifi].flags);
+	struct sk_buff *segs, *next;
 	struct rtable *rt;
 
 	if (ipmr_forward_offloaded(skb, mrt, in_vifi, vifi))
 		goto out_free;
 
-	if (ipmr_prepare_xmit(net, mrt, skb, vifi))
+	if (ipmr_needs_segment(skb, flags)) {
+		segs = ipmr_segment(skb);
+		skb_list_walk_safe(segs, skb, next) {
+			skb_mark_not_on_list(skb);
+			ipmr_queue_fwd_xmit(net, mrt, in_vifi, skb, vifi);
+		}
+		return;
+	}
+
+	if (ipmr_prepare_xmit(net, mrt, skb, vifi, flags))
 		goto out_free;
 
 	rt = skb_rtable(skb);
@@ -2042,7 +2093,19 @@ out_free:
 static void ipmr_queue_output_xmit(struct net *net, struct mr_table *mrt,
 				   struct sk_buff *skb, int vifi)
 {
-	if (ipmr_prepare_xmit(net, mrt, skb, vifi))
+	unsigned short flags = READ_ONCE(mrt->vif_table[vifi].flags);
+	struct sk_buff *segs, *next;
+
+	if (ipmr_needs_segment(skb, flags)) {
+		segs = ipmr_segment(skb);
+		skb_list_walk_safe(segs, skb, next) {
+			skb_mark_not_on_list(skb);
+			ipmr_queue_output_xmit(net, mrt, skb, vifi);
+		}
+		return;
+	}
+
+	if (ipmr_prepare_xmit(net, mrt, skb, vifi, flags))
 		goto out_free;
 
 	ip_mc_output(net, NULL, skb);

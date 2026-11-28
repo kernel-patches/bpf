@@ -204,6 +204,7 @@ wg_index_hashtable_lookup(struct index_hashtable *table,
 			  const __le32 index, struct wg_peer **peer)
 {
 	struct index_hashtable_entry *iter_entry, *entry = NULL;
+	struct wg_peer *peer_ref;
 
 	rcu_read_lock_bh();
 	hlist_for_each_entry_rcu_bh(iter_entry, index_bucket(table, index),
@@ -215,9 +216,9 @@ wg_index_hashtable_lookup(struct index_hashtable *table,
 		}
 	}
 	if (likely(entry)) {
-		entry->peer = wg_peer_get_maybe_zero(entry->peer);
-		if (likely(entry->peer))
-			*peer = entry->peer;
+		peer_ref = wg_peer_get_maybe_zero(entry->peer);
+		if (likely(peer_ref))
+			*peer = peer_ref;
 		else
 			entry = NULL;
 	}
