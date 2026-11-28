@@ -728,7 +728,7 @@ static void sun8i_dwmac_set_filter(struct mac_device_info *hw,
 	struct netdev_hw_addr *ha;
 	int macaddrs = netdev_uc_count(dev) + netdev_mc_count(dev) + 1;
 
-	v = EMAC_FRM_FLT_CTL;
+	v = 0;
 
 	if (dev->flags & IFF_PROMISC) {
 		v = EMAC_FRM_FLT_RXALL;
