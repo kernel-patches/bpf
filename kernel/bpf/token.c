@@ -163,7 +163,6 @@ int bpf_token_create(union bpf_attr *attr)
 		return PTR_ERR(inode);
 
 	inode->i_op = &bpf_token_iops;
-	inode->i_fop = &bpf_token_fops;
 	clear_nlink(inode); /* make sure it is unlinked */
 
 	FD_PREPARE(fdf, O_CLOEXEC,
