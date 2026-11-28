@@ -1336,12 +1336,15 @@ static int tps23881_irq_event_handler(struct tps23881_priv *priv, u16 reg,
 		ret = i2c_smbus_read_word_data(client, TPS23881_REG_FAULT);
 		if (ret < 0)
 			return ret;
-		ret = tps23881_irq_event_over_current(priv, ret, notifs,
+
+		val = ret;
+		ret = tps23881_irq_event_over_current(priv, val, notifs,
 						      notifs_mask);
 		if (ret)
 			return ret;
 
-		tps23881_irq_event_disconnection(priv, ret, notifs, notifs_mask);
+		tps23881_irq_event_disconnection(priv, val, notifs,
+						 notifs_mask);
 	}
 
 	if (reg & (TPS23881_REG_IT_DETC | TPS23881_REG_IT_DETC << 8 |
