@@ -718,8 +718,6 @@ static void ioc3_init(struct net_device *dev)
 	struct ioc3_private *ip = netdev_priv(dev);
 	struct ioc3_ethregs *regs = ip->regs;
 
-	timer_delete_sync(&ip->ioc3_timer);	/* Kill if running	*/
-
 	writel(EMCR_RST, &regs->emcr);		/* Reset		*/
 	readl(&regs->emcr);			/* Flush WB		*/
 	udelay(4);				/* Give it time ...	*/
@@ -786,6 +784,7 @@ static int ioc3_open(struct net_device *dev)
 	ip->ehar_h = 0;
 	ip->ehar_l = 0;
 
+	timer_delete_sync(&ip->ioc3_timer);
 	ioc3_init(dev);
 	if (ioc3_alloc_rx_bufs(dev)) {
 		netdev_err(dev, "%s: rx buffer allocation failed\n", __func__);
@@ -1131,7 +1130,6 @@ static void ioc3_timeout(struct net_device *dev, unsigned int txqueue)
 	}
 	ioc3_start(ip);
 	ioc3_mii_init(ip);
-	ioc3_mii_start(ip);
 
 	spin_unlock_irq(&ip->ioc3_lock);
 
