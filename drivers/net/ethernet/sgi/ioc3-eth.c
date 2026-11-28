@@ -781,6 +781,7 @@ static inline void ioc3_stop(struct ioc3_private *ip)
 static int ioc3_open(struct net_device *dev)
 {
 	struct ioc3_private *ip = netdev_priv(dev);
+	int err;
 
 	ip->ehar_h = 0;
 	ip->ehar_l = 0;
@@ -789,6 +790,13 @@ static int ioc3_open(struct net_device *dev)
 	if (ioc3_alloc_rx_bufs(dev)) {
 		netdev_err(dev, "%s: rx buffer allocation failed\n", __func__);
 		return -ENOMEM;
+	}
+	err = request_irq(dev->irq, ioc3_interrupt, IRQF_SHARED, "ioc3-eth",
+			  dev);
+	if (err) {
+		netdev_err(dev, "Can't get irq %d\n", dev->irq);
+		ioc3_free_rx_bufs(ip);
+		return err;
 	}
 	ioc3_start(ip);
 	ioc3_mii_start(ip);
@@ -802,6 +810,9 @@ static int ioc3_close(struct net_device *dev)
 	struct ioc3_private *ip = netdev_priv(dev);
 
 	timer_delete_sync(&ip->ioc3_timer);
+
+	/* ioc3_error() restarts the chip, so free the IRQ before stopping it */
+	free_irq(dev->irq, dev);
 
 	netif_stop_queue(dev);
 
@@ -867,13 +878,6 @@ static int ioc3eth_probe(struct platform_device *pdev)
 	dev->irq = platform_get_irq(pdev, 0);
 	if (dev->irq < 0) {
 		err = dev->irq;
-		goto out_free;
-	}
-
-	if (devm_request_irq(&pdev->dev, dev->irq, ioc3_interrupt,
-			     IRQF_SHARED, "ioc3-eth", dev)) {
-		dev_err(&pdev->dev, "Can't get irq %d\n", dev->irq);
-		err = -ENODEV;
 		goto out_free;
 	}
 
