@@ -5,7 +5,6 @@
 #include <bpf/bpf_helpers.h>
 
 #define CLOCK_MONOTONIC 1
-#define TIMER_NSEC (60ULL * 1000 * 1000 * 1000)
 
 struct timer_value {
 	struct bpf_timer timer;
@@ -20,11 +19,10 @@ struct {
 	__type(value, struct timer_value);
 } timer_map SEC(".maps");
 
-u64 armed;
+u64 initialized;
 u64 cancelled;
 long timer_init_err;
 long timer_set_callback_err;
-long timer_start_err;
 long timer_cancel_err;
 
 static int timer_cb(void *map, u64 *key, struct timer_value *value)
@@ -32,8 +30,8 @@ static int timer_cb(void *map, u64 *key, struct timer_value *value)
 	return 0;
 }
 
-static long arm_timer_cb(struct bpf_map *map, u64 *key,
-			 struct timer_value *value, void *ctx)
+static long init_timer_cb(struct bpf_map *map, u64 *key,
+			  struct timer_value *value, void *ctx)
 {
 	u64 key_copy = *key;
 	long err;
@@ -48,19 +46,9 @@ static long arm_timer_cb(struct bpf_map *map, u64 *key,
 		return 1;
 	}
 
-	err = bpf_timer_set_callback(&value->timer, timer_cb);
-	if (err) {
-		timer_set_callback_err = err;
-		return 1;
-	}
+	timer_set_callback_err = bpf_timer_set_callback(&value->timer, timer_cb);
 
-	err = bpf_timer_start(&value->timer, TIMER_NSEC, BPF_F_TIMER_CPU_PIN);
-	if (err) {
-		timer_start_err = err;
-		return 1;
-	}
-
-	__sync_fetch_and_add(&armed, 1);
+	__sync_fetch_and_add(&initialized, 1);
 	return 1;
 }
 
@@ -82,9 +70,9 @@ static long cancel_timer_cb(struct bpf_map *map, u64 *key,
 }
 
 SEC("syscall")
-int arm_deleted_timer(void *ctx)
+int init_deleted_timer(void *ctx)
 {
-	bpf_for_each_map_elem(&timer_map, arm_timer_cb, NULL, 0);
+	bpf_for_each_map_elem(&timer_map, init_timer_cb, NULL, 0);
 	return 0;
 }
 

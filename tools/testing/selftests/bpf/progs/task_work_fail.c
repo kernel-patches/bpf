@@ -2,6 +2,7 @@
 /* Copyright (c) 2025 Meta Platforms, Inc. and affiliates. */
 
 #include <vmlinux.h>
+#include <errno.h>
 #include <string.h>
 #include <stdbool.h>
 #include <bpf/bpf_helpers.h>
@@ -93,4 +94,29 @@ int map_null(struct pt_regs *args)
 		return 0;
 	bpf_task_work_schedule_resume(task, &work->tw, NULL, process_work);
 	return 0;
+}
+
+static int deleted_task_work_cb(struct bpf_map *map, void *key, void *value)
+{
+	return 0;
+}
+
+SEC("syscall")
+__retval(-ENOENT)
+int schedule_deleted_task_work(void *ctx)
+{
+	struct elem empty = {}, *value;
+	int key = 0;
+
+	if (bpf_map_update_elem(&hmap, &key, &empty, BPF_NOEXIST))
+		return 1;
+	value = bpf_map_lookup_elem(&hmap, &key);
+	if (!value) {
+		bpf_map_delete_elem(&hmap, &key);
+		return 2;
+	}
+	if (bpf_map_delete_elem(&hmap, &key))
+		return 3;
+	return bpf_task_work_schedule_signal(bpf_get_current_task_btf(),
+					     &value->tw, &hmap, deleted_task_work_cb);
 }

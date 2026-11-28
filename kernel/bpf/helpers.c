@@ -1153,6 +1153,18 @@ static void *map_key_from_value(struct bpf_map *map, void *value, u32 *arr_idx)
 	return (void *)value - round_up(map->key_size, 8);
 }
 
+/* Is the element that holds this value still in the map? */
+static bool bpf_map_value_is_linked(struct bpf_map *map, void *value)
+{
+	u32 idx;
+	void *key = map_key_from_value(map, value, &idx);
+
+	/* It's not a use of the element. Don't set the ref bit of LRU node. */
+	if (map->ops->map_lookup_elem_sys_only)
+		return map->ops->map_lookup_elem_sys_only(map, key) == value;
+	return map->ops->map_lookup_elem(map, key) == value;
+}
+
 enum bpf_async_type {
 	BPF_ASYNC_TYPE_TIMER = 0,
 	BPF_ASYNC_TYPE_WQ,
@@ -1554,10 +1566,33 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 				    struct bpf_prog *prog)
 {
 	struct bpf_async_cb *cb;
+	struct bpf_map *map;
 
 	cb = READ_ONCE(async->cb);
 	if (!cb)
 		return -EINVAL;
+
+	/*
+	 * The prog can still hold a value of an element that was deleted from the map.
+	 * bpf_async_cancel_and_free() is done with it and nothing stops a new callback
+	 * when the element is freed. cb is published at this point: either the lookup
+	 * doesn't find the element or bpf_async_cancel_and_free() finds cb.
+	 * Nothing runs without callback_fn. An idle cb stays in the element until the
+	 * element is reused or freed.
+	 */
+	smp_mb();
+	map = READ_ONCE(cb->map);
+	if (!map || !bpf_map_value_is_linked(map, cb->value))
+		return -ENOENT;
+	/*
+	 * Dropping the last user reference sets usercnt to zero before the cleanup walk.
+	 * The walk can miss a cached element that another CPU later reinserts. If our
+	 * lookup finds that element, the usercnt check must not see the old nonzero
+	 * count and allow a callback to be installed after cleanup.
+	 */
+	smp_mb();
+	if (!atomic64_read(&map->usercnt))
+		return -EPERM;
 
 	return bpf_async_update_prog_callback(cb, prog, callback_fn);
 }
@@ -1749,15 +1784,20 @@ static void bpf_async_cancel_and_free(struct bpf_async_kern *async)
 {
 	struct bpf_async_cb *cb;
 
-	if (!READ_ONCE(async->cb))
-		return;
-
-	cb = xchg(&async->cb, NULL);
+	/* Another canceller can release the map-owned cb reference. */
+	guard(rcu)();
+	/* Order unlink before reading async->cb, including an empty slot. */
+	smp_mb();
+	cb = READ_ONCE(async->cb);
 	if (!cb)
 		return;
 
 	/* Callbacks that run after this see NULL and return. */
 	WRITE_ONCE(cb->map, NULL);
+	/* The one who detaches cb drops the map's reference. */
+	if (cmpxchg(&async->cb, cb, NULL) != cb)
+		return;
+
 	bpf_async_update_prog_callback(cb, NULL, NULL);
 	/*
 	 * No refcount_inc_not_zero(&cb->refcnt) here. Dropping the last
@@ -3532,6 +3572,18 @@ __bpf_kfunc int bpf_wq_start(struct bpf_wq *wq, unsigned int flags)
 	}
 }
 
+/**
+ * bpf_wq_set_callback - Set the callback of a BPF workqueue
+ * @wq: pointer to the bpf_wq field
+ * @callback_fn: callback function
+ * @flags: must be zero
+ * @aux: implicit program metadata
+ *
+ * Return: 0 on success, -EINVAL for invalid flags or an uninitialized @wq,
+ * -ENOENT if the containing map element is no longer in the map or the
+ * workqueue was invalidated by map cleanup, -EPERM if the map has no user
+ * references, or another negative error.
+ */
 __bpf_kfunc int bpf_wq_set_callback(struct bpf_wq *wq,
 				    int (callback_fn)(void *map, int *key, void *value),
 				    unsigned int flags,
@@ -4869,9 +4921,26 @@ static struct bpf_task_work_ctx *bpf_task_work_acquire_ctx(struct bpf_task_work 
 	}
 
 	/*
+	 * The prog can still hold a value of an element that was deleted from the map.
+	 * bpf_task_work_cancel_and_free() is done with it and nothing stops a new callback
+	 * when the element is freed. The ctx is published and PENDING at this point: either
+	 * the lookup doesn't find the element or bpf_task_work_cancel_and_free() finds the ctx.
+	 * An idle ctx stays in the element until the element is reused or freed.
+	 */
+	if (!bpf_map_value_is_linked(map, (void *)tw - map->record->task_work_off)) {
+		(void)cmpxchg(&ctx->state, BPF_TW_PENDING, BPF_TW_STANDBY);
+		bpf_task_work_ctx_put(ctx);
+		return ERR_PTR(-ENOENT);
+	}
+
+	/* Order the lookup before the read of usercnt. See __bpf_async_set_callback(). */
+	smp_mb();
+
+	/*
 	 * If no process or bpffs is holding a reference to the map, no new callbacks should be
-	 * scheduled. This does not address any race or correctness issue, but rather is a policy
-	 * choice: dropping user references should stop everything.
+	 * scheduled. The full barrier above ensures that when the membership lookup observes
+	 * an element linked after the last user reference was dropped, the usercnt read below
+	 * cannot return the old nonzero count. The uref walk may have missed this element.
 	 */
 	if (!atomic64_read(&map->usercnt)) {
 		/* drop ref we just got for task_work callback itself */
@@ -4939,7 +5008,9 @@ release_prog:
  * @callback: pointer to BPF subprogram to call
  * @aux: pointer to bpf_prog_aux of the caller BPF program, implicitly set by the verifier
  *
- * Return: 0 if task work has been scheduled successfully, negative error code otherwise
+ * Return: 0 if the scheduling irq_work was queued, -ENOENT if the value is
+ * no longer the current map value at the membership check, -EBUSY for a busy
+ * context or zero usercnt, or another negative error code on failure.
  */
 __bpf_kfunc int bpf_task_work_schedule_signal(struct task_struct *task, struct bpf_task_work *tw,
 					      void *map__const_map, bpf_task_work_callback_t callback,
@@ -4957,7 +5028,7 @@ __bpf_kfunc int bpf_task_work_schedule_signal(struct task_struct *task, struct b
  * @callback: pointer to BPF subprogram to call
  * @aux: pointer to bpf_prog_aux of the caller BPF program, implicitly set by the verifier
  *
- * Return: 0 if task work has been scheduled successfully, negative error code otherwise
+ * Return: See bpf_task_work_schedule_signal().
  */
 __bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task, struct bpf_task_work *tw,
 					      void *map__const_map, bpf_task_work_callback_t callback,
@@ -5183,11 +5254,22 @@ void bpf_task_work_cancel_and_free(void *val)
 	struct bpf_task_work_ctx *ctx;
 	enum bpf_task_work_state state;
 
-	ctx = xchg(&twk->ctx, NULL);
+	/* Another canceller can release the map-owned context reference. */
+	guard(rcu)();
+	/* Order a preceding unlink before observing an empty slot. */
+	smp_mb();
+	ctx = READ_ONCE(twk->ctx);
 	if (!ctx)
 		return;
 
+	/* Prevent entry to RUNNING before clearing the slot. */
 	state = xchg(&ctx->state, BPF_TW_FREED);
+	/* Every canceller may detach the context it observed. */
+	(void)cmpxchg(&twk->ctx, ctx, NULL);
+	/* Only the first FREED transition owns the map's ref. */
+	if (state == BPF_TW_FREED)
+		return;
+
 	if (state == BPF_TW_SCHEDULED) {
 		/* run in irq_work to avoid locks in NMI */
 		init_irq_work(&ctx->irq_work, bpf_task_work_cancel_scheduled);
