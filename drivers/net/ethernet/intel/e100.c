@@ -1849,8 +1849,16 @@ static int e100_tx_clean(struct nic *nic)
 
 static void e100_clean_cbs(struct nic *nic)
 {
+	unsigned int avail;
+	unsigned long flags;
+
+	spin_lock_irqsave(&nic->cb_lock, flags);
+	avail = nic->cbs_avail;
+	nic->cbs_avail = 0;
+	spin_unlock_irqrestore(&nic->cb_lock, flags);
+
 	if (nic->cbs) {
-		while (nic->cbs_avail != nic->params.cbs.count) {
+		while (avail != nic->params.cbs.count) {
 			struct cb *cb = nic->cb_to_clean;
 			if (cb->skb) {
 				dma_unmap_single(&nic->pdev->dev,
@@ -1860,11 +1868,10 @@ static void e100_clean_cbs(struct nic *nic)
 				dev_kfree_skb(cb->skb);
 			}
 			nic->cb_to_clean = nic->cb_to_clean->next;
-			nic->cbs_avail++;
+			avail++;
 		}
 		dma_pool_free(nic->cbs_pool, nic->cbs, nic->cbs_dma_addr);
 		nic->cbs = NULL;
-		nic->cbs_avail = 0;
 	}
 	nic->cuc_cmd = cuc_start;
 	nic->cb_to_use = nic->cb_to_send = nic->cb_to_clean =
@@ -1875,6 +1882,7 @@ static int e100_alloc_cbs(struct nic *nic)
 {
 	struct cb *cb;
 	unsigned int i, count = nic->params.cbs.count;
+	unsigned long flags;
 
 	nic->cuc_cmd = cuc_start;
 	nic->cb_to_use = nic->cb_to_send = nic->cb_to_clean = NULL;
@@ -1894,8 +1902,10 @@ static int e100_alloc_cbs(struct nic *nic)
 			((i+1) % count) * sizeof(struct cb));
 	}
 
+	spin_lock_irqsave(&nic->cb_lock, flags);
 	nic->cb_to_use = nic->cb_to_send = nic->cb_to_clean = nic->cbs;
 	nic->cbs_avail = count;
+	spin_unlock_irqrestore(&nic->cb_lock, flags);
 
 	return 0;
 }
