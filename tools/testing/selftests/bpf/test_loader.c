@@ -1374,6 +1374,11 @@ void run_subtest(struct test_loader *tester,
 	if (!test__start_subtest_with_desc(subspec->name, subspec->description))
 		return;
 
+	if (tester->skip) {
+		test__skip();
+		return;
+	}
+
 	if (spec->skip_reason) {
 		printf("%s:SKIP: %s\n", __func__, spec->skip_reason);
 		test__skip();
