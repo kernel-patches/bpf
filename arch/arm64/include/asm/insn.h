@@ -314,9 +314,6 @@ enum aarch64_insn_mb_type {
 	AARCH64_INSN_MB_NSH,
 	AARCH64_INSN_MB_NSHST,
 	AARCH64_INSN_MB_NSHLD,
-	AARCH64_INSN_MB_OSH,
-	AARCH64_INSN_MB_OSHST,
-	AARCH64_INSN_MB_OSHLD,
 };
 
 #define	__AARCH64_INSN_FUNCS(abbr, mask, val)				\
@@ -734,10 +731,10 @@ u32 aarch64_insn_gen_mrs(enum aarch64_insn_register result,
 			 enum aarch64_insn_system_register sysreg);
 
 s32 aarch64_get_branch_offset(u32 insn);
-u32 aarch64_set_branch_offset(u32 insn, s32 offset);
+u32 aarch64_set_branch_offset(u32 insn, s64 offset);
 
-s32 aarch64_insn_adrp_get_offset(u32 insn);
-u32 aarch64_insn_adrp_set_offset(u32 insn, s32 offset);
+s64 aarch64_insn_adrp_get_offset(u32 insn);
+u32 aarch64_insn_adrp_set_offset(u32 insn, s64 offset);
 
 bool aarch32_insn_is_wide(u32 insn);
 

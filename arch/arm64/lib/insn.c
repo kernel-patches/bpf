@@ -751,6 +751,15 @@ u32 aarch64_insn_gen_load_store_ex(enum aarch64_insn_register reg,
 		return AARCH64_BREAK_FAULT;
 	}
 
+	/* The loads have no status register, Rs is (1)(1)(1)(1)(1) */
+	if ((type == AARCH64_INSN_LDST_LOAD_EX ||
+	     type == AARCH64_INSN_LDST_LOAD_ACQ_EX) &&
+	    state != AARCH64_INSN_REG_ZR) {
+		pr_err("%s: invalid status register %d for a load\n", __func__,
+		       state);
+		return AARCH64_BREAK_FAULT;
+	}
+
 	insn = aarch64_insn_encode_ldst_size(size, insn);
 
 	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RT, insn,
@@ -1444,19 +1453,16 @@ u32 aarch64_insn_gen_adr(unsigned long pc, unsigned long addr,
 			 enum aarch64_insn_adr_type type)
 {
 	u32 insn;
-	s32 offset;
+	s64 offset;
 
 	switch (type) {
 	case AARCH64_INSN_ADR_TYPE_ADR:
 		insn = aarch64_insn_get_adr_value();
-		/* The s32 offset would truncate a difference beyond 4GB */
-		if ((long)(addr - pc) != (s32)(addr - pc))
-			return AARCH64_BREAK_FAULT;
-		offset = addr - pc;
+		offset = (s64)(addr - pc);
 		break;
 	case AARCH64_INSN_ADR_TYPE_ADRP:
 		insn = aarch64_insn_get_adrp_value();
-		offset = (addr - ALIGN_DOWN(pc, SZ_4K)) >> 12;
+		offset = (s64)(addr - ALIGN_DOWN(pc, SZ_4K)) >> 12;
 		break;
 	default:
 		pr_err("%s: unknown adr encoding %d\n", __func__, type);
@@ -1500,40 +1506,60 @@ s32 aarch64_get_branch_offset(u32 insn)
 	BUG();
 }
 
+static u32 branch_imm_set(enum aarch64_insn_imm_type type, s64 range,
+			  u32 insn, s64 offset)
+{
+	if ((offset & 0x3) || offset < -range || offset >= range) {
+		pr_err("%s: invalid offset %lld\n", __func__, offset);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	return aarch64_insn_encode_immediate(type, insn, offset >> 2);
+}
+
 /*
  * Encode the displacement of a branch in the imm field and return the
- * updated instruction.
+ * updated instruction, or AARCH64_BREAK_FAULT for a displacement out of
+ * the reach of the branch.
  */
-u32 aarch64_set_branch_offset(u32 insn, s32 offset)
+u32 aarch64_set_branch_offset(u32 insn, s64 offset)
 {
 	if (aarch64_insn_is_b(insn) || aarch64_insn_is_bl(insn))
-		return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_26, insn,
-						     offset >> 2);
+		return branch_imm_set(AARCH64_INSN_IMM_26, SZ_128M, insn,
+				      offset);
 
 	if (aarch64_insn_is_cbz(insn) || aarch64_insn_is_cbnz(insn) ||
 	    aarch64_insn_is_bcond(insn))
-		return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_19, insn,
-						     offset >> 2);
+		return branch_imm_set(AARCH64_INSN_IMM_19, SZ_1M, insn,
+				      offset);
 
 	if (aarch64_insn_is_tbz(insn) || aarch64_insn_is_tbnz(insn))
-		return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_14, insn,
-						     offset >> 2);
+		return branch_imm_set(AARCH64_INSN_IMM_14, SZ_32K, insn,
+				      offset);
 
 	/* Unhandled instruction */
 	BUG();
 }
 
-s32 aarch64_insn_adrp_get_offset(u32 insn)
+s64 aarch64_insn_adrp_get_offset(u32 insn)
 {
 	BUG_ON(!aarch64_insn_is_adrp(insn));
-	return aarch64_insn_decode_immediate(AARCH64_INSN_IMM_ADR, insn) << 12;
+	return sign_extend64(aarch64_insn_decode_immediate(AARCH64_INSN_IMM_ADR,
+							  insn), 20) << 12;
 }
 
-u32 aarch64_insn_adrp_set_offset(u32 insn, s32 offset)
+u32 aarch64_insn_adrp_set_offset(u32 insn, s64 offset)
 {
 	BUG_ON(!aarch64_insn_is_adrp(insn));
+
+	if ((offset & (SZ_4K - 1)) || offset < -(s64)SZ_4G ||
+	    offset >= (s64)SZ_4G) {
+		pr_err("%s: invalid offset %lld\n", __func__, offset);
+		return AARCH64_BREAK_FAULT;
+	}
+
 	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_ADR, insn,
-						offset >> 12);
+					     offset >> 12);
 }
 
 /*
