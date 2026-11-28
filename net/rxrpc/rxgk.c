@@ -239,6 +239,16 @@ static int rxgk_init_connection_security(struct rxrpc_connection *conn,
 	_enter("{%d,%u},{%x}",
 	       conn->debug_id, conn->rxgk.key_number, key_serial(conn->key));
 
+	switch (token->rxgk->level) {
+	case RXRPC_SECURITY_PLAIN:
+	case RXRPC_SECURITY_AUTH:
+	case RXRPC_SECURITY_ENCRYPT:
+		break;
+	default:
+		ret = -EKEYREJECTED;
+		goto error;
+	}
+
 	conn->security_ix = token->security_index;
 	conn->security_level = token->rxgk->level;
 
@@ -253,16 +263,6 @@ static int rxgk_init_connection_security(struct rxrpc_connection *conn,
 		return PTR_ERR(gk);
 	conn->rxgk.enctype = gk->krb5->etype;
 	conn->rxgk.keys[gk->key_number & 3] = gk;
-
-	switch (conn->security_level) {
-	case RXRPC_SECURITY_PLAIN:
-	case RXRPC_SECURITY_AUTH:
-	case RXRPC_SECURITY_ENCRYPT:
-		break;
-	default:
-		ret = -EKEYREJECTED;
-		goto error;
-	}
 
 	ret = 0;
 error:
