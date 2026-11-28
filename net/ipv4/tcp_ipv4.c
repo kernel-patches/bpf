@@ -532,8 +532,7 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 		tcp_req_err(sk, seq, type == ICMP_PARAMETERPROB ||
 				     type == ICMP_TIME_EXCEEDED ||
 				     (type == ICMP_DEST_UNREACH &&
-				      (code == ICMP_NET_UNREACH ||
-				       code == ICMP_HOST_UNREACH)));
+				      code != ICMP_FRAG_NEEDED));
 		return 0;
 	}
 

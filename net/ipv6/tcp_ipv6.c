@@ -414,7 +414,6 @@ static int tcp_v6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 	struct tcp_sock *tp;
 	__u32 seq, snd_una;
 	struct sock *sk;
-	bool fatal;
 	int err;
 
 	sk = __inet6_lookup_established(net, &hdr->daddr, th->dest,
@@ -445,9 +444,11 @@ static int tcp_v6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 	}
 
 	seq = ntohl(th->seq);
-	fatal = icmpv6_err_convert(type, code, &err);
+	icmpv6_err_convert(type, code, &err);
 	if (sk->sk_state == TCP_NEW_SYN_RECV) {
-		tcp_req_err(sk, seq, fatal);
+		tcp_req_err(sk, seq, type == ICMPV6_PARAMPROB ||
+				     type == ICMPV6_TIME_EXCEED ||
+				     type == ICMPV6_DEST_UNREACH);
 		return 0;
 	}
 
